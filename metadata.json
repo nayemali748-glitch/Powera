@@ -1,0 +1,6 @@
+{
+  "name": "POWER",
+  "description": "Electric utility and field service management application for NSC, Disconnection, Pole Case, Meter Replacement, and DTR Replacement with Admin & Worker dashboards.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
