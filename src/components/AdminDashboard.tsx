@@ -24,17 +24,21 @@ import {
   ChevronRight,
   LogOut,
   UserPlus,
-  Users
+  Users,
+  Edit3
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
 import { UserManagementModal } from './UserManagementModal';
+import { EditEntryModal } from './EditEntryModal';
+import { Language, translations } from '../utils/translations';
 
 interface AdminDashboardProps {
   entries: PowerEntry[];
   onRefresh: () => void;
   onExportCsv: () => void;
   onLogout?: () => void;
+  lang?: Language;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -42,13 +46,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onRefresh,
   onExportCsv,
   onLogout,
+  lang = 'bn',
 }) => {
+  const t = translations[lang] || translations.bn;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedEntry, setSelectedEntry] = useState<PowerEntry | null>(null);
+  const [editingEntry, setEditingEntry] = useState<PowerEntry | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState<boolean>(false);
+
+  // Auto-refresh entries when Admin Dashboard is active to immediately reflect worker submissions
+  React.useEffect(() => {
+    onRefresh();
+    const interval = setInterval(() => {
+      onRefresh();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Filter calculations
   const filteredEntries = entries.filter((item) => {
@@ -189,7 +205,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ${entry.appliedLoad ? `<tr><td><strong>Applied Load / Phase</strong></td><td>${entry.appliedLoad} (${entry.phase || '1-Phase'})</td></tr>` : ''}
             ${entry.meterNo ? `<tr><td><strong>Meter Serial No.</strong></td><td>${entry.meterNo} (Initial Reading: ${entry.initialReading || '000000'})</td></tr>` : ''}
             ${entry.sealNo ? `<tr><td><strong>Security Seal No.</strong></td><td>${entry.sealNo}</td></tr>` : ''}
-            ${entry.arrearAmount ? `<tr><td><strong>Arrear Amount</strong></td><td>Tk/₹ ${entry.arrearAmount}</td></tr>` : ''}
+            ${entry.arrearAmount ? `<tr><td><strong>Arrear Amount</strong></td><td>₹ ${entry.arrearAmount}</td></tr>` : ''}
             ${entry.reason ? `<tr><td><strong>Disconnection Reason</strong></td><td>${entry.reason}</td></tr>` : ''}
             ${entry.finalReading ? `<tr><td><strong>Final Meter Reading</strong></td><td>${entry.finalReading} kWh</td></tr>` : ''}
             ${entry.issueType ? `<tr><td><strong>Pole Fault / Issue</strong></td><td>${entry.issueType}</td></tr>` : ''}
@@ -516,8 +532,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <td className="px-4 py-3.5 whitespace-nowrap">
                         <div className="font-mono font-bold text-slate-900">{item.id}</div>
                         <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
-                          <Clock className="w-3 h-3" />
-                          {new Date(item.date).toLocaleDateString('bn-BD')} {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          {new Date(item.date).toLocaleDateString('en-IN')} {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </td>
 
@@ -576,22 +592,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => setSelectedEntry(item)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
-                            title="বিস্তারিত দেখুন"
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                            title="বিস্তারিত দেখুন (View Details)"
                           >
                             <Eye className="w-4 h-4" />
                           </button>
                           <button
+                            onClick={() => setEditingEntry(item)}
+                            className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
+                            title="এডিট / ভুল সংশোধন করুন (Edit Data)"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
                             onClick={() => handlePrintCertificate(item)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-700 transition-colors"
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-700 transition-colors cursor-pointer"
                             title="প্রিন্ট স্লিপ"
                           >
                             <Printer className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDelete(item.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 transition-colors"
-                            title="ডিলিট"
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 transition-colors cursor-pointer"
+                            title="ডিলিট (Delete)"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -682,7 +705,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                   <div className="text-[10px] uppercase font-bold text-slate-500">তারিখ ও সময়</div>
                   <div className="font-bold text-slate-900 mt-0.5">
-                    {new Date(selectedEntry.date).toLocaleDateString('bn-BD')}
+                    {new Date(selectedEntry.date).toLocaleDateString('en-IN')}
                   </div>
                 </div>
 
@@ -730,7 +753,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div><strong className="text-slate-900">সিল নম্বর:</strong> {selectedEntry.sealNo}</div>
                   )}
                   {selectedEntry.arrearAmount && (
-                    <div><strong className="text-slate-900">বকেয়া টাকা:</strong> Tk/₹ {selectedEntry.arrearAmount}</div>
+                    <div><strong className="text-slate-900">বকেয়া টাকা:</strong> ₹ {selectedEntry.arrearAmount}</div>
                   )}
                   {selectedEntry.reason && (
                     <div className="sm:col-span-2"><strong className="text-slate-900">বিচ্ছিন্ন করার কারণ:</strong> {selectedEntry.reason}</div>
@@ -800,32 +823,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Modal Footer */}
             <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
               <button
-                onClick={() => handleDelete(selectedEntry.id)}
-                className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1"
+                onClick={() => {
+                  const toDelete = selectedEntry.id;
+                  handleDelete(toDelete);
+                }}
+                className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>ডিলিট</span>
+                <span>{t.delete}</span>
               </button>
 
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
+                  onClick={() => {
+                    const toEdit = selectedEntry;
+                    setSelectedEntry(null);
+                    setEditingEntry(toEdit);
+                  }}
+                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4" />
+                  <span>{t.edit}</span>
+                </button>
+                <button
                   onClick={() => handlePrintCertificate(selectedEntry)}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs"
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
                 >
                   <Printer className="w-4 h-4 text-amber-400" />
-                  <span>প্রিন্ট রসিদ / স্লিপ</span>
+                  <span>{t.printReceipt}</span>
                 </button>
                 <button
                   onClick={() => setSelectedEntry(null)}
-                  className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg font-bold text-xs"
+                  className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg font-bold text-xs cursor-pointer"
                 >
-                  বন্ধ করুন
+                  {t.cancel}
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Admin Edit / Correction Modal */}
+      <EditEntryModal
+        isOpen={!!editingEntry}
+        entry={editingEntry}
+        lang={lang}
+        onClose={() => setEditingEntry(null)}
+        onUpdated={(updated) => {
+          onRefresh();
+          setEditingEntry(null);
+        }}
+        onDeleted={(id) => {
+          onRefresh();
+          setEditingEntry(null);
+        }}
+      />
 
       {/* Admin Worker ID Management Modal */}
       <UserManagementModal

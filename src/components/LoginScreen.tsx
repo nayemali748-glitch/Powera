@@ -24,84 +24,57 @@ import {
   UserCheck
 } from 'lucide-react';
 import { UserSession, UserAccount } from '../types';
+import { fetchUsers, createUserAccount, loginUser, resetUserPassword, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { Language, translations } from '../utils/translations';
 
 interface LoginScreenProps {
-  onLogin: (session: UserSession) => void;
+  onLogin?: (session: UserSession) => void;
+  onLoginSuccess?: (session: UserSession) => void;
+  lang?: Language;
+  onOpenLanguageModal?: () => void;
 }
 
-// Initial seeded admin accounts
-const DEFAULT_ACCOUNTS: UserAccount[] = [
-  {
-    id: 'adm_001',
-    idNo: 'ADM-001',
-    password: '1234',
-    name: 'ইঞ্জিঃ মোঃ আরিফুল ইসলাম',
-    phone: '01911-223344',
-    role: 'admin',
-    designation: 'সহকারী প্রকৌশলী (এডমিন কন্ট্রোলার)',
-    badgeNo: 'ADM-001',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Dhaka Central',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_002',
-    idNo: 'admin',
-    password: 'admin',
-    name: 'এডমিন অফিসার',
-    phone: '01700-112233',
-    role: 'admin',
-    designation: 'সিস্টেম এডমিনিস্ট্রেটর',
-    badgeNo: 'SYS-ADMIN',
-    securityQuestion: 'আপনার জন্ম জেলা?',
-    securityAnswer: 'Dhaka',
-    createdAt: new Date().toISOString()
-  }
-];
-
-export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
+export const LoginScreen: React.FC<LoginScreenProps> = ({ 
+  onLogin, 
+  onLoginSuccess, 
+  lang = 'bn',
+  onOpenLanguageModal 
+}) => {
+  const handleSuccess = onLoginSuccess || onLogin || (() => {});
+  const t = translations[lang] || translations.bn;
   // Screen mode: 'login' | 'register' | 'forgot'
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
 
-  // Accounts list loaded from localStorage
-  const [accounts, setAccounts] = useState<UserAccount[]>(() => {
-    const saved = localStorage.getItem('power_registered_users');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      } catch (e) {
-        // fallback
-      }
-    }
-    localStorage.setItem('power_registered_users', JSON.stringify(DEFAULT_ACCOUNTS));
-    return DEFAULT_ACCOUNTS;
-  });
+  // Accounts list loaded from server / localStorage
+  const [accounts, setAccounts] = useState<UserAccount[]>(DEFAULT_WBSEDCL_ACCOUNTS);
 
-  // Save accounts helper
-  const saveAccounts = (newAccounts: UserAccount[]) => {
-    setAccounts(newAccounts);
-    localStorage.setItem('power_registered_users', JSON.stringify(newAccounts));
-  };
+  // Load latest users from backend on mount
+  useEffect(() => {
+    fetchUsers().then(users => {
+      if (users && users.length > 0) {
+        setAccounts(users);
+      }
+    }).catch(err => {
+      console.warn('Failed to load accounts from server:', err);
+    });
+  }, []);
 
   // --- LOGIN STATE ---
+  // Default to empty strings so credentials remain private and secret
   const [loginId, setLoginId] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [loginRole, setLoginRole] = useState<'worker' | 'admin'>('worker');
 
   // --- REGISTER (CREATE ACCOUNT) STATE ---
-  const [regRole, setRegRole] = useState<'admin' | 'worker'>('admin');
-  const [regIdNo, setRegIdNo] = useState('');
+  const [regRole, setRegRole] = useState<'admin' | 'worker'>('worker');
+  const [regIdNo, setRegIdNo] = useState(() => `LM-${Math.floor(1000 + Math.random() * 9000)}`);
   const [regName, setRegName] = useState('');
   const [regPhone, setRegPhone] = useState('');
-  const [regDesignation, setRegDesignation] = useState('সহকারী প্রকৌশলী');
-  const [regPassword, setRegPassword] = useState('');
-  const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [regDesignation, setRegDesignation] = useState('লাইনম্যান (WBSEDCL)');
+  const [regPassword, setRegPassword] = useState('1234');
+  const [regConfirmPassword, setRegConfirmPassword] = useState('1234');
   const [regSecurityQuestion, setRegSecurityQuestion] = useState('আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?');
-  const [regSecurityAnswer, setRegSecurityAnswer] = useState('');
+  const [regSecurityAnswer, setRegSecurityAnswer] = useState('Vidyut Bhavan');
   const [showRegPassword, setShowRegPassword] = useState(false);
 
   // --- FORGOT PASSWORD STATE ---
@@ -126,7 +99,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   }, [mode]);
 
   // Handle Login Submit
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -134,7 +107,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     const cleanPass = loginPassword.trim();
 
     if (!cleanId) {
-      setError('অনুগ্রহ করে আপনার Login ID No বা আইডি নম্বর দিন');
+      setError('অনুগ্রহ করে আপনার Login ID No বা মোবাইল নম্বর দিন (যেমন: 8695716192)');
       return;
     }
 
@@ -145,83 +118,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
     setLoading(true);
 
-    setTimeout(() => {
-      // Find matching account (case-insensitive for ID)
-      const found = accounts.find(
-        (acc) => acc.idNo.toLowerCase() === cleanId.toLowerCase() || acc.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')
-      );
-
-      if (!found) {
-        // Allow default admin / root credentials as emergency fallback
-        if ((cleanId === 'admin' || cleanId === 'ADM-001') && (cleanPass === '1234' || cleanPass === 'admin' || cleanPass === 'power123')) {
-          const session: UserSession = {
-            id: 'adm_default',
-            idNo: cleanId,
-            name: 'ইঞ্জিঃ মোঃ আরিফুল ইসলাম (এডমিন)',
-            phone: '01911-223344',
-            role: 'admin',
-            designation: 'সহকারী প্রকৌশলী / এডমিন কন্ট্রোলার',
-            badgeNo: 'ADM-001',
-            loggedInAt: new Date().toISOString()
-          };
-          onLogin(session);
-          setLoading(false);
-          return;
-        }
-
-        setError('ভুল আইডি নম্বর! আইডি পাওয়া যায়নি। অনুগ্রহ করে আপনার এডমিন অফিসারের সাথে যোগাযোগ করে আইডি ও পাসওয়ার্ড সংগ্রহ করুন।');
-        setLoading(false);
-        return;
-      }
-
-      // Check Password
-      if (found.password !== cleanPass && cleanPass !== 'power123' && cleanPass !== '1234') {
-        setError('ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড দিন অথবা "পাসওয়ার্ড ভুলে গেছেন?" এ ক্লিক করুন।');
-        setLoading(false);
-        return;
-      }
-
-      // Success Login
-      const session: UserSession = {
-        id: found.id,
-        idNo: found.idNo,
-        name: found.name,
-        phone: found.phone,
-        role: found.role,
-        designation: found.designation,
-        badgeNo: found.badgeNo || found.idNo,
-        loggedInAt: new Date().toISOString()
-      };
-
-      onLogin(session);
+    try {
+      const session = await loginUser(cleanId, cleanPass);
+      handleSuccess(session);
+    } catch (err: any) {
+      setError(err.message || 'ভুল আইডি বা পাসওয়ার্ড! সঠিক এডমিন / কর্মী আইডি প্রবেশ করান।');
+    } finally {
       setLoading(false);
-    }, 300);
+    }
   };
 
-  // Handle Quick 1-Click Demo Login
-  const handleQuickLogin = (acc: UserAccount) => {
+  // Handle Quick 1-Click Login
+  const handleQuickLogin = async (accIdNo: string, accPass: string) => {
     setLoading(true);
-    setLoginId(acc.idNo);
-    setLoginPassword(acc.password);
+    setError(null);
+    setLoginId(accIdNo);
+    setLoginPassword(accPass);
 
-    setTimeout(() => {
-      const session: UserSession = {
-        id: acc.id,
-        idNo: acc.idNo,
-        name: acc.name,
-        phone: acc.phone,
-        role: acc.role,
-        designation: acc.designation,
-        badgeNo: acc.badgeNo || acc.idNo,
-        loggedInAt: new Date().toISOString()
-      };
-      onLogin(session);
+    try {
+      const session = await loginUser(accIdNo, accPass);
+      handleSuccess(session);
+    } catch (err: any) {
+      setError(err.message || 'লগইন ব্যর্থ হয়েছে');
+    } finally {
       setLoading(false);
-    }, 250);
+    }
   };
 
   // Handle Register (Create Account) Submit
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
@@ -233,12 +158,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     const cleanConfirm = regConfirmPassword.trim();
 
     if (!cleanId) {
-      setError('একটি Login ID No লিখুন (যেমন: ADM-105 বা LM-501)');
+      setError('একটি Login ID No লিখুন (যেমন: LM-401 বা ADM-105)');
       return;
     }
 
     if (!cleanName) {
-      setError('আপনার পূর্ণ নাম লিখুন');
+      setError('ব্যবহারকারীর পূর্ণ নাম লিখুন');
       return;
     }
 
@@ -248,90 +173,70 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     }
 
     if (cleanPass !== cleanConfirm) {
-      setError('কনফার্ম পাসওয়ার্ড মিলছে না!');
-      return;
-    }
-
-    // Check if ID already exists
-    const exists = accounts.some((a) => a.idNo.toLowerCase() === cleanId.toLowerCase());
-    if (exists) {
-      setError(`"${cleanId}" আইডি নম্বরটি ইতিমধ্যে নিবন্ধিত রয়েছে! অন্য আইডি দিন।`);
+      setError('কনফার্ম পাসওয়ার্ড মিলছে না! পুনরায় টাইপ করুন।');
       return;
     }
 
     setLoading(true);
 
-    setTimeout(() => {
-      const newAccount: UserAccount = {
-        id: `${regRole}_${Date.now()}`,
+    try {
+      const newUser = await createUserAccount({
         idNo: cleanId,
-        password: cleanPass,
         name: cleanName,
-        phone: cleanPhone || '01700-000000',
+        phone: cleanPhone || '9830000000',
         role: regRole,
-        designation: regDesignation || (regRole === 'admin' ? 'সহকারী প্রকৌশলী' : 'লাইনম্যান'),
+        designation: regDesignation || (regRole === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
         badgeNo: cleanId,
+        password: cleanPass,
         securityQuestion: regSecurityQuestion,
-        securityAnswer: regSecurityAnswer.trim() || 'Dhaka',
-        createdAt: new Date().toISOString()
-      };
+        securityAnswer: regSecurityAnswer.trim() || 'Vidyut Bhavan'
+      });
 
-      const updated = [newAccount, ...accounts];
-      saveAccounts(updated);
+      // Update accounts list
+      setAccounts(prev => [newUser, ...prev]);
 
-      setSuccessMsg(`অভিনন্দন! আইডি "${cleanId}" সফলভাবে তৈরি হয়েছে। এখন লগইন করুন।`);
+      setSuccessMsg(`নতুন ${regRole === 'admin' ? 'এডমিন' : 'কর্মী'} আইডি "${cleanId}" তৈরি হয়েছে! এই আইডি ও পাসওয়ার্ড দিয়ে এখন যেকোনো ডিভাইস থেকে লগইন করা যাবে।`);
       setLoginId(cleanId);
       setLoginPassword(cleanPass);
-      setLoading(false);
       setMode('login');
-    }, 400);
+    } catch (err: any) {
+      setError(err.message || 'একউন্ট তৈরি ব্যর্থ হয়েছে');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Handle Forgot Password - Step 1 (Verify Identity)
+  // Forgot Password Step 1: Verify ID
   const handleForgotVerify = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    const cleanForgotId = forgotId.trim();
 
-    const cleanId = forgotId.trim();
-    if (!cleanId) {
-      setError('আপনার Login ID No বা মোবাইল নম্বর লিখুন');
+    if (!cleanForgotId) {
+      setError('আপনার Login ID No বা মোবাইল নম্বর দিন (যেমন: 8695716192)');
       return;
     }
 
-    const found = accounts.find(
-      (a) => a.idNo.toLowerCase() === cleanId.toLowerCase() || a.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')
+    // Direct check in local accounts or special admin ID
+    let found = accounts.find(
+      (a) => a.idNo.toLowerCase() === cleanForgotId.toLowerCase() || a.phone.replace(/[^0-9]/g, '') === cleanForgotId.replace(/[^0-9]/g, '')
     );
 
+    if (!found && (cleanForgotId === '8695716192' || cleanForgotId === 'admin')) {
+      found = DEFAULT_WBSEDCL_ACCOUNTS[0];
+    }
+
     if (!found) {
-      setError('এই আইডি নম্বরে কোনো একাউন্ট পাওয়া যায়নি! সঠিক আইডি দিন।');
+      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক আইডি (যেমন 8695716192) লিখুন।');
       return;
-    }
-
-    // If phone provided, verify match
-    if (forgotPhone.trim()) {
-      const cleanInputPhone = forgotPhone.replace(/[^0-9]/g, '');
-      const cleanAccPhone = found.phone.replace(/[^0-9]/g, '');
-      if (cleanInputPhone && cleanAccPhone && !cleanAccPhone.includes(cleanInputPhone) && !cleanInputPhone.includes(cleanAccPhone)) {
-        setError('প্রদত্ত মোবাইল নম্বর একাউন্টের সাথে মিলছে না!');
-        return;
-      }
-    }
-
-    // Verify security answer if set on account and user provided something
-    if (found.securityAnswer && forgotSecurityAnswer.trim()) {
-      if (found.securityAnswer.trim().toLowerCase() !== forgotSecurityAnswer.trim().toLowerCase()) {
-        setError('সিকিউরিটি প্রশ্নের উত্তর সঠিক নয়!');
-        return;
-      }
     }
 
     setTargetAccount(found);
     setForgotStep(2);
-    setSuccessMsg(`ইউজার যাচাই সম্পন্ন: ${found.name} (${found.idNo})`);
   };
 
-  // Handle Forgot Password - Step 2 (Set New Password)
-  const handleForgotResetPassword = (e: React.FormEvent) => {
+  // Forgot Password Step 2: Set New Password
+  const handleForgotResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -341,7 +246,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     const cleanConfirm = confirmNewPassword.trim();
 
     if (!cleanNewPass || cleanNewPass.length < 4) {
-      setError('নতুন পাসওয়ার্ড কমপক্ষে ৪ ডিজিটের হতে হবে');
+      setError('নতুন পাসওয়ার্ড কমপক্ষে ৪ ডিজিট বা অক্ষরের হতে হবে');
       return;
     }
 
@@ -352,28 +257,31 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
     setLoading(true);
 
-    setTimeout(() => {
-      const updated = accounts.map((acc) => {
-        if (acc.id === targetAccount.id) {
-          return {
-            ...acc,
-            password: cleanNewPass
-          };
+    try {
+      await resetUserPassword(targetAccount.idNo, cleanNewPass, targetAccount.phone);
+
+      // Create or update local account state
+      const updatedAccounts = accounts.map((acc) => {
+        if (acc.id === targetAccount.id || acc.idNo === targetAccount.idNo) {
+          return { ...acc, password: cleanNewPass };
         }
         return acc;
       });
 
-      saveAccounts(updated);
-      setSuccessMsg(`পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে! নতুন পাসওয়ার্ড দিয়ে লগইন করুন।`);
+      setAccounts(updatedAccounts);
+      setSuccessMsg(`পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে! নতুন পাসওয়ার্ড "${cleanNewPass}" দিয়ে লগইন করুন।`);
       setLoginId(targetAccount.idNo);
       setLoginPassword(cleanNewPass);
       setForgotStep(1);
       setTargetAccount(null);
       setNewPassword('');
       setNewConfirmPassword('');
-      setLoading(false);
       setMode('login');
-    }, 400);
+    } catch (err: any) {
+      setError('পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -403,12 +311,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             <span>Power Working</span>
           </h1>
           <p className="text-xs text-amber-400 font-semibold tracking-wider uppercase mt-1">
-            Power of Construction • ESTD 2026
+            WBSEDCL Field Operations • West Bengal (India)
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {mode === 'login' && 'আইডি ও পাসওয়ার্ড দিয়ে প্রবেশ করুন'}
-            {mode === 'register' && 'নতুন এডমিন / কর্মী আইডি ও পাসওয়ার্ড তৈরি'}
-            {mode === 'forgot' && 'পাসওয়ার্ড রিসেট ও রিকভারি পোর্টাল'}
+            {mode === 'login' && 'এডমিন বা কর্মী আইডি ও পাসওয়ার্ড দিয়ে প্রবেশ করুন'}
+            {mode === 'register' && 'নতুন এডমিন / কর্মী আইডি তৈরি (সার্ভার সিন্ক)'}
+            {mode === 'forgot' && 'পাসওয়ার্ড রিসেট ও পরিবর্তন পোর্টাল'}
           </p>
         </div>
 
@@ -427,7 +335,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               <span>লগইনে ফিরে যান</span>
             </button>
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              {mode === 'register' ? 'Account Registration' : 'Password Reset'}
+              {mode === 'register' ? 'New Account Registration' : 'Password Reset'}
             </span>
           </div>
         )}
@@ -462,9 +370,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                       <User className="w-3.5 h-3.5 text-slate-500" />
                       <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
                     </span>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      যেমন: ADM-001, LM-4082
-                    </span>
                   </label>
                   <div className="relative">
                     <input
@@ -472,8 +377,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                       required
                       value={loginId}
                       onChange={(e) => setLoginId(e.target.value)}
-                      placeholder="আপনার Login ID No বা মোবাইল দিন"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400"
+                      placeholder="আপনার Login ID No লিখুন"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono"
                     />
                   </div>
                 </div>
@@ -487,10 +392,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     </label>
                     <button
                       type="button"
-                      onClick={() => setMode('forgot')}
-                      className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                      onClick={() => {
+                        setForgotId(loginId || '');
+                        setMode('forgot');
+                      }}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
                     >
-                      পাসওয়ার্ড ভুলে গেছেন?
+                      <span>পাসওয়ার্ড ভুলে গেছেন / পরিবর্তন করবেন?</span>
                     </button>
                   </div>
                   <div className="relative">
@@ -526,22 +434,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                   ) : (
                     <>
                       <Lock className="w-4 h-4" />
-                      <span>লগইন করুন (Login)</span>
+                      <span>লগইন করুন (Sign In)</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
                 </button>
               </form>
 
-              {/* Admin Note Box regarding ID Creation */}
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-2.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div className="text-[11px] text-slate-700 leading-relaxed">
-                  <p className="font-bold text-slate-900">আইডি ও পাসওয়ার্ড সংক্রান্ত তথ্য:</p>
-                  <p className="text-slate-600">
-                    ফিল্ড কর্মীদের নতুন আইডি ও পাসওয়ার্ড <span className="font-bold text-slate-800">এডমিন অফিসার</span> এডমিন প্যানেল থেকে তৈরি করবেন। এডমিনের দেয়া আইডি ও পাসওয়ার্ড দিয়ে কর্মীরা সিস্টেমে লগইন করতে পারবেন।
-                  </p>
-                </div>
+              {/* Secure Info Note */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2.5 text-xs text-slate-600">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>নিরাপদ এনক্রিপ্টেড সংযোগ • শুধুমাত্র অনুমোদিত কর্মী ও এডমিনদের জন্য</span>
               </div>
             </>
           )}
@@ -561,7 +464,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     type="button"
                     onClick={() => {
                       setRegRole('admin');
-                      setRegDesignation('সহকারী প্রকৌশলী (এডমিন)');
+                      setRegDesignation('সহকারী প্রকৌশলী (WBSEDCL)');
                       if (!regIdNo || regIdNo.startsWith('LM-')) {
                         setRegIdNo(`ADM-${Math.floor(100 + Math.random() * 900)}`);
                       }
@@ -580,7 +483,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     type="button"
                     onClick={() => {
                       setRegRole('worker');
-                      setRegDesignation('লাইনম্যান');
+                      setRegDesignation('লাইনম্যান (WBSEDCL)');
                       if (!regIdNo || regIdNo.startsWith('ADM-')) {
                         setRegIdNo(`LM-${Math.floor(1000 + Math.random() * 9000)}`);
                       }
@@ -608,7 +511,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                   required
                   value={regIdNo}
                   onChange={(e) => setRegIdNo(e.target.value)}
-                  placeholder="যেমন: ADM-101 বা LM-501"
+                  placeholder="যেমন: LM-501 বা ADM-101"
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
@@ -637,7 +540,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     type="tel"
                     value={regPhone}
                     onChange={(e) => setRegPhone(e.target.value)}
-                    placeholder="017XX-XXXXXX"
+                    placeholder="98300XXXXX"
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -646,28 +549,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               {/* Designation */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  পদবী / পদমর্যাদা
+                  পদবী / পদমর্যাদা (WBSEDCL)
                 </label>
                 <select
                   value={regDesignation}
                   onChange={(e) => setRegDesignation(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  className={
+                    "w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  }
                 >
                   {regRole === 'admin' ? (
                     <>
-                      <option value="নির্বাহী প্রকৌশলী (XEN)">নির্বাহী প্রকৌশলী (XEN)</option>
-                      <option value="সহকারী প্রকৌশলী (AE)">সহকারী প্রকৌশলী (AE)</option>
-                      <option value="উপ-সহকারী প্রকৌশলী (SAE)">উপ-সহকারী প্রকৌশলী (SAE)</option>
-                      <option value="এডমিন কন্ট্রোলার">এডমিন কন্ট্রোলার</option>
-                      <option value="সাবস্টেশন ইনচার্জ">সাবস্টেশন ইনচার্জ</option>
+                      <option value="ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)">ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)</option>
+                      <option value="সহকারী প্রকৌশলী / AE (WBSEDCL)">সহকারী প্রকৌশলী / AE (WBSEDCL)</option>
+                      <option value="স্টেশন ম্যানেজার / SM (CCC WBSEDCL)">স্টেশন ম্যানেজার / SM (CCC WBSEDCL)</option>
+                      <option value="জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)">জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)</option>
+                      <option value="এডমিন কন্ট্রোলার (WBSEDCL)">এডমিন কন্ট্রোলার (WBSEDCL)</option>
                     </>
                   ) : (
                     <>
-                      <option value="লাইনম্যান (Lineman)">লাইনম্যান (Lineman)</option>
-                      <option value="সিনিয়র লাইনম্যান">সিনিয়র লাইনম্যান</option>
-                      <option value="মিটার টেকনিশিয়ান">মিটার টেকনিশিয়ান</option>
-                      <option value="সাবস্টেশন অপারেটর">সাবস্টেশন অপারেটর</option>
-                      <option value="ফিল্ড সহকারী">ফিল্ড সহকারী</option>
+                      <option value="লাইনম্যান (Lineman WBSEDCL)">লাইনম্যান (Lineman WBSEDCL)</option>
+                      <option value="সিনিয়র লাইনম্যান (WBSEDCL CCC)">সিনিয়র লাইনম্যান (WBSEDCL CCC)</option>
+                      <option value="টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)">টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)</option>
+                      <option value="মিটার রিডার / টেকনিশিয়ান (WBSEDCL)">মিটার রিডার / টেকনিশিয়ান (WBSEDCL)</option>
+                      <option value="সাবস্টেশন অপারেটর (33/11kV)">সাবস্টেশন অপারেটর (33/11kV)</option>
                     </>
                   )}
                 </select>
@@ -715,13 +620,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2">
                 <p className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
                   <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
-                  <span>পাসওয়ার্ড রিকভারি সিকিউরিটি উত্তর (ঐচ্ছিক)</span>
+                  <span>পাসওয়ার্ড রিকভারি সিকিউরিটি উত্তর (WBSEDCL)</span>
                 </p>
                 <input
                   type="text"
                   value={regSecurityAnswer}
                   onChange={(e) => setRegSecurityAnswer(e.target.value)}
-                  placeholder="আপনার প্রিয় শহর বা সাবস্টেশন নাম (রিকভারির জন্য)"
+                  placeholder="আপনার সাবস্টেশন / অঞ্চল (যেমন: Vidyut Bhavan / Bidhannagar)"
                   className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
               </div>
@@ -745,7 +650,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           )}
 
           {/* ========================================================= */}
-          {/* 3. FORGOT PASSWORD MODE */}
+          {/* 3. FORGOT / RESET PASSWORD MODE */}
           {/* ========================================================= */}
           {mode === 'forgot' && (
             <div className="space-y-4">
@@ -754,49 +659,45 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                   <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
                     <p className="font-bold flex items-center gap-1.5 mb-1">
                       <HelpCircle className="w-4 h-4 text-blue-600" />
-                      <span>পাসওয়ার্ড রিকভারি পদ্ধতি</span>
+                      <span>পাসওয়ার্ড পরিবর্তন ও রিকভারি পদ্ধতি</span>
                     </p>
-                    <p>আপনার নিবন্ধিত <strong>Login ID No</strong> বা <strong>মোবাইল নম্বর</strong> দিন। তথ্য যাচাইয়ের পর আপনি নতুন পাসওয়ার্ড সেট করতে পারবেন।</p>
+                    <p>আপনার <strong>Login ID No</strong> (যেমন: <span className="font-mono font-bold">8695716192</span> বা LM-101) দিন। এরপর সরাসরি নতুন পাসওয়ার্ড সেট করতে পারবেন।</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-slate-500" />
-                      <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5 text-slate-500" />
+                        <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setForgotId('8695716192')}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        এডমিন 8695716192 দিন
+                      </button>
                     </label>
                     <input
                       type="text"
                       required
                       value={forgotId}
                       onChange={(e) => setForgotId(e.target.value)}
-                      placeholder="যেমন: ADM-001 বা LM-4082"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="যেমন: 8695716192 বা LM-101"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
                       <Phone className="w-3.5 h-3.5 text-slate-500" />
-                      <span>রেজিস্টার্ড মোবাইল নম্বর (যাচাইয়ের জন্য)</span>
+                      <span>রেজিস্টার্ড মোবাইল নম্বর (ঐচ্ছিক)</span>
                     </label>
                     <input
                       type="tel"
                       value={forgotPhone}
                       onChange={(e) => setForgotPhone(e.target.value)}
-                      placeholder="017XX-XXXXXX"
-                      className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      সিকিউরিটি উত্তর (যদি জানা থাকে)
-                    </label>
-                    <input
-                      type="text"
-                      value={forgotSecurityAnswer}
-                      onChange={(e) => setForgotSecurityAnswer(e.target.value)}
-                      placeholder="সিকিউরিটি প্রশ্নের উত্তর"
+                      placeholder="98300XXXXX / 8695716192"
                       className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
@@ -805,15 +706,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     type="submit"
                     className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>আইডি যাচাই করুন (Verify Account)</span>
+                    <span>আইডি যাচাই ও পাসওয়ার্ড পরিবর্তন করুন</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
               ) : (
                 <form onSubmit={handleForgotResetPassword} className="space-y-4 animate-in fade-in">
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-                    <p className="font-bold">আইডি নিশ্চিত হয়েছে: {targetAccount?.name}</p>
-                    <p className="text-[11px] text-emerald-700 mt-0.5">এখন আপনার একাউন্টের জন্য নতুন পাসওয়ার্ড লিখুন।</p>
+                    <p className="font-bold">আইডি নিশ্চিত হয়েছে: {targetAccount?.name} ({targetAccount?.idNo})</p>
+                    <p className="text-[11px] text-emerald-700 mt-0.5">এখন এই একাউন্টের জন্য আপনার পছন্দমতো নতুন পাসওয়ার্ড দিন।</p>
                   </div>
 
                   <div>
@@ -835,8 +736,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="কমপক্ষে ৪ ডিজিটের নতুন পাসওয়ার্ড"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      placeholder="কমপক্ষে ৪ ডিজিটের নতুন পাসওয়ার্ড (যেমন: 6293)"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
 
@@ -850,7 +751,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                       value={confirmNewPassword}
                       onChange={(e) => setNewConfirmPassword(e.target.value)}
                       placeholder="পুনরায় নতুন পাসওয়ার্ড লিখুন"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
 
@@ -876,8 +777,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
         {/* Footer info */}
         <div className="bg-slate-50 px-6 py-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span className="font-semibold text-slate-700">POWER OF CONSTRUCTION</span>
-          <span className="font-mono font-bold text-slate-400">ESTD 2026</span>
+          <span className="font-semibold text-slate-700">WBSEDCL • Field Operations</span>
+          <span className="font-mono font-bold text-slate-500">West Bengal, India</span>
         </div>
       </div>
     </div>

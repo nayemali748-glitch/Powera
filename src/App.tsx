@@ -7,8 +7,11 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { WorkerRecentSubmissions } from './components/WorkerRecentSubmissions';
 import { CornerOptionsModal } from './components/CornerOptionsModal';
 import { LoginScreen } from './components/LoginScreen';
+import { InstallAppModal } from './components/InstallAppModal';
+import { LanguageModal } from './components/LanguageModal';
 import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession } from './types';
 import { fetchEntries, fetchStats } from './services/api';
+import { Language, translations } from './utils/translations';
 import { 
   Zap, 
   ShieldCheck, 
@@ -28,10 +31,20 @@ import {
   Home,
   ArrowLeft,
   Plus,
-  LogOut
+  LogOut,
+  Download,
+  Smartphone,
+  Globe
 } from 'lucide-react';
 
 export default function App() {
+  const [currentLanguage, setCurrentLanguage] = useState<Language>(() => {
+    return (localStorage.getItem('power_app_lang') as Language) || 'bn';
+  });
+  const [showLanguageModal, setShowLanguageModal] = useState<boolean>(false);
+
+  const t = translations[currentLanguage] || translations.bn;
+
   const [currentUser, setCurrentUser] = useState<UserSession | null>(() => {
     const saved = localStorage.getItem('power_user_session');
     if (saved) {
@@ -59,34 +72,52 @@ export default function App() {
   const [cornerModalOption, setCornerModalOption] = useState<CornerOptionKey>(null);
   const [previewEntry, setPreviewEntry] = useState<PowerEntry | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
+
+  const handleSelectLanguage = (lang: Language) => {
+    setCurrentLanguage(lang);
+    localStorage.setItem('power_app_lang', lang);
+  };
+
+  // Capture Android/PWA install prompt
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handlePromptInstall = async () => {
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      } catch (err) {
+        console.warn('Install prompt error:', err);
+      }
+    }
+  };
 
   // Clean stale demo items on mount
   useEffect(() => {
-    // Purge old demo users from registered users if they exist
     const savedUsers = localStorage.getItem('power_registered_users');
     if (savedUsers) {
       try {
         const parsed = JSON.parse(savedUsers);
         if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter(u => u.idNo !== 'wrk_001' && u.idNo !== 'wrk_002' && !u.id?.startsWith('wrk_00'));
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem('power_registered_users', JSON.stringify(cleaned));
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    // Purge old demo records (PWR-1001 to PWR-1005) from local cache
-    const cachedEntries = localStorage.getItem('power_app_entries_cache');
-    if (cachedEntries) {
-      try {
-        const parsed = JSON.parse(cachedEntries);
-        if (Array.isArray(parsed)) {
-          const nonDemo = parsed.filter(e => !['PWR-1001', 'PWR-1002', 'PWR-1003', 'PWR-1004', 'PWR-1005'].includes(e.id));
-          if (nonDemo.length !== parsed.length) {
-            localStorage.setItem('power_app_entries_cache', JSON.stringify(nonDemo));
+          const filtered = parsed.filter(
+            (u: any) => u && u.idNo !== 'WRK-101' && u.idNo !== 'WBSEDCL-ADM-99'
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem('power_registered_users', JSON.stringify(filtered));
           }
         }
       } catch (e) {
@@ -95,14 +126,13 @@ export default function App() {
     }
   }, []);
 
-  // Load initial data
   const loadData = async () => {
-    setLoading(true);
     try {
+      setLoading(true);
       const data = await fetchEntries();
-      setEntries(data);
+      setEntries(data || []);
     } catch (err) {
-      console.error('Failed to load power records:', err);
+      console.error('Failed to load power entries:', err);
     } finally {
       setLoading(false);
     }
@@ -112,163 +142,107 @@ export default function App() {
     loadData();
   }, []);
 
-  const handleEntrySuccess = (newEntry: PowerEntry) => {
-    setEntries((prev) => [newEntry, ...prev.filter(e => e.id !== newEntry.id)]);
-  };
-
-  const handleUserLogin = (session: UserSession) => {
-    setCurrentUser(session);
-    setWorkerName(session.name);
-    setIsAdmin(session.role === 'admin');
-    localStorage.setItem('power_user_session', JSON.stringify(session));
-    localStorage.setItem('power_worker_name', session.name);
-    if (session.role === 'admin') {
-      localStorage.setItem('power_is_admin', 'true');
-      setActiveTab('admin');
-    } else {
-      localStorage.removeItem('power_is_admin');
+  useEffect(() => {
+    if (activeTab === 'admin' && !isAdmin) {
       setActiveTab('entry');
     }
-  };
+  }, [activeTab, isAdmin]);
 
-  const handleUserLogout = () => {
-    setCurrentUser(null);
-    setIsAdmin(false);
-    localStorage.removeItem('power_user_session');
-    localStorage.removeItem('power_is_admin');
-    setActiveTab('entry');
+  const handleEntrySuccess = (newEntry: PowerEntry) => {
+    setEntries((prev) => [newEntry, ...prev]);
     setActiveFormCategory(null);
   };
 
-  const handleAdminLogin = (pin: string): boolean => {
-    if (pin === '1234' || pin === 'admin' || pin === 'power123') {
-      setIsAdmin(true);
-      localStorage.setItem('power_is_admin', 'true');
-      if (currentUser) {
-        const updated: UserSession = {
-          ...currentUser,
-          role: 'admin',
-          designation: 'এডমিন কন্ট্রোলার / প্রকৌশলী'
-        };
-        setCurrentUser(updated);
-        localStorage.setItem('power_user_session', JSON.stringify(updated));
-      }
-      return true;
-    }
-    return false;
+  const handleAdminLogin = () => {
+    setIsAdmin(true);
+    localStorage.setItem('power_is_admin', 'true');
+    setActiveTab('admin');
   };
 
   const handleAdminLogout = () => {
     setIsAdmin(false);
     localStorage.removeItem('power_is_admin');
-    if (currentUser) {
-      const updated: UserSession = {
-        ...currentUser,
-        role: 'worker',
-        designation: 'লাইনম্যান'
-      };
-      setCurrentUser(updated);
-      localStorage.setItem('power_user_session', JSON.stringify(updated));
-    }
-    if (activeTab === 'admin') {
-      setActiveTab('entry');
+    setActiveTab('entry');
+  };
+
+  const handleUserLoginSuccess = (session: UserSession) => {
+    setCurrentUser(session);
+    setWorkerName(session.name);
+    if (session.role === 'admin') {
+      setIsAdmin(true);
+      localStorage.setItem('power_is_admin', 'true');
     }
   };
 
-  // Export full CSV for admin/workers
+  const handleUserLogout = () => {
+    localStorage.removeItem('power_user_session');
+    localStorage.removeItem('power_is_admin');
+    localStorage.removeItem('power_worker_name');
+    setCurrentUser(null);
+    setIsAdmin(false);
+    setWorkerName('');
+    setActiveTab('entry');
+  };
+
   const handleExportCsv = () => {
     if (entries.length === 0) {
-      alert('কোনো ডাটা পাওয়া যায়নি।');
+      alert('এক্সপোর্ট করার মতো কোনো ডাটা নেই');
       return;
     }
 
     const headers = [
-      'Work ID',
-      'Category',
-      'Date',
-      'Status',
-      'Worker Name',
-      'Consumer Name',
-      'Consumer ID',
-      'Mobile',
-      'Address',
-      'Feeder',
-      'Pole No',
-      'Applied Load',
-      'Phase',
-      'Meter No',
-      'Initial Reading',
-      'Seal No',
-      'Arrear Amount',
-      'Disconnection Reason',
-      'Final Reading',
-      'Pole Issue Type',
-      'Priority',
-      'Action Taken',
-      'Old Meter No',
-      'New Meter No',
-      'Meter Reason',
-      'DTR Name',
-      'Existing Capacity',
-      'New Capacity',
-      'Old DTR Serial',
-      'New DTR Serial',
-      'GPS Location',
-      'Notes'
+      'ID', 'Date', 'Category', 'Worker Name', 'Feeder', 'Substation', 'Status',
+      'Consumer Name', 'Consumer ID', 'Mobile', 'Address', 'Pole No', 'Applied Load',
+      'Phase', 'Meter No', 'Initial Reading', 'Final Reading', 'Seal No',
+      'Arrear Amount', 'Reason', 'Issue Type', 'Priority', 'Action Taken',
+      'Material Used', 'Old Meter No', 'New Meter No', 'DTR Name', 'Existing Capacity',
+      'New Capacity', 'Notes', 'GPS Coordinates'
     ];
 
     const rows = entries.map(e => [
-      `"${e.id || ''}"`,
-      `"${e.category || ''}"`,
-      `"${new Date(e.date).toLocaleString()}"`,
-      `"${e.status || ''}"`,
+      e.id,
+      `"${e.date}"`,
+      `"${e.category}"`,
       `"${e.workerName || ''}"`,
+      `"${e.feederName || ''}"`,
+      `"${e.substation || ''}"`,
+      `"${e.status}"`,
       `"${e.consumerName || ''}"`,
       `"${e.consumerId || ''}"`,
       `"${e.mobile || ''}"`,
-      `"${(e.address || '').replace(/"/g, '""')}"`,
-      `"${e.feederName || ''}"`,
+      `"${e.address || ''}"`,
       `"${e.poleNo || ''}"`,
       `"${e.appliedLoad || ''}"`,
       `"${e.phase || ''}"`,
       `"${e.meterNo || ''}"`,
       `"${e.initialReading || ''}"`,
+      `"${e.finalReading || ''}"`,
       `"${e.sealNo || ''}"`,
       `"${e.arrearAmount || ''}"`,
-      `"${(e.reason || '').replace(/"/g, '""')}"`,
-      `"${e.finalReading || ''}"`,
-      `"${(e.issueType || '').replace(/"/g, '""')}"`,
+      `"${e.reason || ''}"`,
+      `"${e.issueType || ''}"`,
       `"${e.priority || ''}"`,
-      `"${(e.actionTaken || '').replace(/"/g, '""')}"`,
+      `"${e.actionTaken || ''}"`,
+      `"${e.materialUsed || ''}"`,
       `"${e.oldMeterNo || ''}"`,
       `"${e.newMeterNo || ''}"`,
-      `"${(e.replacementReason || '').replace(/"/g, '""')}"`,
       `"${e.dtrName || ''}"`,
       `"${e.existingCapacity || ''}"`,
       `"${e.newCapacity || ''}"`,
-      `"${e.oldDtrSerial || ''}"`,
-      `"${e.newDtrSerial || ''}"`,
-      `"${e.locationGps || ''}"`,
       `"${(e.notes || '').replace(/"/g, '""')}"`,
+      `"${e.locationGps || ''}"`
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,' 
+      + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `POWER_Field_Records_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `POWER_FIELD_EXPORT_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  // Calculate category counts
-  const categoryCounts = {
-    'NSC': entries.filter(e => e.category === 'NSC').length,
-    'DISCONNECTION': entries.filter(e => e.category === 'DISCONNECTION').length,
-    'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
-    'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
-    'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
   };
 
   const navToCategory = (cat: CategoryType) => {
@@ -278,61 +252,74 @@ export default function App() {
     setSidebarOpen(false);
   };
 
-  // If user is not logged in, show the Login / Auth Screen
+  // Helper count badges
+  const categoryCounts: Record<CategoryType, number> = {
+    'NSC': entries.filter(e => e.category === 'NSC').length,
+    'DISCONNECTION': entries.filter(e => e.category === 'DISCONNECTION').length,
+    'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
+    'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
+    'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
+  };
+
+  // If user is not logged in with ID & Password, display LoginScreen
   if (!currentUser) {
-    return <LoginScreen onLogin={handleUserLogin} />;
+    return (
+      <LoginScreen 
+        onLoginSuccess={handleUserLoginSuccess}
+        lang={currentLanguage}
+        onOpenLanguageModal={() => setShowLanguageModal(true)}
+      />
+    );
   }
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-800 overflow-hidden">
-      {/* PROFESSIONAL POLISH SIDEBAR (Desktop & Mobile Drawer) */}
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 font-sans antialiased">
+      {/* Mobile Drawer Overlay */}
       {sidebarOpen && (
         <div 
-          onClick={() => setSidebarOpen(false)} 
-          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs md:hidden"
+          className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-xs md:hidden"
+          onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 flex flex-col transition-transform duration-200 ease-in-out ${
-        sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-      }`}>
-        {/* Brand Header */}
-        <div className="p-5 flex items-center justify-between border-b border-slate-800 bg-slate-950/40">
-          <div 
-            onClick={() => { setActiveTab('entry'); setSidebarOpen(false); }}
-            className="flex items-center gap-3 cursor-pointer group"
-          >
-            <div className="relative">
-              <img 
-                src={appLogo} 
-                alt="Power of Construction Round Logo" 
-                className="w-11 h-11 rounded-full object-cover shadow-lg border-2 border-amber-400 group-hover:scale-105 transition-transform shrink-0 ring-2 ring-amber-400/20"
-                referrerPolicy="no-referrer"
-              />
-            </div>
+      {/* LEFT NAVIGATION SIDEBAR */}
+      <aside className={`
+        fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-200 ease-in-out md:static md:translate-x-0
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+      `}>
+        {/* Brand Header with Round Logo */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <img 
+              src={appLogo} 
+              alt="Power of Construction Logo" 
+              className="w-10 h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-800"
+              referrerPolicy="no-referrer"
+            />
             <div>
-              <span className="text-xl font-black tracking-tight text-white flex items-center gap-1.5">
-                POWER
-              </span>
-              <p className="text-[10px] uppercase font-bold tracking-wider text-amber-400">ESTD 2026</p>
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-white text-sm tracking-wide">{t.appName}</span>
+                <span className="text-[10px] font-bold bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded">WBSEDCL</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-tight">Field Utility Standard</p>
             </div>
           </div>
           <button 
             onClick={() => setSidebarOpen(false)}
-            className="md:hidden text-slate-400 hover:text-white p-1"
+            className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Sidebar Nav Links */}
+        {/* Navigation Sections */}
         <div className="px-4 py-3">
-          <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">Main Modules</p>
+          <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">{t.mainModules}</p>
         </div>
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
           <button
             onClick={() => { setActiveTab('entry'); setSidebarOpen(false); }}
-            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'entry'
                 ? 'bg-slate-800 text-white shadow-xs font-bold'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
@@ -340,14 +327,14 @@ export default function App() {
           >
             <div className="flex items-center gap-3">
               <Home className="w-4 h-4 text-amber-400" />
-              <span>Home (এন্ট্রি পোর্টাল)</span>
+              <span>{t.dataEntry}</span>
             </div>
             <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded">Home</span>
           </button>
 
           <button
             onClick={() => { setActiveTab('my-submissions'); setSidebarOpen(false); }}
-            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'my-submissions'
                 ? 'bg-slate-800 text-white shadow-xs font-bold'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
@@ -355,12 +342,67 @@ export default function App() {
           >
             <div className="flex items-center gap-3">
               <Clock className="w-4 h-4 text-sky-400" />
-              <span>My Submissions</span>
+              <span>{t.mySubmissions}</span>
             </div>
             <span className="text-[10px] bg-slate-800 text-slate-400 font-bold px-1.5 py-0.5 rounded">{entries.length}</span>
           </button>
 
-          {/* Direct Logout Option Right Below My Submissions */}
+          {isAdmin && (
+            <button
+              onClick={() => { setActiveTab('admin'); setSidebarOpen(false); loadData(); }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'admin'
+                  ? 'bg-slate-800 text-white shadow-xs font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>{t.adminCenter}</span>
+              </div>
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            </button>
+          )}
+
+          {/* LANGUAGE OPTION INSIDE MAIN MODULES BELOW ADMIN CENTER */}
+          <button
+            id="sidebar-nav-language-btn"
+            onClick={() => {
+              setSidebarOpen(false);
+              setShowLanguageModal(true);
+            }}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-blue-300 hover:text-white hover:bg-blue-500/10 border border-blue-500/30 transition-all cursor-pointer shadow-xs"
+            title="ভাষা পরিবর্তন করুন (Change Language: Bengali, English, Hindi, Urdu)"
+          >
+            <div className="flex items-center gap-3">
+              <Globe className="w-4 h-4 text-blue-400" />
+              <span>{t.language}</span>
+            </div>
+            <span className="text-[9px] bg-blue-500/20 text-blue-300 font-bold px-1.5 py-0.5 rounded border border-blue-500/40 uppercase">
+              {currentLanguage}
+            </span>
+          </button>
+
+          {/* Install App Option inside MAIN MODULES below Language */}
+          <button
+            id="sidebar-nav-install-app-btn"
+            onClick={() => {
+              setSidebarOpen(false);
+              setShowInstallModal(true);
+            }}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-amber-300 hover:text-white hover:bg-amber-500/10 border border-amber-500/30 transition-all cursor-pointer shadow-xs"
+            title="অ্যান্ড্রয়েড ফোনে অ্যাপ ইনস্টল করুন"
+          >
+            <div className="flex items-center gap-3">
+              <Download className="w-4 h-4 text-amber-400" />
+              <span>{t.installApp}</span>
+            </div>
+            <span className="text-[9px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded border border-amber-500/40">
+              Android
+            </span>
+          </button>
+
+          {/* Direct Logout Option Right Below Install App */}
           <button
             id="sidebar-nav-logout-btn"
             onClick={() => {
@@ -372,78 +414,78 @@ export default function App() {
           >
             <div className="flex items-center gap-3">
               <LogOut className="w-4 h-4 text-red-400" />
-              <span>লগআউট (Logout)</span>
+              <span>{t.logout}</span>
             </div>
             <span className="text-[9px] bg-red-950 text-red-400 font-mono px-1.5 py-0.5 rounded border border-red-900/40">Exit</span>
           </button>
 
-          <button
-            onClick={() => { setActiveTab('admin'); setSidebarOpen(false); }}
-            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
-              activeTab === 'admin'
-                ? 'bg-slate-800 text-white shadow-xs font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Admin Center</span>
-            </div>
-            {isAdmin && <span className="w-2 h-2 rounded-full bg-emerald-400"></span>}
-          </button>
-
           <div className="pt-4 pb-2">
-            <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">5 Categories</p>
+            <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">{t.fiveCategories}</p>
           </div>
 
           <button
             onClick={() => navToCategory('NSC')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === 'entry' && selectedCategory === 'NSC' ? 'bg-amber-500/15 text-amber-300 font-bold' : 'text-slate-400 hover:text-white'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              activeFormCategory === 'NSC' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
-            <span className="truncate">1. NSC (New Connection)</span>
-            <span className="text-[10px] text-slate-400 font-mono">{categoryCounts['NSC']}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span>1. NSC</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{categoryCounts['NSC']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('DISCONNECTION')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === 'entry' && selectedCategory === 'DISCONNECTION' ? 'bg-rose-500/15 text-rose-300 font-bold' : 'text-slate-400 hover:text-white'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              activeFormCategory === 'DISCONNECTION' ? 'bg-rose-500/20 text-rose-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
-            <span className="truncate">2. Disconnections</span>
-            <span className="text-[10px] text-slate-400 font-mono">{categoryCounts['DISCONNECTION']}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+              <span>2. DISCONNECTION</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{categoryCounts['DISCONNECTION']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('POLE CASE')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === 'entry' && selectedCategory === 'POLE CASE' ? 'bg-sky-500/15 text-sky-300 font-bold' : 'text-slate-400 hover:text-white'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              activeFormCategory === 'POLE CASE' ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
-            <span className="truncate">3. Pole Cases</span>
-            <span className="text-[10px] text-slate-400 font-mono">{categoryCounts['POLE CASE']}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-sky-400"></span>
+              <span>3. POLE CASE</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{categoryCounts['POLE CASE']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('METER REPLESMENT')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === 'entry' && selectedCategory === 'METER REPLESMENT' ? 'bg-emerald-500/15 text-emerald-300 font-bold' : 'text-slate-400 hover:text-white'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              activeFormCategory === 'METER REPLESMENT' ? 'bg-emerald-500/20 text-emerald-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
-            <span className="truncate">4. Meter Replacement</span>
-            <span className="text-[10px] text-slate-400 font-mono">{categoryCounts['METER REPLESMENT']}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span>4. METER REPLESMENT</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{categoryCounts['METER REPLESMENT']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('DTR REPLESMENT')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === 'entry' && selectedCategory === 'DTR REPLESMENT' ? 'bg-violet-500/15 text-violet-300 font-bold' : 'text-slate-400 hover:text-white'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              activeFormCategory === 'DTR REPLESMENT' ? 'bg-indigo-500/20 text-indigo-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
-            <span className="truncate">5. DTR Maintenance</span>
-            <span className="text-[10px] text-slate-400 font-mono">{categoryCounts['DTR REPLESMENT']}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+              <span>5. DTR REPLESMENT</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{categoryCounts['DTR REPLESMENT']}</span>
           </button>
         </nav>
 
@@ -488,6 +530,8 @@ export default function App() {
           onLogoutUser={handleUserLogout}
           totalEntriesCount={entries.length}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          currentLanguage={currentLanguage}
+          onOpenLanguageModal={() => setShowLanguageModal(true)}
         />
 
         {/* Content Container */}
@@ -506,9 +550,10 @@ export default function App() {
                       setActiveFormCategory(cat);
                     }}
                     categoryCounts={categoryCounts}
+                    currentLanguage={currentLanguage}
                   />
 
-                  {/* Clean Helper Card & Recent Submissions (No bottom form permanently open) */}
+                  {/* Clean Helper Card & Recent Submissions */}
                   <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                       <div className="flex items-center gap-3">
@@ -517,10 +562,10 @@ export default function App() {
                         </div>
                         <div>
                           <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                            বিদ্যুৎ কাজের ফিল্ড ডাটা এন্ট্রি পোর্টাল
+                            {t.appSubtitle}
                           </h3>
                           <p className="text-xs text-slate-500">
-                            উপরের <strong>NSC</strong> অথবা যেকোনো কাজের ক্যাটাগরিতে ক্লিক করলে সরাসরি সেই ফরমটি খুলবে।
+                            {t.selectCategory} (NSC, DISCONNECTION, POLE CASE, METER, DTR)
                           </p>
                         </div>
                       </div>
@@ -530,10 +575,10 @@ export default function App() {
                             setSelectedCategory('NSC');
                             setActiveFormCategory('NSC');
                           }}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                         >
                           <Zap className="w-3.5 h-3.5" />
-                          <span>NSC ফরম খুলুন</span>
+                          <span>NSC Form</span>
                         </button>
                       </div>
                     </div>
@@ -543,38 +588,41 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-slate-600" />
                           <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                            আপনার সাম্প্রতিক কাজের তালিকা ({entries.length})
+                            {t.recordsCount} ({entries.length})
                           </h4>
                         </div>
                       </div>
                       <WorkerRecentSubmissions
                         entries={entries.slice(0, 6)}
                         workerName={workerName}
+                        currentUser={currentUser}
+                        onLogout={handleUserLogout}
                         onSelectEntry={(entry) => setPreviewEntry(entry)}
                         onNewEntry={() => {
                           setSelectedCategory('NSC');
                           setActiveFormCategory('NSC');
                         }}
+                        lang={currentLanguage}
                       />
                     </div>
                   </div>
                 </div>
               ) : (
-                /* INSIDE FORM VIEW: Opened inside when clicking NSC or any category */
+                /* INSIDE FORM VIEW */
                 <div className="space-y-4">
                   {/* Category Switcher & Back Navigation Bar */}
                   <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <button
                         onClick={() => setActiveFormCategory(null)}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors"
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <ArrowLeft className="w-4 h-4" />
-                        <span>← সব ক্যাটাগরি</span>
+                        <span>← {t.filterAll} {t.fiveCategories}</span>
                       </button>
                       <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
                       <span className="text-xs font-bold text-slate-700 hidden sm:inline">
-                        বর্তমান ফরম: <span className="text-blue-600 font-black">{activeFormCategory}</span>
+                        {t.category}: <span className="text-blue-600 font-black">{activeFormCategory}</span>
                       </span>
                     </div>
 
@@ -587,7 +635,7 @@ export default function App() {
                             setSelectedCategory(cat);
                             setActiveFormCategory(cat);
                           }}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-all ${
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
                             activeFormCategory === cat
                               ? 'bg-slate-900 text-white shadow-xs'
                               : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -607,85 +655,29 @@ export default function App() {
                       handleEntrySuccess(newEntry);
                     }}
                     onBack={() => setActiveFormCategory(null)}
+                    lang={currentLanguage}
                   />
                 </div>
               )}
             </div>
           )}
 
-          {/* VIEW 2: ADMIN DASHBOARD */}
-          {activeTab === 'admin' && (
+          {/* VIEW 2: ADMIN DASHBOARD (EXCLUSIVELY FOR LOGGED-IN ADMINS) */}
+          {activeTab === 'admin' && isAdmin && (
             <div>
-              {isAdmin ? (
-                <AdminDashboard
-                  entries={entries}
-                  onRefresh={loadData}
-                  onExportCsv={handleExportCsv}
-                  onLogout={handleUserLogout}
-                />
-              ) : (
-                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center max-w-md mx-auto my-8 space-y-4 shadow-sm">
-                  <div className="w-14 h-14 rounded-xl bg-amber-500/10 text-amber-600 border border-amber-500/20 flex items-center justify-center mx-auto">
-                    <ShieldCheck className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">Admin Authentication Required</h2>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Sign in with your 4-digit PIN code to view and manage all worker submissions.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setCornerModalOption('admin_portal')}
-                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs shadow-xs transition-colors"
-                  >
-                    Open Admin Login Panel
-                  </button>
-                </div>
-              )}
+              <AdminDashboard
+                entries={entries}
+                onRefresh={loadData}
+                onExportCsv={handleExportCsv}
+                onLogout={handleUserLogout}
+                lang={currentLanguage}
+              />
             </div>
           )}
 
           {/* VIEW 3: WORKER'S RECENT SUBMISSIONS (MAIN MODULE) */}
           {activeTab === 'my-submissions' && (
             <div className="space-y-6">
-              {/* Metrics Summary Bar */}
-              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-                  <p className="text-xs sm:text-sm text-slate-500 font-medium">Total Work Entries</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">{entries.length}</p>
-                  <div className="flex items-center gap-1 text-emerald-600 text-xs mt-2 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Real-time Synced</span>
-                  </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-                  <p className="text-xs sm:text-sm text-slate-500 font-medium">Active NSC Connections</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">{categoryCounts['NSC']}</p>
-                  <div className="flex items-center gap-1 text-blue-600 text-xs mt-2 font-medium">
-                    <span>New meters registered</span>
-                  </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-                  <p className="text-xs sm:text-sm text-slate-500 font-medium">Poles & Lines Maintained</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">{categoryCounts['POLE CASE']}</p>
-                  <div className="flex items-center gap-1 text-amber-600 text-xs mt-2 font-medium">
-                    <span>Field issues tracked</span>
-                  </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-                  <p className="text-xs sm:text-sm text-slate-500 font-medium">Meter & DTR Replacements</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
-                    {categoryCounts['METER REPLESMENT'] + categoryCounts['DTR REPLESMENT']}
-                  </p>
-                  <div className="flex items-center gap-1 text-slate-500 text-xs mt-2 font-medium">
-                    <span>Verified with serials</span>
-                  </div>
-                </div>
-              </div>
-
               <WorkerRecentSubmissions
                 entries={entries}
                 workerName={workerName}
@@ -693,6 +685,7 @@ export default function App() {
                 onLogout={handleUserLogout}
                 onSelectEntry={(entry) => setPreviewEntry(entry)}
                 onNewEntry={() => setActiveTab('entry')}
+                lang={currentLanguage}
               />
             </div>
           )}
@@ -711,6 +704,22 @@ export default function App() {
         onExportCsv={handleExportCsv}
       />
 
+      {/* Language Selector Modal */}
+      <LanguageModal
+        isOpen={showLanguageModal}
+        onClose={() => setShowLanguageModal(false)}
+        currentLanguage={currentLanguage}
+        onSelectLanguage={handleSelectLanguage}
+      />
+
+      {/* Android & PWA App Install Modal */}
+      <InstallAppModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        deferredPrompt={deferredPrompt}
+        onPromptInstall={handlePromptInstall}
+      />
+
       {/* Quick Preview & Slip Modal */}
       {previewEntry && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -724,7 +733,7 @@ export default function App() {
               </div>
               <button
                 onClick={() => setPreviewEntry(null)}
-                className="p-1 text-slate-400 hover:text-slate-700"
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -739,20 +748,24 @@ export default function App() {
             </div>
 
             <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => {
-                  setPreviewEntry(null);
-                  setActiveTab('admin');
-                }}
-                className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors"
-              >
-                View in Admin Console
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => {
+                    setPreviewEntry(null);
+                    setActiveTab('admin');
+                  }}
+                  className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  View in Admin Console
+                </button>
+              )}
               <button
                 onClick={() => setPreviewEntry(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition-colors"
+                className={`py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer ${
+                  isAdmin ? 'px-4' : 'w-full'
+                }`}
               >
-                Close
+                {t.cancel}
               </button>
             </div>
           </div>
@@ -761,4 +774,3 @@ export default function App() {
     </div>
   );
 }
-

@@ -1,0 +1,19 @@
+{
+  "name": "Power Working - WBSEDCL",
+  "short_name": "Power Working",
+  "description": "WBSEDCL Electric Utility Field Operations & Data Management",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/src/assets/images/power_round_logo_1787860440979.jpg",
+      "sizes": "192x192 512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
