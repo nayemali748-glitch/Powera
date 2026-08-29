@@ -19,20 +19,28 @@ import {
   HelpCircle,
   ShieldAlert,
   Building2,
-  RefreshCw
+  RefreshCw,
+  PauseCircle,
+  PlayCircle,
+  ShieldX,
+  AlertTriangle
 } from 'lucide-react';
 import { UserAccount } from '../types';
-import { fetchUsers, createUserAccount, deleteUserAccount, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { fetchUsers, createUserAccount, deleteUserAccount, updateUserStatus, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { Language, translations } from '../utils/translations';
 
 interface UserManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
+  lang?: Language;
 }
 
 export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   isOpen,
-  onClose
+  onClose,
+  lang = 'bn'
 }) => {
+  const t = translations[lang] || translations.bn;
   // Load users from backend / localStorage
   const [users, setUsers] = useState<UserAccount[]>(DEFAULT_WBSEDCL_ACCOUNTS);
   const [loading, setLoading] = useState(false);
@@ -90,7 +98,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     const cleanConfirm = confirmPassword.trim();
 
     if (!cleanId) {
-      setError('একটি Login ID No লিখুন (যেমন: LM-4085 বা ADM-102)');
+      setError('একটি User ID লিখুন (যেমন: LM-4085 বা ADM-102)');
       return;
     }
 
@@ -124,6 +132,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         name: cleanName,
         phone: cleanPhone || '9830000000',
         role,
+        status: 'active',
         designation: designation || (role === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
         badgeNo: cleanId,
         securityQuestion,
@@ -131,7 +140,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       });
 
       setUsers(prev => [newUser, ...prev]);
-      setSuccess(`নতুন ${role === 'admin' ? 'এডমিন' : 'ওয়ার্কার'} আইডি "${cleanId}" সফলভাবে তৈরি ও সার্ভারে সংরক্ষিত হয়েছে! কর্মী এখন যেকোনো ডিভাইস থেকে এই আইডি দিয়ে লগইন করতে পারবেন।`);
+      setSuccess(`নতুন ${role === 'admin' ? 'এডমিন' : 'ওয়ার্কার'} আইডি "${cleanId}" সফলভাবে তৈরি ও সংরক্ষিত হয়েছে! কর্মী এখন যেকোনো ডিভাইস থেকে এই আইডি দিয়ে লগইন করতে পারবেন।`);
       
       // Reset form
       setName('');
@@ -146,20 +155,70 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
+  const handleToggleStatus = async (userAcc: UserAccount) => {
+    if (userAcc.idNo === '8695716192' || userAcc.idNo === 'admin') {
+      alert('মুখ্য এডমিন আইডি (8695716192) হোল্ড করা যাবে না!');
+      return;
+    }
+
+    const nextStatus: 'active' | 'hold' = userAcc.status === 'hold' ? 'active' : 'hold';
+    const actionText = nextStatus === 'hold' ? 'HOLD (লগইন স্থগিত)' : 'ACTIVE (লগইন সক্রিয়)';
+    
+    if (window.confirm(`Are you sure you want to set "${userAcc.name}" (ID: ${userAcc.idNo}) to ${actionText}? ${nextStatus === 'hold' ? 'This user will NOT be able to log in until activated.' : 'User will be able to log in immediately.'}`)) {
+      setLoading(true);
+      try {
+        await updateUserStatus(userAcc.id || userAcc.idNo, nextStatus);
+        setUsers(prev => prev.map(u => (u.id === userAcc.id || u.idNo === userAcc.idNo) ? { ...u, status: nextStatus } : u));
+        
+        // If holding current user, handle session
+        if (nextStatus === 'hold') {
+          const currentSession = localStorage.getItem('power_user_session');
+          if (currentSession) {
+            try {
+              const parsed = JSON.parse(currentSession);
+              if (parsed.idNo === userAcc.idNo) {
+                localStorage.removeItem('power_user_session');
+              }
+            } catch {}
+          }
+        }
+
+        setSuccess(`User ID "${userAcc.idNo}" is now ${nextStatus.toUpperCase()}! ${nextStatus === 'hold' ? 'Login is now blocked.' : 'Login is now active.'}`);
+      } catch (err: any) {
+        setError(err.message || 'Failed to update user status');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
   const handleDeleteUser = async (userAcc: UserAccount) => {
     if (userAcc.idNo === '8695716192' || userAcc.idNo === 'admin') {
       alert('মুখ্য এডমিন আইডি (8695716192) মুছে ফেলা যাবে না!');
       return;
     }
 
-    if (window.confirm(`আপনি কি নিশ্চিত যে "${userAcc.name}" (${userAcc.idNo}) এর একাউন্ট মুছে ফেলতে চান?`)) {
+    if (window.confirm(`Are you sure you want to permanently DELETE account for "${userAcc.name}" (ID: ${userAcc.idNo})? This ID and Password will be completely deleted and will NEVER be able to log in.`)) {
       setLoading(true);
       try {
-        await deleteUserAccount(userAcc.id);
+        await deleteUserAccount(userAcc.id || userAcc.idNo);
         setUsers(prev => prev.filter(u => u.id !== userAcc.id && u.idNo !== userAcc.idNo));
-        setSuccess(`"${userAcc.name}" এর একাউন্ট মুছে ফেলা হয়েছে।`);
+        
+        // Invalidate active session if matching deleted user
+        const currentSession = localStorage.getItem('power_user_session');
+        if (currentSession) {
+          try {
+            const parsed = JSON.parse(currentSession);
+            if (parsed.idNo === userAcc.idNo || parsed.id === userAcc.id) {
+              localStorage.removeItem('power_user_session');
+              localStorage.removeItem('power_worker_name');
+            }
+          } catch {}
+        }
+
+        setSuccess(`User ID "${userAcc.idNo}" has been DELETED permanently. Login credentials completely revoked.`);
       } catch (err: any) {
-        setError(err.message || 'ইউজার ডিলিট ব্যর্থ হয়েছে');
+        setError(err.message || 'Failed to delete user account');
       } finally {
         setLoading(false);
       }
@@ -173,7 +232,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
@@ -183,13 +242,13 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>ওয়ার্কার ও এডমিন আইডি কন্ট্রোল</span>
+                <span>Worker & Admin ID Control</span>
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30">
                   WBSEDCL Admin
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                এডমিন (8695716192) হিসেবে নতুন লাইনম্যান/কর্মীর আইডি ও পাসওয়ার্ড তৈরি করুন যা সব জায়গায় কাজ করবে
+                আইডি তৈরি, ডিলিট, হোল্ড ও একটিভ কন্ট্রোল (Delete & Hold ID will not be able to log in)
               </p>
             </div>
           </div>
@@ -213,7 +272,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
             }`}
           >
             <UserPlus className="w-4 h-4" />
-            <span>নতুন আইডি ও পাসওয়ার্ড তৈরি (Create)</span>
+            <span>Create New User ID</span>
           </button>
           <button
             onClick={() => {
@@ -227,7 +286,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
             }`}
           >
             <Users className="w-4 h-4" />
-            <span>নিবন্ধিত আইডি তালিকা ({users.length})</span>
+            <span>Registered ID List ({users.length})</span>
           </button>
         </div>
 
@@ -256,14 +315,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               {/* Role Selection */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  একাউন্টের ভূমিকা (Role) <span className="text-red-500">*</span>
+                  Account Role <span className="text-red-500">*</span>
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => {
                       setRole('worker');
-                      setDesignation('লাইনম্যান (WBSEDCL)');
+                      setDesignation('Lineman (WBSEDCL)');
                       setIdNo(`LM-${Math.floor(1000 + Math.random() * 9000)}`);
                     }}
                     className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
@@ -276,8 +335,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       <HardHat className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-slate-900">ফিল্ড কর্মী / লাইনম্যান</h4>
-                      <p className="text-[11px] text-slate-500">কাজ সম্পাদন, ছবি আপলোড ও এন্ট্রি রিপোর্ট</p>
+                      <h4 className="text-xs font-bold text-slate-900">Field Worker / Lineman</h4>
+                      <p className="text-[11px] text-slate-500">Submit work logs, upload evidence</p>
                     </div>
                   </button>
 
@@ -285,7 +344,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     type="button"
                     onClick={() => {
                       setRole('admin');
-                      setDesignation('সহকারী প্রকৌশলী (WBSEDCL)');
+                      setDesignation('Assistant Engineer (WBSEDCL)');
                       setIdNo(`ADM-${Math.floor(100 + Math.random() * 900)}`);
                     }}
                     className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
@@ -298,8 +357,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       <ShieldCheck className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-slate-900">এডমিন / স্টেশন ইনচার্জ</h4>
-                      <p className="text-[11px] text-slate-500">অনুমোদন, সম্পূর্ণ হিসেব, এন্ট্রি মুছা ও আইডি ম্যানেজ</p>
+                      <h4 className="text-xs font-bold text-slate-900">Admin / Station In-Charge</h4>
+                      <p className="text-[11px] text-slate-500">Approve, export, hold & manage IDs</p>
                     </div>
                   </button>
                 </div>
@@ -310,9 +369,9 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-slate-500" />
-                    <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                    <span>User ID (Login Username) <span className="text-red-500">*</span></span>
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">কর্মী এই আইডি দিয়ে লগইন করবেন</span>
+                  <span className="text-[10px] text-slate-400 font-mono">User will log in using this ID</span>
                 </label>
                 <div className="relative">
                   <input
@@ -320,7 +379,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     required
                     value={idNo}
                     onChange={(e) => setIdNo(e.target.value)}
-                    placeholder="যেমন: LM-4085 বা ADM-102"
+                    placeholder="e.g. LM-4085 or ADM-102"
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                   />
                 </div>
@@ -330,14 +389,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    কর্মীর পূর্ণ নাম <span className="text-red-500">*</span>
+                    Full Name <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="যেমন: অসিত কুমার দাস"
+                    placeholder="e.g. Asit Kumar Das"
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
@@ -345,7 +404,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
                     <Phone className="w-3.5 h-3.5 text-slate-500" />
-                    <span>মোবাইল নম্বর</span>
+                    <span>Mobile Number</span>
                   </label>
                   <input
                     type="tel"
@@ -360,7 +419,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               {/* Designation */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  পদবী / পদমর্যাদা (WBSEDCL)
+                  Designation / Designation Title (WBSEDCL)
                 </label>
                 <select
                   value={designation}
@@ -369,19 +428,19 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 >
                   {role === 'admin' ? (
                     <>
-                      <option value="ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)">ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)</option>
-                      <option value="সহকারী প্রকৌশলী / AE (WBSEDCL)">সহকারী প্রকৌশলী / AE (WBSEDCL)</option>
-                      <option value="স্টেশন ম্যানেজার / SM (CCC)">স্টেশন ম্যানেজার / SM (CCC)</option>
-                      <option value="জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)">জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)</option>
-                      <option value="এডমিন কন্ট্রোলার">এডমিন কন্ট্রোলার</option>
+                      <option value="Divisional Manager / XEN (WBSEDCL)">Divisional Manager / XEN (WBSEDCL)</option>
+                      <option value="Assistant Engineer / AE (WBSEDCL)">Assistant Engineer / AE (WBSEDCL)</option>
+                      <option value="Station Manager / SM (CCC)">Station Manager / SM (CCC)</option>
+                      <option value="Junior Engineer / JE (WBSEDCL)">Junior Engineer / JE (WBSEDCL)</option>
+                      <option value="Admin Controller">Admin Controller</option>
                     </>
                   ) : (
                     <>
-                      <option value="লাইনম্যান (Lineman WBSEDCL)">লাইনম্যান (Lineman WBSEDCL)</option>
-                      <option value="সিনিয়র লাইনম্যান (CCC)">সিনিয়র লাইনম্যান (CCC)</option>
-                      <option value="টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)">টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)</option>
-                      <option value="মিটার রিডার / টেকনিশিয়ান">মিটার রিডার / টেকনিশিয়ান</option>
-                      <option value="সাবস্টেশন অপারেটর">সাবস্টেশন অপারেটর</option>
+                      <option value="Lineman (Lineman WBSEDCL)">Lineman (Lineman WBSEDCL)</option>
+                      <option value="Senior Lineman (CCC)">Senior Lineman (CCC)</option>
+                      <option value="Technical Assistant (TA)">Technical Assistant (TA)</option>
+                      <option value="Meter Reader / Technician">Meter Reader / Technician</option>
+                      <option value="Substation Operator">Substation Operator</option>
                     </>
                   )}
                 </select>
@@ -393,14 +452,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
                     <span className="flex items-center gap-1">
                       <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                      <span>লগইন পাসওয়ার্ড <span className="text-red-500">*</span></span>
+                      <span>Login Password <span className="text-red-500">*</span></span>
                     </span>
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="text-[10px] text-slate-400 hover:text-slate-600"
                     >
-                      {showPassword ? 'লুকান' : 'দেখান'}
+                      {showPassword ? 'Hide' : 'Show'}
                     </button>
                   </label>
                   <input
@@ -408,21 +467,21 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="পাসওয়ার্ড দিন"
+                    placeholder="Enter password"
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    পাসওয়ার্ড নিশ্চিত করুন <span className="text-red-500">*</span>
+                    Confirm Password <span className="text-red-500">*</span>
                   </label>
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="পুনরায় পাসওয়ার্ড দিন"
+                    placeholder="Re-enter password"
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
@@ -435,11 +494,11 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
               >
                 {loading ? (
-                  <span>সংরক্ষণ হচ্ছে...</span>
+                  <span>Saving...</span>
                 ) : (
                   <>
                     <UserPlus className="w-4 h-4" />
-                    <span>আইডি ও পাসওয়ার্ড তৈরি করুন (Create Account)</span>
+                    <span>Create User ID & Password</span>
                   </>
                 )}
               </button>
@@ -451,6 +510,19 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           {/* ========================================================= */}
           {activeTab === 'list' && (
             <div className="space-y-3">
+              {/* Security Instruction Callout */}
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-950 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong>আইডি কন্ট্রোল নিরাপত্তা নির্দেশিকা:</strong>
+                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    • <strong>হোল্ড (Hold):</strong> আইডি সাময়িক নিষ্ক্রিয় হবে, কর্মী লগইন করতে পারবেন না। প্রয়োজনে আবার একটিভ করা যাবে।
+                    <br />
+                    • <strong>ডিলিট (Delete):</strong> আইডি ও পাসওয়ার্ড স্থায়ীভাবে মুছে যাবে এবং কখনো লগইন করতে পারবে না।
+                  </p>
+                </div>
+              </div>
+
               {/* Search & Refresh */}
               <div className="flex gap-2">
                 <div className="relative flex-1">
@@ -459,7 +531,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="নাম, আইডি বা পদবী দিয়ে খুঁজুন..."
+                    placeholder="Search by Name, ID, or Designation..."
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
@@ -469,7 +541,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                  <span>রিফ্রেশ</span>
+                  <span>Refresh</span>
                 </button>
               </div>
 
@@ -477,50 +549,73 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
                 {filteredUsers.length === 0 ? (
                   <div className="text-center py-8 text-slate-400 text-xs">
-                    কোনো ইউজার আইডি পাওয়া যায়নি।
+                    No registered user ID found.
                   </div>
                 ) : (
                   filteredUsers.map((u) => {
                     const isPrimaryAdmin = u.idNo === '8695716192' || u.idNo === 'admin';
+                    const isHold = u.status === 'hold';
+
                     return (
                       <div
                         key={u.id || u.idNo}
-                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
+                        className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${
                           isPrimaryAdmin
                             ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400/30'
+                            : isHold
+                            ? 'bg-red-50/40 border-red-200 opacity-90'
                             : u.role === 'admin'
                             ? 'bg-emerald-50/50 border-emerald-200'
                             : 'bg-white border-slate-200'
                         }`}
                       >
                         <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs ${
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                             isPrimaryAdmin
                               ? 'bg-amber-500 text-slate-950 font-black'
+                              : isHold
+                              ? 'bg-red-500 text-white'
                               : u.role === 'admin'
                               ? 'bg-emerald-600 text-white'
                               : 'bg-blue-600 text-white'
                           }`}>
-                            {isPrimaryAdmin ? 'HQ' : u.role === 'admin' ? 'ADM' : 'WRK'}
+                            {isPrimaryAdmin ? 'HQ' : isHold ? 'HLD' : u.role === 'admin' ? 'ADM' : 'WRK'}
                           </div>
 
                           <div>
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-xs font-bold text-slate-900">{u.name}</h4>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className={`text-xs font-bold ${isHold ? 'text-red-900 line-through' : 'text-slate-900'}`}>
+                                {u.name}
+                              </h4>
                               <span className="text-[10px] font-mono font-bold bg-slate-200 text-slate-800 px-1.5 py-0.2 rounded">
                                 ID: {u.idNo}
                               </span>
+
+                              {/* Status Badge */}
+                              {isHold ? (
+                                <span className="text-[9px] bg-red-100 text-red-700 font-bold border border-red-300 px-1.5 py-0.2 rounded flex items-center gap-1">
+                                  <PauseCircle className="w-2.5 h-2.5" />
+                                  <span>ON HOLD / স্থগিত</span>
+                                </span>
+                              ) : (
+                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold border border-emerald-300 px-1.5 py-0.2 rounded flex items-center gap-1">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                  <span>ACTIVE / সক্রিয়</span>
+                                </span>
+                              )}
+
                               {isPrimaryAdmin && (
                                 <span className="text-[9px] bg-amber-500 text-slate-950 font-black px-1.5 py-0.2 rounded">
                                   Primary Admin
                                 </span>
                               )}
                             </div>
+
                             <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-1">
                               <span>{u.designation}</span>
                               <span>•</span>
                               <div className="flex items-center gap-1">
-                                <span>পাসওয়ার্ড:</span>
+                                <span>Password:</span>
                                 <span className="font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
                                   {revealedPasswords[u.id || u.idNo] ? u.password : '••••••••'}
                                 </span>
@@ -532,7 +627,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                                   }))}
                                   className="text-[10px] text-blue-600 hover:underline px-1"
                                 >
-                                  {revealedPasswords[u.id || u.idNo] ? 'লুকান' : 'দেখুন'}
+                                  {revealedPasswords[u.id || u.idNo] ? 'Hide' : 'Show'}
                                 </button>
                               </div>
                               {u.phone && (
@@ -545,16 +640,44 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                           </div>
                         </div>
 
+                        {/* Action Buttons: Hold/Active & Delete */}
                         {!isPrimaryAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteUser(u)}
-                            className="px-2.5 py-1.5 text-xs font-bold text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg transition-all flex items-center gap-1 cursor-pointer shrink-0 shadow-xs"
-                            title="আইডি ও পাসওয়ার্ড মুছে ফেলুন"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">মুছে ফেলুন</span>
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                            {/* Toggle Hold / Active */}
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(u)}
+                              className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs ${
+                                isHold
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
+                              }`}
+                              title={isHold ? 'আইডি সক্রিয় করুন (Activate ID)' : 'আইডি স্থগিত করুন (Hold ID)'}
+                            >
+                              {isHold ? (
+                                <>
+                                  <PlayCircle className="w-3.5 h-3.5" />
+                                  <span>Activate ID</span>
+                                </>
+                              ) : (
+                                <>
+                                  <PauseCircle className="w-3.5 h-3.5 text-amber-700" />
+                                  <span>Hold ID</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* Delete ID */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(u)}
+                              className="px-2.5 py-1.5 text-xs font-bold text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs"
+                              title="Delete User ID permanently"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete ID</span>
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
@@ -567,12 +690,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
         {/* Footer */}
         <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 px-6">
-          <span>মোট সক্রিয় আইডি: <strong>{users.length}</strong></span>
+          <span>
+            Active IDs: <strong>{users.filter(u => u.status !== 'hold').length}</strong> | On Hold: <strong>{users.filter(u => u.status === 'hold').length}</strong>
+          </span>
           <button
             onClick={onClose}
             className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg transition-colors cursor-pointer text-xs"
           >
-            বন্ধ করুন
+            Close
           </button>
         </div>
       </div>

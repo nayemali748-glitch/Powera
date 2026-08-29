@@ -9,65 +9,13 @@ export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
     id: 'adm_8695716192',
     idNo: '8695716192',
     password: '6293',
-    name: 'ইঞ্জিঃ এন. আলী (এডমিন কন্ট্রোলার)',
+    name: 'Engr. N. Ali (Admin Controller)',
     phone: '8695716192',
     role: 'admin',
-    designation: 'সহকারী প্রকৌশলী / ডিভিশনাল এডমিন (WBSEDCL)',
+    designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
     badgeNo: 'ADM-8695',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
+    securityQuestion: 'Your Primary Power Substation?',
     securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_root',
-    idNo: 'admin',
-    password: '6293',
-    name: 'সিস্টেম এডমিনিস্ট্রেটর',
-    phone: '8695716192',
-    role: 'admin',
-    designation: 'সিস্টেম এডমিন (WBSEDCL HQ)',
-    badgeNo: 'SYS-ADMIN',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_001',
-    idNo: 'ADM-001',
-    password: '6293',
-    name: 'এডমিন অফিসার',
-    phone: '8695716192',
-    role: 'admin',
-    designation: 'এডমিন অফিসার (WBSEDCL)',
-    badgeNo: 'ADM-001',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Bidhannagar Substation',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'wrk_101',
-    idNo: 'LM-101',
-    password: '1234',
-    name: 'সুশান্ত কুমার মণ্ডল',
-    phone: '9830012345',
-    role: 'worker',
-    designation: 'সিনিয়র লাইনম্যান (WBSEDCL CCC)',
-    badgeNo: 'LM-101',
-    securityQuestion: 'আপনার কর্মক্ষেত্র?',
-    securityAnswer: 'Kolkata',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'wrk_202',
-    idNo: 'TA-202',
-    password: '1234',
-    name: 'রাহুল সেন',
-    phone: '9830067890',
-    role: 'worker',
-    designation: 'টেকনিক্যাল অ্যাসিস্ট্যান্ট (WBSEDCL)',
-    badgeNo: 'TA-202',
-    securityQuestion: 'আপনার কর্মক্ষেত্র?',
-    securityAnswer: 'Howrah',
     createdAt: new Date().toISOString()
   }
 ];
@@ -309,6 +257,59 @@ export async function deleteUserAccount(id: string): Promise<boolean> {
   }
 }
 
+export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
+  try {
+    const res = await fetch(`${API_BASE}/users/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Failed to update user status');
+    }
+    const data = await res.json();
+    
+    // Update local cache
+    const cached = localStorage.getItem(USERS_STORAGE_KEY);
+    if (cached) {
+      let list: UserAccount[] = JSON.parse(cached);
+      const idx = list.findIndex(u => u.id === id || u.idNo === id);
+      if (idx !== -1) {
+        list[idx].status = status;
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
+      }
+    }
+    return data.user;
+  } catch (err: any) {
+    const cached = localStorage.getItem(USERS_STORAGE_KEY);
+    if (cached) {
+      let list: UserAccount[] = JSON.parse(cached);
+      const idx = list.findIndex(u => u.id === id || u.idNo === id);
+      if (idx !== -1) {
+        list[idx].status = status;
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
+        return list[idx];
+      }
+    }
+    throw err;
+  }
+}
+
+export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`);
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      return { valid: false, error: errJson.error || 'Session invalid' };
+    }
+    const data = await res.json();
+    return data;
+  } catch {
+    return { valid: true, status: 'active' };
+  }
+}
+
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
@@ -327,15 +328,15 @@ export async function loginUser(loginId: string, password: string): Promise<User
     const cleanId = loginId.trim();
     const cleanPass = password.trim();
     
-    // Check if 8695716192 or admin
-    if ((cleanId === '8695716192' || cleanId === 'admin' || cleanId === 'ADM-001') && (cleanPass === '6293' || cleanPass === '1234' || cleanPass === 'admin' || cleanPass === '869571')) {
+    // Check if master admin 8695716192
+    if (cleanId === '8695716192' && cleanPass === '6293') {
       return {
         id: 'adm_8695716192',
-        idNo: cleanId === '8695716192' ? '8695716192' : cleanId,
-        name: 'ইঞ্জিঃ এন. আলী (এডমিন কন্ট্রোলার)',
+        idNo: '8695716192',
+        name: 'Engr. N. Ali (Admin Controller)',
         phone: '8695716192',
         role: 'admin',
-        designation: 'সহকারী প্রকৌশলী / ডিভিশনাল এডমিন (WBSEDCL)',
+        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
       };
@@ -343,20 +344,25 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => u.idNo.toLowerCase() === cleanId.toLowerCase() || u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, ''));
-    if (found && (found.password === cleanPass || (found.role === 'admin' && (cleanPass === '6293' || cleanPass === '1234')))) {
-      return {
-        id: found.id,
-        idNo: found.idNo,
-        name: found.name,
-        phone: found.phone,
-        role: found.role,
-        designation: found.designation,
-        badgeNo: found.badgeNo || found.idNo,
-        loggedInAt: new Date().toISOString()
-      };
+    const found = users.find(u => u.idNo.toLowerCase() === cleanId.toLowerCase() || (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')));
+    if (found) {
+      if (found.status === 'hold') {
+        throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
+      }
+      if (found.password === cleanPass) {
+        return {
+          id: found.id,
+          idNo: found.idNo,
+          name: found.name,
+          phone: found.phone,
+          role: found.role,
+          designation: found.designation,
+          badgeNo: found.badgeNo || found.idNo,
+          loggedInAt: new Date().toISOString()
+        };
+      }
     }
-    throw new Error(err.message || 'ভুল আইডি বা পাসওয়ার্ড!');
+    throw new Error(err.message || 'Invalid ID or Password! Account not found or deactivated.');
   }
 }
 
@@ -417,5 +423,75 @@ export async function resetUserPassword(idNo: string, newPassword: string, phone
   } catch {}
 
   return true;
+}
+
+// Live Chat Support API
+const CHAT_LOCAL_KEY = 'power_chat_history';
+
+export async function fetchChatMessages(workerId?: string) {
+  try {
+    const params = workerId ? `?workerId=${encodeURIComponent(workerId)}` : '';
+    const res = await fetch(`${API_BASE}/chat${params}`);
+    if (!res.ok) throw new Error('Failed to fetch chat');
+    const data = await res.json();
+    try {
+      localStorage.setItem(CHAT_LOCAL_KEY, JSON.stringify(data));
+    } catch {}
+    return data;
+  } catch (err) {
+    const cached = localStorage.getItem(CHAT_LOCAL_KEY);
+    if (cached) {
+      try {
+        const list = JSON.parse(cached);
+        if (Array.isArray(list)) return list;
+      } catch {}
+    }
+    return [];
+  }
+}
+
+export async function sendChatMessage(payload: {
+  senderId: string;
+  senderName: string;
+  senderRole: 'admin' | 'worker' | 'supervisor';
+  recipientId?: string;
+  message: string;
+}) {
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Failed to send chat message');
+    }
+    const data = await res.json();
+    return data.message;
+  } catch (err: any) {
+    const fallbackMsg = {
+      id: `msg_${Date.now()}`,
+      ...payload,
+      timestamp: new Date().toISOString(),
+      status: 'sent'
+    };
+    const cached = localStorage.getItem(CHAT_LOCAL_KEY);
+    const list = cached ? JSON.parse(cached) : [];
+    list.push(fallbackMsg);
+    localStorage.setItem(CHAT_LOCAL_KEY, JSON.stringify(list));
+    return fallbackMsg;
+  }
+}
+
+export async function clearChatMessages(): Promise<boolean> {
+  try {
+    await fetch(`${API_BASE}/chat`, { method: 'DELETE' });
+    localStorage.removeItem(CHAT_LOCAL_KEY);
+    return true;
+  } catch {
+    localStorage.removeItem(CHAT_LOCAL_KEY);
+    return true;
+  }
 }
 

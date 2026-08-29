@@ -150,11 +150,34 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
                     </span>
                   </div>
 
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                    item.status === 'Approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                  }`}>
-                    {item.status === 'Approved' ? t.approved : item.status === 'Completed' ? t.completed : item.status === 'Pending' ? t.pending : item.status}
-                  </span>
+                  {/* Status Badge */}
+                  {(() => {
+                    const status = item.status || 'Pending';
+                    const isApproved = status === 'Approved';
+                    const isCompleted = status === 'Completed';
+                    const isPending = status === 'Pending';
+                    const isRejected = status === 'Rejected';
+
+                    return (
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 shadow-2xs ${
+                        isApproved ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
+                        isCompleted ? 'bg-blue-50 text-blue-700 border-blue-300' :
+                        isRejected ? 'bg-rose-50 text-rose-700 border-rose-300' :
+                        'bg-amber-50 text-amber-700 border-amber-300'
+                      }`}>
+                        {isApproved && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                        {isCompleted && <CheckCircle2 className="w-3 h-3 text-blue-600" />}
+                        {isPending && <Clock className="w-3 h-3 text-amber-600 animate-pulse" />}
+                        {isRejected && <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>}
+                        <span>
+                          {isApproved ? (t.approved || 'Approved') :
+                           isCompleted ? (t.completed || 'Completed') :
+                           isPending ? (t.pending || 'Pending') :
+                           status}
+                        </span>
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div>

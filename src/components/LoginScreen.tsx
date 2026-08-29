@@ -21,7 +21,8 @@ import {
   ArrowLeft,
   Check,
   BadgeAlert,
-  UserCheck
+  UserCheck,
+  Globe
 } from 'lucide-react';
 import { UserSession, UserAccount } from '../types';
 import { fetchUsers, createUserAccount, loginUser, resetUserPassword, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
@@ -107,7 +108,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanPass = loginPassword.trim();
 
     if (!cleanId) {
-      setError('অনুগ্রহ করে আপনার Login ID No বা মোবাইল নম্বর দিন (যেমন: 8695716192)');
+      setError('অনুগ্রহ করে আপনার User ID প্রবেশ করান');
       return;
     }
 
@@ -158,7 +159,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanConfirm = regConfirmPassword.trim();
 
     if (!cleanId) {
-      setError('একটি Login ID No লিখুন (যেমন: LM-401 বা ADM-105)');
+      setError('একটি User ID লিখুন');
       return;
     }
 
@@ -213,7 +214,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanForgotId = forgotId.trim();
 
     if (!cleanForgotId) {
-      setError('আপনার Login ID No বা মোবাইল নম্বর দিন (যেমন: 8695716192)');
+      setError('আপনার Login ID No প্রবেশ করান');
       return;
     }
 
@@ -227,7 +228,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
 
     if (!found) {
-      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক আইডি (যেমন 8695716192) লিখুন।');
+      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন।');
       return;
     }
 
@@ -296,6 +297,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         {/* Header Branding */}
         <div className="bg-slate-900 text-white p-6 sm:p-7 text-center relative overflow-hidden">
           <div className="absolute inset-0 bg-linear-to-b from-blue-600/15 to-transparent pointer-events-none"></div>
+
+          {onOpenLanguageModal && (
+            <button
+              type="button"
+              onClick={onOpenLanguageModal}
+              className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-blue-300 hover:text-white border border-blue-500/30 flex items-center gap-1.5 text-xs font-bold transition-all shadow-xs cursor-pointer z-20"
+              title="Change Language / ভাষা পরিবর্তন"
+            >
+              <Globe className="w-3.5 h-3.5 text-blue-400" />
+              <span className="uppercase text-[10px]">{lang}</span>
+            </button>
+          )}
           
           <div className="inline-block relative mb-3">
             <img 
@@ -308,14 +321,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </div>
 
           <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
-            <span>Power Working</span>
+            <span>Power of Construction</span>
           </h1>
-          <p className="text-xs text-amber-400 font-semibold tracking-wider uppercase mt-1">
-            WBSEDCL Field Operations • West Bengal (India)
+          <p className="text-xs text-amber-400 font-bold tracking-wider mt-1">
+            App Developed By Nayem
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {mode === 'login' && 'এডমিন বা কর্মী আইডি ও পাসওয়ার্ড দিয়ে প্রবেশ করুন'}
-            {mode === 'register' && 'নতুন এডমিন / কর্মী আইডি তৈরি (সার্ভার সিন্ক)'}
+            {mode === 'login' && 'এডমিন বা কর্মী User ID ও পাসওয়ার্ড দিয়ে প্রবেশ করুন'}
+            {mode === 'register' && 'নতুন এডমিন / কর্মী User ID তৈরি (সার্ভার সিন্ক)'}
             {mode === 'forgot' && 'পাসওয়ার্ড রিসেট ও পরিবর্তন পোর্টাল'}
           </p>
         </div>
@@ -368,7 +381,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-500" />
-                      <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                      <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
                     </span>
                   </label>
                   <div className="relative">
@@ -377,7 +390,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={loginId}
                       onChange={(e) => setLoginId(e.target.value)}
-                      placeholder="আপনার Login ID No লিখুন"
+                      placeholder="আপনার User ID লিখুন"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono"
                     />
                   </div>
@@ -503,7 +516,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               {/* Login ID No */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                  <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
                   <span className="text-[10px] text-slate-400 font-mono">ইউনিক আইডি</span>
                 </label>
                 <input
@@ -511,8 +524,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   required
                   value={regIdNo}
                   onChange={(e) => setRegIdNo(e.target.value)}
-                  placeholder="যেমন: LM-501 বা ADM-101"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  placeholder="আপনার User ID লিখুন"
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono"
                 />
               </div>
 
@@ -661,29 +674,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       <HelpCircle className="w-4 h-4 text-blue-600" />
                       <span>পাসওয়ার্ড পরিবর্তন ও রিকভারি পদ্ধতি</span>
                     </p>
-                    <p>আপনার <strong>Login ID No</strong> (যেমন: <span className="font-mono font-bold">8695716192</span> বা LM-101) দিন। এরপর সরাসরি নতুন পাসওয়ার্ড সেট করতে পারবেন।</p>
+                    <p>আপনার <strong>User ID</strong> দিন। এরপর সরাসরি নতুন পাসওয়ার্ড সেট করতে পারবেন।</p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <User className="w-3.5 h-3.5 text-slate-500" />
-                        <span>লগইন আইডি নম্বর (Login ID No) <span className="text-red-500">*</span></span>
+                        <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => setForgotId('8695716192')}
-                        className="text-[10px] text-blue-600 font-bold hover:underline"
-                      >
-                        এডমিন 8695716192 দিন
-                      </button>
                     </label>
                     <input
                       type="text"
                       required
                       value={forgotId}
                       onChange={(e) => setForgotId(e.target.value)}
-                      placeholder="যেমন: 8695716192 বা LM-101"
+                      placeholder="আপনার User ID লিখুন"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                     />
                   </div>
@@ -697,7 +703,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       type="tel"
                       value={forgotPhone}
                       onChange={(e) => setForgotPhone(e.target.value)}
-                      placeholder="98300XXXXX / 8695716192"
+                      placeholder="আপনার রেজিস্টার্ড মোবাইল নম্বর লিখুন"
                       className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
@@ -713,8 +719,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               ) : (
                 <form onSubmit={handleForgotResetPassword} className="space-y-4 animate-in fade-in">
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-                    <p className="font-bold">আইডি নিশ্চিত হয়েছে: {targetAccount?.name} ({targetAccount?.idNo})</p>
-                    <p className="text-[11px] text-emerald-700 mt-0.5">এখন এই একাউন্টের জন্য আপনার পছন্দমতো নতুন পাসওয়ার্ড দিন।</p>
+                    <p className="font-bold">আইডি যাচাই সম্পন্ন হয়েছে</p>
+                    <p className="text-[11px] text-emerald-700 mt-0.5">এখন এই একাউন্টের জন্য আপনার নতুন পাসওয়ার্ড লিখুন।</p>
                   </div>
 
                   <div>
@@ -726,7 +732,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowNewPassword(!showNewPassword)}
-                        className="text-[10px] text-slate-400 hover:text-slate-600"
+                        className="text-[10px] text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
                         {showNewPassword ? 'লুকান' : 'দেখান'}
                       </button>
@@ -736,7 +742,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="কমপক্ষে ৪ ডিজিটের নতুন পাসওয়ার্ড (যেমন: 6293)"
+                      placeholder="কমপক্ষে ৪ ডিজিটের নতুন পাসওয়ার্ড লিখুন"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
@@ -776,9 +782,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         </div>
 
         {/* Footer info */}
-        <div className="bg-slate-50 px-6 py-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span className="font-semibold text-slate-700">WBSEDCL • Field Operations</span>
-          <span className="font-mono font-bold text-slate-500">West Bengal, India</span>
+        <div className="bg-slate-50 px-6 py-3.5 border-t border-slate-100 flex items-center justify-center text-xs font-bold text-slate-700">
+          <span className="tracking-wide text-slate-800 font-extrabold">App Developed By Nayem</span>
         </div>
       </div>
     </div>

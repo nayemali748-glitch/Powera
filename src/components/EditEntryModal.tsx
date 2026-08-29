@@ -181,6 +181,18 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
                     />
                   </div>
 
+                  {isNsc && (
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block">{t.applicationNo}</label>
+                      <input
+                        type="text"
+                        value={formData.applicationNo || ''}
+                        onChange={(e) => handleChange('applicationNo', e.target.value)}
+                        className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-purple-700 focus:bg-white"
+                      />
+                    </div>
+                  )}
+
                   <div>
                     <label className="text-[11px] font-bold text-slate-600 block">{t.consumerId}</label>
                     <input
@@ -214,16 +226,18 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
                 />
               </div>
 
-              {/* Pole No */}
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 block">{t.poleNo}</label>
-                <input
-                  type="text"
-                  value={formData.poleNo || ''}
-                  onChange={(e) => handleChange('poleNo', e.target.value)}
-                  className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:bg-white"
-                />
-              </div>
+              {/* Pole No (Hidden for NSC) */}
+              {!isNsc && (
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block">{t.poleNo}</label>
+                  <input
+                    type="text"
+                    value={formData.poleNo || ''}
+                    onChange={(e) => handleChange('poleNo', e.target.value)}
+                    className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:bg-white"
+                  />
+                </div>
+              )}
 
               {/* NSC Specifics */}
               {isNsc && (
@@ -234,6 +248,24 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
                       type="text"
                       value={formData.appliedLoad || ''}
                       onChange={(e) => handleChange('appliedLoad', e.target.value)}
+                      className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600 block">{t.phaseSupply}</label>
+                    <input
+                      type="text"
+                      value={formData.phase || ''}
+                      onChange={(e) => handleChange('phase', e.target.value)}
+                      className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600 block">{t.tariffCategory}</label>
+                    <input
+                      type="text"
+                      value={formData.tariffCategory || ''}
+                      onChange={(e) => handleChange('tariffCategory', e.target.value)}
                       className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
                     />
                   </div>

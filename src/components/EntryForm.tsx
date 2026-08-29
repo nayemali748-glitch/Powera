@@ -47,6 +47,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [submissionModalEntry, setSubmissionModalEntry] = useState<PowerEntry | null>(null);
   const [fetchingGps, setFetchingGps] = useState(false);
 
   // Common Form Fields
@@ -58,25 +59,33 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [locationGps, setLocationGps] = useState('');
   const [notes, setNotes] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [isVideo, setIsVideo] = useState<boolean>(false);
 
   // Category-specific states
   // 1. NSC (New Service Connection)
+  const [workOrderNo, setWorkOrderNo] = useState('');
+  const [workOrderDate, setWorkOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [consumerName, setConsumerName] = useState('');
   const [fatherName, setFatherName] = useState('');
-  const [consumerId, setConsumerId] = useState('');
   const [applicationNo, setApplicationNo] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [address, setAddress] = useState('');
-  const [poleNo, setPoleNo] = useState('');
-  const [appliedLoad, setAppliedLoad] = useState('2 kW');
-  const [phase, setPhase] = useState<'Single Phase' | '3-Phase' | string>('Single Phase');
-  const [tariffCategory, setTariffCategory] = useState('Domestic (A-Dom)');
+  const [nscWorkerName, setNscWorkerName] = useState(workerName || '');
+  const [agencyName, setAgencyName] = useState('');
+  const [cccName, setCccName] = useState('Central CCC');
+  const [consumerId, setConsumerId] = useState('');
   const [meterNo, setMeterNo] = useState('');
-  const [meterMake, setMeterMake] = useState('Genus / Secure');
-  const [initialReading, setInitialReading] = useState('000000');
   const [sealNo, setSealNo] = useState('');
-  const [serviceCableLength, setServiceCableLength] = useState('25 Meters (2Cx10 sq.mm)');
-  const [earthResistance, setEarthResistance] = useState('1.8 Ohms');
+  const [initialReading, setInitialReading] = useState('000000');
+  const [mobile, setMobile] = useState('');
+  const [appliedLoad, setAppliedLoad] = useState('');
+  const [phase, setPhase] = useState('');
+  const [tariffCategory, setTariffCategory] = useState('');
+  const [serviceCableLength, setServiceCableLength] = useState('');
+  const [address, setAddress] = useState('');
+  const [meterInstallDate, setMeterInstallDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [inspectionAgencyName, setInspectionAgencyName] = useState('');
+  const [poleNo, setPoleNo] = useState('');
+  const [meterMake, setMeterMake] = useState('Genus / Secure');
+  const [earthResistance, setEarthResistance] = useState('');
 
   // 2. DISCONNECTION
   const [arrearAmount, setArrearAmount] = useState('');
@@ -153,6 +162,15 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // 50 MB max limit check
+      const maxSizeBytes = 50 * 1024 * 1024;
+      if (file.size > maxSizeBytes) {
+        alert('ফাইল সাইজ ৫০ MB এর বেশি হতে পারবে না (File size must be under 50 MB)');
+        return;
+      }
+      const isVid = file.type.startsWith('video/');
+      setIsVideo(isVid);
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setPhotoPreview(reader.result as string);
@@ -176,10 +194,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       ctx.font = '13px sans-serif';
       ctx.fillText(`Date: ${new Date().toLocaleDateString()}`, 20, 90);
       ctx.fillText(`Lineman: ${worker}`, 20, 120);
-      ctx.fillText(`Ref: ${consumerId || poleNo || dtrName || 'Field Point'}`, 20, 150);
+      ctx.fillText(`Ref: ${consumerId || poleNo || dtrName || applicationNo || 'Field Point'}`, 20, 150);
       ctx.fillStyle = '#10b981';
       ctx.font = 'bold 14px sans-serif';
-      ctx.fillText(`✓ WBSEDCL Field Photo Verified`, 20, 200);
+      ctx.fillText(`✓ WBSEDCL Field Evidence Verified`, 20, 200);
+      setIsVideo(false);
       setPhotoPreview(canvas.toDataURL());
     }
   };
@@ -199,8 +218,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       workerPhone,
       date: nowIso,
       status: 'Completed',
-      feederName,
-      substation,
       locationGps,
       photoUrl: photoPreview || undefined,
       notes,
@@ -208,20 +225,29 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
     // Category specifics
     if (category === 'NSC') {
+      entryPayload.workOrderNo = workOrderNo || `WO-${Date.now().toString().slice(-6)}`;
+      entryPayload.workOrderDate = workOrderDate;
       entryPayload.consumerName = consumerName || 'WBSEDCL Consumer';
       entryPayload.fatherName = fatherName;
+      entryPayload.applicationNo = applicationNo;
+      entryPayload.workerName = nscWorkerName || worker || 'Lineman';
+      entryPayload.agencyName = agencyName;
+      entryPayload.cccName = cccName;
       entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
+      entryPayload.meterNo = meterNo || `WB-${Math.floor(100000 + Math.random() * 900000)}`;
+      entryPayload.sealNo = sealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
+      entryPayload.initialReading = initialReading || '000000';
       entryPayload.mobile = mobile;
-      entryPayload.address = address || 'West Bengal, India';
-      entryPayload.poleNo = poleNo || 'P-12';
       entryPayload.appliedLoad = appliedLoad;
       entryPayload.phase = phase;
-      entryPayload.meterNo = meterNo || `WB-${Math.floor(100000 + Math.random() * 900000)}`;
-      entryPayload.initialReading = initialReading || '000000';
-      entryPayload.sealNo = sealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
+      entryPayload.tariffCategory = tariffCategory;
       entryPayload.serviceCableLength = serviceCableLength;
-      entryPayload.earthResistance = earthResistance;
+      entryPayload.address = address || 'West Bengal, India';
+      entryPayload.meterInstallDate = meterInstallDate;
+      entryPayload.inspectionAgencyName = inspectionAgencyName;
     } else if (category === 'DISCONNECTION') {
+      entryPayload.feederName = feederName;
+      entryPayload.substation = substation;
       entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
       entryPayload.consumerName = consumerName || 'Consumer (Defaulter)';
       entryPayload.mobile = mobile;
@@ -236,15 +262,21 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.sealNo = cutoutSealNo || `SL-CUT-${Math.floor(1000 + Math.random() * 9000)}`;
       entryPayload.actionTaken = disconnectionActionTaken;
     } else if (category === 'POLE CASE') {
+      entryPayload.feederName = feederName;
+      entryPayload.substation = substation;
       entryPayload.poleNo = poleNo || `P-${Math.floor(10 + Math.random() * 90)}`;
       entryPayload.address = address || 'Overhead Line Route';
       entryPayload.issueType = issueType;
       entryPayload.priority = priority;
       entryPayload.poleType = poleType;
       entryPayload.lineVoltage = lineVoltage;
+      entryPayload.conductorType = conductorType;
       entryPayload.actionTaken = actionTaken || 'পোল মেরামত ও ওভারহেড লাইন নিরাপদ করা হয়েছে';
       entryPayload.materialUsed = materialUsed || 'PSC Pole 9M, V-Cross Arm, Stay Set';
+      entryPayload.ptwShutdownRef = ptwShutdownRef;
     } else if (category === 'METER REPLESMENT') {
+      entryPayload.feederName = feederName;
+      entryPayload.substation = substation;
       entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
       entryPayload.consumerName = consumerName || 'Consumer';
       entryPayload.address = address;
@@ -258,6 +290,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.meterType = meterType;
       entryPayload.phase = phase;
     } else if (category === 'DTR REPLESMENT') {
+      entryPayload.feederName = feederName;
+      entryPayload.substation = substation;
       entryPayload.dtrName = dtrName || `DTR-${Math.floor(10 + Math.random() * 90)}`;
       entryPayload.address = address || 'DTR Sub-station Yard';
       entryPayload.existingCapacity = existingCapacity;
@@ -267,19 +301,20 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.failureReason = dtrFailureReason;
       entryPayload.oilLevelChecked = oilLevelChecked;
       entryPayload.earthResistance = earthPitResistance;
+      entryPayload.hgFuseRating = hgFuseRating;
+      entryPayload.ltMccbAmpere = ltMccbAmpere;
+      entryPayload.lightningArrester = lightningArrester;
     }
 
     try {
       const created = await createEntry(entryPayload);
       try {
-        confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
+        confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
       } catch (e) {
         // ignore
       }
       setSuccessMessage(t.entryCreatedSuccess);
-      setTimeout(() => {
-        onSuccess(created);
-      }, 1200);
+      setSubmissionModalEntry(created);
     } catch (err: any) {
       console.error('Error creating entry:', err);
       alert('Error saving data: ' + (err.message || 'Check connection'));
@@ -345,98 +380,161 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
       {/* Main Form Fields */}
       <form onSubmit={handleSubmit} className="p-5 sm:p-7 space-y-6">
-        {/* Section 1: Common Station & Grid Infrastructure Details */}
-        <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-            <Building className="w-4 h-4 text-blue-600" />
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              1. {t.substation} & {t.feeder}
-            </h3>
+        {/* Section 1: Common Station & Grid Infrastructure Details (Hidden for NSC as requested) */}
+        {category !== 'NSC' && (
+          <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+              <Building className="w-4 h-4 text-blue-600" />
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                1. {t.substation} & {t.feeder}
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.substation} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={substation}
+                  onChange={(e) => setSubstation(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. 33/11kV Main Substation"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.feeder} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={feederName}
+                  onChange={(e) => setFeederName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. 11kV Town Feeder-01"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.cccOffice}
+                </label>
+                <input
+                  type="text"
+                  value={cccOffice}
+                  onChange={(e) => setCccOffice(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. Customer Care Center (CCC)"
+                />
+              </div>
+            </div>
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                {t.substation} *
-              </label>
-              <input
-                type="text"
-                required
-                value={substation}
-                onChange={(e) => setSubstation(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                placeholder="e.g. 33/11kV Main Substation"
-              />
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                {t.feeder} *
-              </label>
-              <input
-                type="text"
-                required
-                value={feederName}
-                onChange={(e) => setFeederName(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                placeholder="e.g. 11kV Town Feeder-01"
-              />
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                {t.cccOffice}
-              </label>
-              <input
-                type="text"
-                value={cccOffice}
-                onChange={(e) => setCccOffice(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                placeholder="e.g. Customer Care Center (CCC)"
-              />
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Section 2: Category Specific Primary Fields */}
         <div className="space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
             <Sparkles className="w-4 h-4 text-amber-500" />
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              2. {category} Field Parameters (WBSEDCL Indian Standard)
+              {category === 'NSC' ? '1. NSC Form Parameters (WBSEDCL)' : `2. ${category} Field Parameters (WBSEDCL Standard)`}
             </h3>
           </div>
 
           {/* 1. NSC SPECIFIC FORM */}
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+              {/* 1. Lineman / Staff Name (Worker Name - Above Work Order No) */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.consumerName} *
+                  {t.workerName} (Worker Name / Lineman) *
                 </label>
                 <input
                   type="text"
                   required
-                  value={consumerName}
-                  onChange={(e) => setConsumerName(e.target.value)}
+                  value={nscWorkerName}
+                  onChange={(e) => setNscWorkerName(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="Enter Full Name"
+                  placeholder="Lineman / Worker Name"
                 />
               </div>
 
+              {/* 2. Agency Name (Above Work Order No) */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.fatherHusbandName}
+                  {t.agencyName} (Agency Name)
                 </label>
                 <input
                   type="text"
-                  value={fatherName}
-                  onChange={(e) => setFatherName(e.target.value)}
+                  value={agencyName}
+                  onChange={(e) => setAgencyName(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="Father's / Husband's Name"
+                  placeholder="Contractor / Agency Name"
                 />
               </div>
 
+              {/* 3. CCC Name (Above Work Order No) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.cccName} (CCC Name)
+                </label>
+                <input
+                  type="text"
+                  value={cccName}
+                  onChange={(e) => setCccName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. CCC Office Name"
+                />
+              </div>
+
+              {/* 4. Work Order No */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.workOrderNo} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={workOrderNo}
+                  onChange={(e) => setWorkOrderNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
+                  placeholder="e.g. WO-2026-98102"
+                />
+              </div>
+
+              {/* 5. Work Order Date */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.workOrderDate} *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={workOrderDate}
+                  onChange={(e) => setWorkOrderDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              {/* 6. Application No (Above Consumer Name) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.applicationNo} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={applicationNo}
+                  onChange={(e) => setApplicationNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-blue-700"
+                  placeholder="e.g. CA / Quota / Application No"
+                />
+              </div>
+
+              {/* 7. Consumer ID (Above Consumer Name) */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.consumerId} *
@@ -446,87 +544,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   required
                   value={consumerId}
                   onChange={(e) => setConsumerId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
                   placeholder="e.g. 100293847 (9 Digits)"
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.applicationNo}
-                </label>
-                <input
-                  type="text"
-                  value={applicationNo}
-                  onChange={(e) => setApplicationNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. CA-2026-9812"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.mobileNo} *
-                </label>
-                <input
-                  type="tel"
-                  required
-                  value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. 98300XXXXX"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.appliedLoad} *
-                </label>
-                <select
-                  value={appliedLoad}
-                  onChange={(e) => setAppliedLoad(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
-                >
-                  <option value="1 kW (Domestic)">1 kW (Domestic)</option>
-                  <option value="2 kW (Domestic Standard)">2 kW (Domestic Standard)</option>
-                  <option value="3 kW (Domestic / Small Com)">3 kW (Domestic / Small Com)</option>
-                  <option value="5 kW (Commercial B-Com)">5 kW (Commercial B-Com)</option>
-                  <option value="7.5 kW (Commercial / Workshop)">7.5 kW (Commercial / Workshop)</option>
-                  <option value="10 kW (Industrial / High)">10 kW (Industrial / High)</option>
-                  <option value="5 HP (Agriculture Pump)">5 HP (Agriculture Pump)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.phaseSupply}
-                </label>
-                <select
-                  value={phase}
-                  onChange={(e) => setPhase(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                >
-                  <option value="Single Phase">{t.singlePhase}</option>
-                  <option value="3-Phase">{t.threePhase}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.tariffCategory}
-                </label>
-                <select
-                  value={tariffCategory}
-                  onChange={(e) => setTariffCategory(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                >
-                  <option value="Domestic (A-Dom)">{t.domestic}</option>
-                  <option value="Commercial (B-Com)">{t.commercial}</option>
-                  <option value="Agriculture">{t.agriculture}</option>
-                  <option value="Industrial">{t.industrial}</option>
-                </select>
-              </div>
-
+              {/* 8. Meter No (Above Consumer Name) */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.meterNo} *
@@ -541,6 +564,65 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
+              {/* 9. Meter Seal No (Above Consumer Name) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.meterSealNo} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={sealNo}
+                  onChange={(e) => setSealNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-blue-700 font-bold"
+                  placeholder="e.g. WB-SL-98214"
+                />
+              </div>
+
+              {/* 10. Consumer Name */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.consumerName} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={consumerName}
+                  onChange={(e) => setConsumerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium"
+                  placeholder="Enter Full Consumer Name"
+                />
+              </div>
+
+              {/* 11. Father's / Husband's Name */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.fatherHusbandName}
+                </label>
+                <input
+                  type="text"
+                  value={fatherName}
+                  onChange={(e) => setFatherName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Father's / Husband's Name"
+                />
+              </div>
+
+              {/* 12. Mobile No */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.mobileNo}
+                </label>
+                <input
+                  type="tel"
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  placeholder="e.g. 98300XXXXX"
+                />
+              </div>
+
+              {/* 13. Initial Meter Reading */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.initialReading}
@@ -554,33 +636,49 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
+              {/* 14. Sanctioned Load (kW) - Free text */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.sealNo} *
+                  {t.appliedLoad}
                 </label>
                 <input
                   type="text"
-                  required
-                  value={sealNo}
-                  onChange={(e) => setSealNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-blue-700 font-bold"
-                  placeholder="e.g. WB-SL-98214"
+                  value={appliedLoad}
+                  onChange={(e) => setAppliedLoad(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. 2 kW (যা প্রযোজ্য লিখুন)"
                 />
               </div>
 
+              {/* 15. Supply Phase - Free text */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.poleNo}
+                  {t.phaseSupply}
                 </label>
                 <input
                   type="text"
-                  value={poleNo}
-                  onChange={(e) => setPoleNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. P-45 / Span-02"
+                  value={phase}
+                  onChange={(e) => setPhase(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. 1-Phase / 3-Phase (যা প্রযোজ্য লিখুন)"
                 />
               </div>
 
+              {/* 16. Tariff Class - Free text */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.tariffCategory}
+                </label>
+                <input
+                  type="text"
+                  value={tariffCategory}
+                  onChange={(e) => setTariffCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. Domestic (A-Dom) / Commercial (B-Com)"
+                />
+              </div>
+
+              {/* 17. Service Cable Size & Length (Meters) - Free text */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.serviceCableLength}
@@ -594,20 +692,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.earthResistance}
-                </label>
-                <input
-                  type="text"
-                  value={earthResistance}
-                  onChange={(e) => setEarthResistance(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. 1.8 Ohms (< 5 Ω)"
-                />
-              </div>
-
-              <div className="sm:col-span-2 lg:col-span-2">
+              {/* 18. Premises / Village / GP Address */}
+              <div className="sm:col-span-2 lg:col-span-3">
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.addressLocation} *
                 </label>
@@ -618,6 +704,34 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   onChange={(e) => setAddress(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Village / GP / Municipality / Post Office / Pin Code"
+                />
+              </div>
+
+              {/* 19. Meter Install Date (Below Address) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.meterInstallDate} *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={meterInstallDate}
+                  onChange={(e) => setMeterInstallDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium"
+                />
+              </div>
+
+              {/* 20. Inspection Agency Name (Below Meter Install Date) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.inspectionAgencyName}
+                </label>
+                <input
+                  type="text"
+                  value={inspectionAgencyName}
+                  onChange={(e) => setInspectionAgencyName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Third-party / Inspection Agency Name"
                 />
               </div>
             </div>
@@ -1230,7 +1344,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
             <Camera className="w-4 h-4 text-emerald-600" />
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              3. {t.gpsLocation} & {t.photoEvidence}
+              {category === 'NSC' ? '2. ' : '3. '}{t.gpsLocation} & {t.photoEvidence}
             </h3>
           </div>
 
@@ -1260,10 +1374,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
             </div>
 
-            {/* Photo upload / sample */}
+            {/* Photo / Video upload / sample (Max 50MB) */}
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                {t.photoEvidence}
+                {t.photoEvidence} <span className="text-[10px] text-slate-500 font-normal">({t.maxFileSize})</span>
               </label>
               <div className="flex gap-2">
                 <label className="flex-1 px-3 py-2 bg-white border border-slate-300 hover:border-slate-400 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
@@ -1271,7 +1385,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span>{t.uploadPhoto}</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/*"
                     onChange={handlePhotoUpload}
                     className="hidden"
                   />
@@ -1289,24 +1403,36 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </div>
           </div>
 
-          {/* Photo Preview if present */}
+          {/* Photo / Video Preview if present */}
           {photoPreview && (
-            <div className="pt-2 flex items-center gap-3">
-              <img
-                src={photoPreview}
-                alt="Field preview"
-                className="w-24 h-20 object-cover rounded-lg border border-slate-300 shadow-2xs"
-              />
-              <div className="text-xs text-slate-500 space-y-1">
+            <div className="pt-2 flex items-center gap-3 bg-white p-3 rounded-lg border border-slate-200">
+              {isVideo ? (
+                <video
+                  src={photoPreview}
+                  controls
+                  className="w-36 h-24 object-cover rounded-lg border border-slate-300 shadow-xs"
+                />
+              ) : (
+                <img
+                  src={photoPreview}
+                  alt="Field preview"
+                  className="w-24 h-20 object-cover rounded-lg border border-slate-300 shadow-xs"
+                />
+              )}
+              <div className="text-xs text-slate-600 space-y-1">
                 <span className="text-emerald-600 font-bold flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Photo Attached
+                  <CheckCircle className="w-3.5 h-3.5" /> {isVideo ? 'Video Evidence Attached' : 'Photo Evidence Attached'}
                 </span>
+                <p className="text-[11px] text-slate-400">Verified field attachment</p>
                 <button
                   type="button"
-                  onClick={() => setPhotoPreview(null)}
-                  className="text-red-500 hover:underline cursor-pointer font-medium text-[11px]"
+                  onClick={() => {
+                    setPhotoPreview(null);
+                    setIsVideo(false);
+                  }}
+                  className="text-red-500 hover:underline cursor-pointer font-semibold text-[11px] block"
                 >
-                  Remove Photo
+                  Remove Attachment
                 </button>
               </div>
             </div>
@@ -1358,6 +1484,66 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           </button>
         </div>
       </form>
+
+      {/* Submission Success Dialog Modal: "Your Entry data submitted" */}
+      {submissionModalEntry && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4 animate-in zoom-in-95">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 className="w-10 h-10" />
+            </div>
+
+            <div>
+              <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                {t.yourEntryDataSubmitted || 'Your Entry data submitted'}
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                {t.entryCreatedSuccess}
+              </p>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-left text-xs space-y-2">
+              <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                <span className="text-slate-500 font-medium">{t.recordId}:</span>
+                <span className="font-mono font-bold text-blue-700">{submissionModalEntry.id}</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                <span className="text-slate-500 font-medium">{t.category}:</span>
+                <span className="font-bold text-slate-800">{submissionModalEntry.category}</span>
+              </div>
+              {submissionModalEntry.applicationNo && (
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">{t.applicationNo}:</span>
+                  <span className="font-mono font-bold text-purple-700">{submissionModalEntry.applicationNo}</span>
+                </div>
+              )}
+              {submissionModalEntry.consumerName && (
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">{t.consumerName}:</span>
+                  <span className="font-bold text-slate-800">{submissionModalEntry.consumerName}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-medium">{t.workerName}:</span>
+                <span className="font-bold text-slate-800">{submissionModalEntry.workerName}</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const entry = submissionModalEntry;
+                setSubmissionModalEntry(null);
+                onSuccess(entry);
+              }}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>{t.okButton || 'ঠিক আছে (OK)'}</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

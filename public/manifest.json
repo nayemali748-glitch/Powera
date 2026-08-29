@@ -1,8 +1,9 @@
 {
-  "name": "Power Working - WBSEDCL",
-  "short_name": "Power Working",
+  "name": "Power of Construction",
+  "short_name": "Power App",
   "description": "WBSEDCL Electric Utility Field Operations & Data Management",
   "start_url": "/",
+  "id": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

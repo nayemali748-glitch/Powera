@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import appLogo from './assets/images/power_round_logo_1787860440979.jpg';
 import { Header } from './components/Header';
 import { CategorySelector } from './components/CategorySelector';
+import { PerformanceDashboard } from './components/PerformanceDashboard';
 import { EntryForm } from './components/EntryForm';
 import { AdminDashboard } from './components/AdminDashboard';
 import { WorkerRecentSubmissions } from './components/WorkerRecentSubmissions';
@@ -542,6 +543,17 @@ export default function App() {
               {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
               {activeFormCategory === null ? (
                 <div className="space-y-6">
+                  {/* Top Operational Performance Dashboard */}
+                  <PerformanceDashboard
+                    entries={entries}
+                    categoryCounts={categoryCounts}
+                    onSelectCategory={(cat) => {
+                      setSelectedCategory(cat);
+                      setActiveFormCategory(cat);
+                    }}
+                    currentLanguage={currentLanguage}
+                  />
+
                   {/* 5 Work Category Cards Selector */}
                   <CategorySelector
                     selectedCategory={selectedCategory}
@@ -671,6 +683,7 @@ export default function App() {
                 onExportCsv={handleExportCsv}
                 onLogout={handleUserLogout}
                 lang={currentLanguage}
+                onOpenLanguageModal={() => setShowLanguageModal(true)}
               />
             </div>
           )}

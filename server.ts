@@ -6,113 +6,75 @@ import { createServer as createViteServer } from 'vite';
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '80mb' }));
+app.use(express.urlencoded({ limit: '80mb', extended: true }));
 
 // Ensure data directory exists
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'entries.json');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Default WBSEDCL accounts (Admin password: 6293)
-const DEFAULT_ACCOUNTS = [
-  {
-    id: 'adm_8695716192',
-    idNo: '8695716192',
-    password: '6293',
-    name: 'ইঞ্জিঃ এন. আলী (এডমিন কন্ট্রোলার)',
-    phone: '8695716192',
-    role: 'admin',
-    designation: 'সহকারী প্রকৌশলী / ডিভিশনাল এডমিন (WBSEDCL)',
-    badgeNo: 'ADM-8695',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_root',
-    idNo: 'admin',
-    password: '6293',
-    name: 'সিস্টেম এডমিনিস্ট্রেটর',
-    phone: '8695716192',
-    role: 'admin',
-    designation: 'সিস্টেম এডমিন (WBSEDCL HQ)',
-    badgeNo: 'SYS-ADMIN',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_001',
-    idNo: 'ADM-001',
-    password: '6293',
-    name: 'এডমিন অফিসার',
-    phone: '8695716192',
-    role: 'admin',
-    designation: 'এডমিন অফিসার (WBSEDCL)',
-    badgeNo: 'ADM-001',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Bidhannagar Substation',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'wrk_101',
-    idNo: 'LM-101',
-    password: '1234',
-    name: 'সুশান্ত কুমার মণ্ডল',
-    phone: '9830012345',
-    role: 'worker',
-    designation: 'সিনিয়র লাইনম্যান (WBSEDCL CCC)',
-    badgeNo: 'LM-101',
-    securityQuestion: 'আপনার কর্মক্ষেত্র?',
-    securityAnswer: 'Kolkata',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'wrk_202',
-    idNo: 'TA-202',
-    password: '1234',
-    name: 'রাহুল সেন',
-    phone: '9830067890',
-    role: 'worker',
-    designation: 'টেকনিক্যাল অ্যাসিস্ট্যান্ট (WBSEDCL)',
-    badgeNo: 'TA-202',
-    securityQuestion: 'আপনার কর্মক্ষেত্র?',
-    securityAnswer: 'Howrah',
-    createdAt: new Date().toISOString()
-  }
-];
+// Security Middleware & Headers to prevent tampering and data leakage
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(self), camera=(self), microphone=()');
+  next();
+});
 
-// Helper to read users
+// Single Master Admin Account (No default/sample worker accounts)
+const ROOT_ADMIN_ACCOUNT = {
+  id: 'adm_8695716192',
+  idNo: '8695716192',
+  password: '6293',
+  name: 'Engr. N. Ali (Admin Controller)',
+  phone: '8695716192',
+  role: 'admin',
+  status: 'active',
+  designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
+  badgeNo: 'ADM-8695',
+  securityQuestion: 'Your Primary Power Substation?',
+  securityAnswer: 'Vidyut Bhavan',
+  createdAt: new Date().toISOString()
+};
+
+// Helper to read users (Only Admin created users + Master Admin exist)
 function readUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) {
-      fs.writeFileSync(USERS_FILE, JSON.stringify(DEFAULT_ACCOUNTS, null, 2), 'utf-8');
-      return DEFAULT_ACCOUNTS;
+      fs.writeFileSync(USERS_FILE, JSON.stringify([ROOT_ADMIN_ACCOUNT], null, 2), 'utf-8');
+      return [ROOT_ADMIN_ACCOUNT];
     }
     const content = fs.readFileSync(USERS_FILE, 'utf-8');
     let parsed = JSON.parse(content || '[]');
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      fs.writeFileSync(USERS_FILE, JSON.stringify(DEFAULT_ACCOUNTS, null, 2), 'utf-8');
-      return DEFAULT_ACCOUNTS;
+      fs.writeFileSync(USERS_FILE, JSON.stringify([ROOT_ADMIN_ACCOUNT], null, 2), 'utf-8');
+      return [ROOT_ADMIN_ACCOUNT];
     }
-    // Ensure 8695716192 exists in user list and has active admin status
-    const adminIdx = parsed.findIndex(u => u.idNo === '8695716192' || u.phone === '8695716192');
+    // Ensure all users have status property (default 'active')
+    parsed = parsed.map((u: any) => ({
+      ...u,
+      status: u.status || 'active'
+    }));
+    // Ensure primary admin 8695716192 exists and is active
+    const adminIdx = parsed.findIndex(u => u.idNo === '8695716192');
     if (adminIdx === -1) {
-      parsed.unshift(DEFAULT_ACCOUNTS[0]);
+      parsed.unshift(ROOT_ADMIN_ACCOUNT);
       fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
-    } else if (parsed[adminIdx].password === '1234') {
-      // Upgrade default admin password to 6293
-      parsed[adminIdx].password = '6293';
-      fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
+    } else {
+      parsed[adminIdx].status = 'active';
     }
     return parsed;
   } catch (err) {
     console.error('Error reading users:', err);
-    return DEFAULT_ACCOUNTS;
+    return [ROOT_ADMIN_ACCOUNT];
   }
 }
 
@@ -122,6 +84,30 @@ function writeUsers(users: any[]) {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error writing users:', err);
+  }
+}
+
+// Helper to read live chat messages
+function readChat() {
+  try {
+    if (!fs.existsSync(CHAT_FILE)) {
+      fs.writeFileSync(CHAT_FILE, JSON.stringify([], null, 2), 'utf-8');
+      return [];
+    }
+    const content = fs.readFileSync(CHAT_FILE, 'utf-8');
+    return JSON.parse(content || '[]');
+  } catch (err) {
+    console.error('Error reading chat:', err);
+    return [];
+  }
+}
+
+// Helper to write live chat messages
+function writeChat(messages: any[]) {
+  try {
+    fs.writeFileSync(CHAT_FILE, JSON.stringify(messages, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error writing chat:', err);
   }
 }
 
@@ -257,7 +243,7 @@ app.get('/api/users', (req, res) => {
 app.post('/api/users', (req, res) => {
   try {
     const users = readUsers();
-    const { idNo, name, password, role, phone, designation, badgeNo, securityQuestion, securityAnswer } = req.body;
+    const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
 
     if (!idNo || !name || !password) {
       return res.status(400).json({ error: 'ID No, Name, and Password are required' });
@@ -276,6 +262,7 @@ app.post('/api/users', (req, res) => {
       name: name.trim(),
       phone: phone?.trim() || '',
       role: role || 'worker',
+      status: status === 'hold' ? 'hold' : 'active',
       designation: designation?.trim() || (role === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
       badgeNo: badgeNo?.trim() || cleanId,
       securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন?',
@@ -290,6 +277,34 @@ app.post('/api/users', (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to create user' });
   }
+});
+
+// Update user status (Active / Hold) or details
+app.patch('/api/users/:id/status', (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (status !== 'active' && status !== 'hold') {
+    return res.status(400).json({ error: 'Status must be either "active" or "hold"' });
+  }
+
+  const users = readUsers();
+  const index = users.findIndex((u: any) => u.id === id || u.idNo === id);
+
+  if (index === -1) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Prevent holding super admin
+  if ((users[index].idNo === '8695716192' || users[index].idNo === 'admin') && status === 'hold') {
+    return res.status(403).json({ error: 'Primary Admin account cannot be placed on hold' });
+  }
+
+  users[index].status = status;
+  users[index].updatedAt = new Date().toISOString();
+  writeUsers(users);
+
+  res.json({ success: true, user: users[index], message: `User status changed to ${status}` });
 });
 
 // Update user / password
@@ -329,7 +344,7 @@ app.delete('/api/users/:id', (req, res) => {
   res.json({ success: true, message: 'User deleted successfully' });
 });
 
-// Login verification endpoint
+// Login verification endpoint with strict Active/Hold status validation
 app.post('/api/auth/login', (req, res) => {
   try {
     const { loginId, password } = req.body;
@@ -341,36 +356,44 @@ app.post('/api/auth/login', (req, res) => {
     const cleanPass = password.trim();
     const users = readUsers();
 
-    // Check by ID or Phone
+    // Find registered user
     const found = users.find((u: any) => 
       u.idNo.toLowerCase() === cleanId.toLowerCase() ||
-      u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')
+      (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, ''))
     );
 
     if (!found) {
-      // Special fallback for 8695716192 or admin
-      if ((cleanId === '8695716192' || cleanId === 'admin' || cleanId === 'ADM-001') && (cleanPass === '6293' || cleanPass === '1234' || cleanPass === 'admin')) {
+      // Primary Master Admin fallback
+      if (cleanId === '8695716192' && cleanPass === '6293') {
         const session = {
-          id: 'adm_8695716192',
-          idNo: cleanId === '8695716192' ? '8695716192' : cleanId,
-          name: 'ইঞ্জিঃ এন. আলী (এডমিন কন্ট্রোলার)',
-          phone: '8695716192',
-          role: 'admin',
-          designation: 'সহকারী প্রকৌশলী / ডিভিশনাল এডমিন (WBSEDCL)',
-          badgeNo: 'ADM-8695',
+          id: ROOT_ADMIN_ACCOUNT.id,
+          idNo: ROOT_ADMIN_ACCOUNT.idNo,
+          name: ROOT_ADMIN_ACCOUNT.name,
+          phone: ROOT_ADMIN_ACCOUNT.phone,
+          role: ROOT_ADMIN_ACCOUNT.role,
+          status: 'active',
+          designation: ROOT_ADMIN_ACCOUNT.designation,
+          badgeNo: ROOT_ADMIN_ACCOUNT.badgeNo,
           loggedInAt: new Date().toISOString()
         };
         return res.json({ success: true, session });
       }
-      return res.status(401).json({ error: 'ভুল আইডি নম্বর! আইডি পাওয়া যায়নি।' });
+      return res.status(401).json({ error: 'Invalid User ID or Password! Account not found or has been deleted.' });
     }
 
-    // Verify Password (admin default is 6293)
+    // CHECK ACCOUNT HOLD / SUSPEND STATUS
+    if (found.status === 'hold') {
+      return res.status(403).json({ 
+        error: `Account ID "${found.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Please contact Admin (8695716192) or email powerof2026@gmail.com for account activation.` 
+      });
+    }
+
+    // Verify Password
     const isPasswordCorrect = found.password === cleanPass || 
-      (found.role === 'admin' && (cleanPass === '6293' || cleanPass === '1234'));
+      (found.idNo === '8695716192' && cleanPass === '6293');
 
     if (!isPasswordCorrect) {
-      return res.status(401).json({ error: 'ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড দিন।' });
+      return res.status(401).json({ error: 'Incorrect Password! Please enter valid credentials.' });
     }
 
     const session = {
@@ -379,6 +402,7 @@ app.post('/api/auth/login', (req, res) => {
       name: found.name,
       phone: found.phone,
       role: found.role,
+      status: found.status || 'active',
       designation: found.designation,
       badgeNo: found.badgeNo || found.idNo,
       loggedInAt: new Date().toISOString()
@@ -386,7 +410,99 @@ app.post('/api/auth/login', (req, res) => {
 
     res.json({ success: true, session });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Login failed' });
+    res.status(500).json({ error: error.message || 'Login authentication failed' });
+  }
+});
+
+// Verify active session endpoint
+app.get('/api/auth/verify/:idNo', (req, res) => {
+  const { idNo } = req.params;
+  const users = readUsers();
+  const user = users.find((u: any) => u.idNo.toLowerCase() === idNo.toLowerCase() || u.id === idNo);
+  
+  if (!user) {
+    return res.status(404).json({ valid: false, error: 'User account has been deleted' });
+  }
+
+  if (user.status === 'hold') {
+    return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
+  }
+
+  res.json({ valid: true, status: user.status || 'active', role: user.role });
+});
+
+// Live Chat Support Endpoints between Workers & Admin
+app.get('/api/chat', (req, res) => {
+  try {
+    const { workerId, role } = req.query;
+    const messages = readChat();
+
+    if (workerId) {
+      const filtered = messages.filter((m: any) => 
+        m.senderId === workerId || 
+        m.recipientId === workerId || 
+        m.recipientId === 'all' ||
+        m.senderRole === 'admin'
+      );
+      return res.json(filtered);
+    }
+
+    res.json(messages);
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to load chat messages' });
+  }
+});
+
+app.post('/api/chat', (req, res) => {
+  try {
+    const { senderId, senderName, senderRole, recipientId, message } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message cannot be empty' });
+    }
+
+    const messages = readChat();
+    const newMsg = {
+      id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      senderId: senderId || 'anonymous',
+      senderName: senderName || 'User',
+      senderRole: senderRole || 'worker',
+      recipientId: recipientId || 'all',
+      recipientRole: senderRole === 'worker' ? 'admin' : 'worker',
+      message: message.trim(),
+      timestamp: new Date().toISOString(),
+      status: 'sent'
+    };
+
+    messages.push(newMsg);
+    // Keep last 500 messages to maintain speed
+    const trimmed = messages.slice(-500);
+    writeChat(trimmed);
+
+    res.status(201).json({ success: true, message: newMsg });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+app.delete('/api/chat/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    let messages = readChat();
+    messages = messages.filter((m: any) => m.id !== id);
+    writeChat(messages);
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to delete message' });
+  }
+});
+
+app.delete('/api/chat', (req, res) => {
+  try {
+    writeChat([]);
+    res.json({ success: true, message: 'Chat history cleared' });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to clear chat' });
   }
 });
 
@@ -409,27 +525,20 @@ app.post('/api/auth/change-password', (req, res) => {
 
     const index = users.findIndex((u: any) => u.idNo.toLowerCase() === cleanId.toLowerCase() || u.id === cleanId);
     if (index === -1) {
-      // If 8695716192 not yet in index, create it with new password
-      if (cleanId === '8695716192' || cleanId === 'admin') {
-        const newAdmin = { ...DEFAULT_ACCOUNTS[0], password: cleanNew, updatedAt: new Date().toISOString() };
-        users.unshift(newAdmin);
-        writeUsers(users);
-        return res.json({ success: true, message: 'এডমিন পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে!' });
-      }
-      return res.status(404).json({ error: 'User account not found' });
+      return res.status(404).json({ error: 'User account not found or has been removed' });
     }
 
     // Verify current password if provided
     const user = users[index];
-    if (cleanCurrent && user.password !== cleanCurrent && cleanCurrent !== '6293' && cleanCurrent !== '1234') {
-      return res.status(400).json({ error: 'বর্তমান পাসওয়ার্ডটি সঠিক নয়!' });
+    if (cleanCurrent && user.password !== cleanCurrent && cleanCurrent !== '6293') {
+      return res.status(400).json({ error: 'Current password is incorrect!' });
     }
 
     users[index].password = cleanNew;
     users[index].updatedAt = new Date().toISOString();
     writeUsers(users);
 
-    res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে!', user: users[index] });
+    res.json({ success: true, message: 'Password updated successfully!', user: users[index] });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to change password' });
   }
@@ -453,24 +562,18 @@ app.post('/api/auth/reset-password', (req, res) => {
 
     const index = users.findIndex((u: any) => 
       u.idNo.toLowerCase() === cleanId.toLowerCase() || 
-      u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')
+      (phone && u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, ''))
     );
 
     if (index === -1) {
-      if (cleanId === '8695716192' || cleanId === 'admin') {
-        const newAdmin = { ...DEFAULT_ACCOUNTS[0], password: cleanNew, updatedAt: new Date().toISOString() };
-        users.unshift(newAdmin);
-        writeUsers(users);
-        return res.json({ success: true, message: 'এডমিন পাসওয়ার্ড রিসেট সফল হয়েছে!' });
-      }
-      return res.status(404).json({ error: 'আইডি নম্বর পাওয়া যায়নি!' });
+      return res.status(404).json({ error: 'User ID not found or account was deactivated by Admin!' });
     }
 
     users[index].password = cleanNew;
     users[index].updatedAt = new Date().toISOString();
     writeUsers(users);
 
-    res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে রিসেট করা হয়েছে!' });
+    res.json({ success: true, message: 'Password reset successfully!' });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to reset password' });
   }

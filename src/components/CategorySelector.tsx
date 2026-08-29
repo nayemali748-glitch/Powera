@@ -92,14 +92,17 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
 
   return (
     <div className="w-full">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Layers className="w-4 h-4 text-slate-700" />
-          <h2 className="text-xs sm:text-sm font-bold text-slate-900 tracking-wide uppercase">
+      {/* WORK CATEGORY SELECTION Header (Color-coded Blue) */}
+      <div className="flex items-center justify-between mb-3 bg-blue-50/70 border border-blue-200/80 px-4 py-2.5 rounded-xl">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
+            <Layers className="w-4 h-4" />
+          </div>
+          <h2 className="text-xs sm:text-sm font-black text-blue-700 tracking-wide uppercase">
             {t.workCategorySelection}
           </h2>
         </div>
-        <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full font-medium hidden sm:inline">
+        <span className="text-xs text-blue-800 bg-white border border-blue-300 px-3 py-1 rounded-full font-bold shadow-2xs hidden sm:inline">
           {t.clickToOpenForm}
         </span>
       </div>

@@ -25,18 +25,26 @@ export interface PowerEntry {
   updatedAt?: string;
 
   // NSC specific
+  workOrderNo?: string;
+  workOrderDate?: string;
   consumerId?: string;
   consumerName?: string;
   fatherName?: string;
+  applicationNo?: string;
+  agencyName?: string;
+  cccName?: string;
   mobile?: string;
   address?: string;
   poleNo?: string;
   appliedLoad?: string;
   phase?: 'Single Phase' | '3-Phase' | string;
+  tariffCategory?: string;
   meterNo?: string;
   initialReading?: string;
   sealNo?: string;
   serviceCableLength?: string;
+  meterInstallDate?: string;
+  inspectionAgencyName?: string;
 
   // DISCONNECTION specific
   arrearAmount?: string;
@@ -52,6 +60,8 @@ export interface PowerEntry {
   materialUsed?: string;
   poleType?: 'PSC Pole' | 'Spun Pre-stressed' | 'Steel Tubular' | 'Wood' | string;
   lineVoltage?: 'LT (230V/400V)' | '11 kV' | '33 kV' | string;
+  conductorType?: string;
+  ptwShutdownRef?: string;
 
   // METER REPLESMENT specific
   oldMeterNo?: string;
@@ -71,6 +81,9 @@ export interface PowerEntry {
   oilLevelChecked?: boolean;
   earthResistance?: string;
   dtrMakeBrand?: string;
+  hgFuseRating?: string;
+  ltMccbAmpere?: string;
+  lightningArrester?: boolean;
 }
 
 export interface StatsResponse {
@@ -113,7 +126,21 @@ export interface UserAccount {
   role: 'admin' | 'worker' | 'supervisor';
   designation: string;
   badgeNo?: string;
+  status?: 'active' | 'hold';
   securityQuestion?: string;
   securityAnswer?: string;
   createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'admin' | 'worker' | 'supervisor';
+  recipientId?: string;
+  recipientRole?: 'admin' | 'worker' | 'all';
+  message: string;
+  timestamp: string;
+  status?: 'sent' | 'delivered' | 'read';
 }
