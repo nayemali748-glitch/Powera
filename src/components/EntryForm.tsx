@@ -21,15 +21,13 @@ import {
   ArrowLeft,
   ShieldCheck,
   Building,
-  CheckCircle2,
-  AlertTriangle
+  CheckCircle2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types';
 import { createEntry } from '../services/api';
 import { Language, translations } from '../utils/translations';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
-import { validateAllFields, validateSingleField } from '../utils/formValidation';
 
 interface EntryFormProps {
   category: CategoryType;
@@ -51,15 +49,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const t = translations[lang] || translations.bn;
 
   const [loading, setLoading] = useState(false);
-  const [submitSuccessAnimation, setSubmitSuccessAnimation] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submissionModalEntry, setSubmissionModalEntry] = useState<PowerEntry | null>(null);
   const [fetchingGps, setFetchingGps] = useState(false);
-
-  // Form validation states
-  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
-  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
 
   // Common Form Fields
   const [worker, setWorker] = useState(workerName || 'WBSEDCL Lineman-01');
@@ -145,71 +137,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   // Keep worker name synced
   useEffect(() => {
-    if (workerName) {
-      setWorker(workerName);
-      setNscWorkerName(workerName);
-    }
+    if (workerName) setWorker(workerName);
   }, [workerName]);
 
-  // Reset errors and touched state on category change
   useEffect(() => {
     setSuccessMessage(null);
-    setValidationErrors({});
-    setTouchedFields({});
-    setAttemptedSubmit(false);
   }, [category]);
-
-  // Validation handlers
-  const handleFieldBlur = (field: string, value: any) => {
-    setTouchedFields((prev) => ({ ...prev, [field]: true }));
-    const error = validateSingleField(field, value, category, lang);
-    setValidationErrors((prev) => {
-      const next = { ...prev };
-      if (error) {
-        next[field] = error;
-      } else {
-        delete next[field];
-      }
-      return next;
-    });
-  };
-
-  const handleFieldChange = (field: string, setter: (val: any) => void, value: any) => {
-    setter(value);
-    if (touchedFields[field] || attemptedSubmit) {
-      const error = validateSingleField(field, value, category, lang);
-      setValidationErrors((prev) => {
-        const next = { ...prev };
-        if (error) {
-          next[field] = error;
-        } else {
-          delete next[field];
-        }
-        return next;
-      });
-    }
-  };
-
-  const getInputClass = (field: string, baseClasses: string) => {
-    const isTouched = touchedFields[field] || attemptedSubmit;
-    const hasError = isTouched && !!validationErrors[field];
-    if (hasError) {
-      return `${baseClasses} !border-rose-500 !bg-rose-50/50 !text-rose-950 !ring-2 !ring-rose-300`;
-    }
-    return baseClasses;
-  };
-
-  const renderFieldError = (field: string) => {
-    const isTouched = touchedFields[field] || attemptedSubmit;
-    const error = validationErrors[field];
-    if (!isTouched || !error) return null;
-    return (
-      <div id={`err-${field}`} className="flex items-start gap-1 text-[11px] text-rose-600 font-bold mt-1 animate-in fade-in leading-tight">
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-500 mt-0.5" />
-        <span>{error}</span>
-      </div>
-    );
-  };
 
   const handleGetLocation = () => {
     if (!navigator.geolocation) {
@@ -278,76 +211,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSuccessMessage(null);
-
-    // Current form values map
-    const currentFormData = {
-      worker,
-      nscWorkerName: nscWorkerName || worker,
-      workerPhone,
-      feederName,
-      substation,
-      workOrderNo,
-      workOrderDate,
-      consumerName,
-      fatherName,
-      applicationNo,
-      consumerId,
-      meterNo,
-      sealNo,
-      initialReading,
-      mobile,
-      appliedLoad,
-      phase,
-      tariffCategory,
-      serviceCableLength,
-      address,
-      meterInstallDate,
-      inspectionAgencyName,
-      arrearAmount,
-      finalReading,
-      noticeNo,
-      cutoutSealNo,
-      poleNo,
-      actionTaken,
-      oldMeterNo,
-      oldMeterReading,
-      newMeterNo,
-      newMeterInitialReading,
-      newMeterSealNo,
-      dtrName,
-      newDtrSerial,
-    };
-
-    // Run strict format and mandatory field validation
-    const validationResult = validateAllFields(currentFormData, category, lang);
-
-    if (!validationResult.isValid) {
-      setAttemptedSubmit(true);
-      setValidationErrors(validationResult.errors);
-
-      // Mark all errored fields as touched
-      const touchedMap: Record<string, boolean> = {};
-      Object.keys(validationResult.errors).forEach((k) => {
-        touchedMap[k] = true;
-      });
-      setTouchedFields((prev) => ({ ...prev, ...touchedMap }));
-
-      // Scroll to the first errored field smoothly
-      const firstErrorField = Object.keys(validationResult.errors)[0];
-      const errorElement =
-        document.getElementById(`field-${firstErrorField}`) ||
-        document.getElementById(`err-${firstErrorField}`);
-      if (errorElement) {
-        errorElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        if ('focus' in errorElement) {
-          (errorElement as HTMLElement).focus();
-        }
-      }
-      return;
-    }
-
     setLoading(true);
+    setSuccessMessage(null);
 
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
@@ -355,7 +220,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const entryPayload: Partial<PowerEntry> = {
       id: generatedId,
       category,
-      workerName: (category === 'NSC' ? nscWorkerName : worker) || worker || 'WBSEDCL Staff',
+      workerName: worker || 'WBSEDCL Staff',
       workerPhone,
       date: nowIso,
       status: 'Completed',
@@ -366,44 +231,45 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
     // Category specifics
     if (category === 'NSC') {
-      entryPayload.workOrderNo = workOrderNo;
+      entryPayload.workOrderNo = workOrderNo || `WO-${Date.now().toString().slice(-6)}`;
       entryPayload.workOrderDate = workOrderDate;
+      // Attach Official Work Order & Khata Photo uploaded by Admin
       if (selectedWorkOrderNotice) {
         entryPayload.workOrderPhoto = selectedWorkOrderNotice.photoUrl;
         entryPayload.workOrderNoticeId = selectedWorkOrderNotice.id;
         entryPayload.workOrderNoticeTitle = selectedWorkOrderNotice.title;
         entryPayload.workOrderNoticeDate = `${selectedWorkOrderNotice.uploadDate} ${selectedWorkOrderNotice.uploadTime}`;
       }
-      entryPayload.consumerName = consumerName;
+      entryPayload.consumerName = consumerName || 'WBSEDCL Consumer';
       entryPayload.fatherName = fatherName;
       entryPayload.applicationNo = applicationNo;
       entryPayload.workerName = nscWorkerName || worker || 'Lineman';
       entryPayload.agencyName = agencyName;
       entryPayload.cccName = cccName;
-      entryPayload.consumerId = consumerId;
-      entryPayload.meterNo = meterNo;
-      entryPayload.sealNo = sealNo;
+      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
+      entryPayload.meterNo = meterNo || `WB-${Math.floor(100000 + Math.random() * 900000)}`;
+      entryPayload.sealNo = sealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
       entryPayload.initialReading = initialReading || '000000';
       entryPayload.mobile = mobile;
       entryPayload.appliedLoad = appliedLoad;
       entryPayload.phase = phase;
       entryPayload.tariffCategory = tariffCategory;
       entryPayload.serviceCableLength = serviceCableLength;
-      entryPayload.address = address;
+      entryPayload.address = address || 'West Bengal, India';
       entryPayload.meterInstallDate = meterInstallDate;
       entryPayload.inspectionAgencyName = inspectionAgencyName;
     } else if (category === 'DISCONNECTION') {
       entryPayload.feederName = feederName;
       entryPayload.substation = substation;
-      entryPayload.consumerId = consumerId;
-      entryPayload.consumerName = consumerName;
+      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
+      entryPayload.consumerName = consumerName || 'Consumer (Defaulter)';
       entryPayload.mobile = mobile;
-      entryPayload.address = address;
+      entryPayload.address = address || 'Field Site';
       entryPayload.poleNo = poleNo;
       entryPayload.meterNo = meterNo;
-      entryPayload.arrearAmount = arrearAmount;
+      entryPayload.arrearAmount = arrearAmount || '4,500';
       entryPayload.reason = disconnectionReason;
-      entryPayload.finalReading = finalReading;
+      entryPayload.finalReading = finalReading || '12450';
       entryPayload.disconnectionType = disconnectionType;
       entryPayload.cutoutSealed = cutoutSealed;
       entryPayload.sealNo = cutoutSealNo || `SL-CUT-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -411,40 +277,40 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     } else if (category === 'POLE CASE') {
       entryPayload.feederName = feederName;
       entryPayload.substation = substation;
-      entryPayload.poleNo = poleNo;
-      entryPayload.address = address;
+      entryPayload.poleNo = poleNo || `P-${Math.floor(10 + Math.random() * 90)}`;
+      entryPayload.address = address || 'Overhead Line Route';
       entryPayload.issueType = issueType;
       entryPayload.priority = priority;
       entryPayload.poleType = poleType;
       entryPayload.lineVoltage = lineVoltage;
       entryPayload.conductorType = conductorType;
-      entryPayload.actionTaken = actionTaken;
+      entryPayload.actionTaken = actionTaken || 'পোল মেরামত ও ওভারহেড লাইন নিরাপদ করা হয়েছে';
       entryPayload.materialUsed = materialUsed || 'PSC Pole 9M, V-Cross Arm, Stay Set';
       entryPayload.ptwShutdownRef = ptwShutdownRef;
     } else if (category === 'METER REPLESMENT') {
       entryPayload.feederName = feederName;
       entryPayload.substation = substation;
-      entryPayload.consumerId = consumerId;
-      entryPayload.consumerName = consumerName;
+      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
+      entryPayload.consumerName = consumerName || 'Consumer';
       entryPayload.address = address;
       entryPayload.poleNo = poleNo;
-      entryPayload.oldMeterNo = oldMeterNo;
-      entryPayload.finalReading = oldMeterReading;
+      entryPayload.oldMeterNo = oldMeterNo || `OLD-MTR-${Math.floor(10000 + Math.random() * 90000)}`;
+      entryPayload.finalReading = oldMeterReading || '09840';
       entryPayload.replacementReason = replacementReason;
-      entryPayload.newMeterNo = newMeterNo;
+      entryPayload.newMeterNo = newMeterNo || `WB-GEN-${Math.floor(100000 + Math.random() * 900000)}`;
       entryPayload.initialReading = newMeterInitialReading || '000000';
-      entryPayload.sealNo = newMeterSealNo;
+      entryPayload.sealNo = newMeterSealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
       entryPayload.meterType = meterType;
       entryPayload.phase = phase;
     } else if (category === 'DTR REPLESMENT') {
       entryPayload.feederName = feederName;
       entryPayload.substation = substation;
-      entryPayload.dtrName = dtrName;
-      entryPayload.address = address;
+      entryPayload.dtrName = dtrName || `DTR-${Math.floor(10 + Math.random() * 90)}`;
+      entryPayload.address = address || 'DTR Sub-station Yard';
       entryPayload.existingCapacity = existingCapacity;
       entryPayload.newCapacity = newCapacity;
-      entryPayload.oldDtrSerial = oldDtrSerial;
-      entryPayload.newDtrSerial = newDtrSerial;
+      entryPayload.oldDtrSerial = oldDtrSerial || `DTR-OLD-${Math.floor(1000 + Math.random() * 9000)}`;
+      entryPayload.newDtrSerial = newDtrSerial || `DTR-NEW-${Math.floor(1000 + Math.random() * 9000)}`;
       entryPayload.failureReason = dtrFailureReason;
       entryPayload.oilLevelChecked = oilLevelChecked;
       entryPayload.earthResistance = earthPitResistance;
@@ -455,27 +321,20 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
     try {
       const created = await createEntry(entryPayload);
-      setSubmitSuccessAnimation(true);
       try {
-        confetti({ particleCount: 75, spread: 70, origin: { y: 0.6 } });
+        confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
       } catch (e) {
         // ignore
       }
       setSuccessMessage(t.entryCreatedSuccess);
-      setTimeout(() => {
-        setLoading(false);
-        setSubmissionModalEntry(created);
-        setSubmitSuccessAnimation(false);
-      }, 750);
+      setSubmissionModalEntry(created);
     } catch (err: any) {
       console.error('Error creating entry:', err);
       alert('Error saving data: ' + (err.message || 'Check connection'));
+    } finally {
       setLoading(false);
-      setSubmitSuccessAnimation(false);
     }
   };
-
-  const hasValidationErrors = Object.keys(validationErrors).length > 0;
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden animate-in fade-in duration-200">
@@ -532,36 +391,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         </div>
       )}
 
-      {/* Validation Error Banner upon submit attempt */}
-      {attemptedSubmit && hasValidationErrors && (
-        <div className="m-5 sm:m-7 mb-0 p-4 bg-rose-50 border-2 border-rose-300 rounded-xl text-rose-900 flex items-start gap-3 shadow-xs animate-in fade-in">
-          <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <h4 className="text-xs font-black uppercase tracking-wider text-rose-800 flex items-center gap-2">
-              <span>{lang === 'bn' ? 'ফর্ম যাচাইকরণ ত্রুটি (Validation Error)' : 'Form Validation Required'}</span>
-              <span className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded-full font-mono">
-                {Object.keys(validationErrors).length} {lang === 'bn' ? 'টি ফিল্ড অসম্পূর্ণ' : 'pending'}
-              </span>
-            </h4>
-            <p className="text-xs text-rose-700 font-medium">
-              {lang === 'bn' 
-                ? 'অনুগ্রহ করে লাল চিহ্নিত আবশ্যক ফিল্ডগুলি (যেমন: ৯ ডিজিটের কনজিউমার আইডি বা সঠিক মিটার নম্বর) পূরণ করুন।' 
-                : 'Please complete all mandatory fields according to the specified format requirements before submitting.'}
-            </p>
-            <ul className="list-disc list-inside text-[11px] text-rose-800 font-semibold mt-1.5 space-y-0.5">
-              {Object.entries(validationErrors).slice(0, 5).map(([fKey, errTxt]) => (
-                <li key={fKey}>{errTxt}</li>
-              ))}
-              {Object.keys(validationErrors).length > 5 && (
-                <li className="text-rose-600 italic">
-                  + {Object.keys(validationErrors).length - 5} {lang === 'bn' ? 'আরও ত্রুটি রয়েছে...' : 'more errors...'}
-                </li>
-              )}
-            </ul>
-          </div>
-        </div>
-      )}
-
       {/* WORK ORDER / KHATA PHOTO BOARD (Independent Work Order Board for NSC) */}
       {category === 'NSC' && (
         <div className="p-5 sm:p-7 pb-0">
@@ -576,7 +405,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       )}
 
       {/* Main Form Fields */}
-      <form onSubmit={handleSubmit} noValidate className="p-5 sm:p-7 space-y-6">
+      <form onSubmit={handleSubmit} className="p-5 sm:p-7 space-y-6">
         {/* Section 1: Common Station & Grid Infrastructure Details (Hidden for NSC as requested) */}
         {category !== 'NSC' && (
           <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 space-y-4">
@@ -593,18 +422,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.substation} *
                 </label>
                 <input
-                  id="field-substation"
                   type="text"
+                  required
                   value={substation}
-                  onChange={(e) => handleFieldChange('substation', setSubstation, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('substation', e.target.value)}
-                  className={getInputClass(
-                    'substation',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setSubstation(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="e.g. 33/11kV Main Substation"
                 />
-                {renderFieldError('substation')}
               </div>
 
               <div>
@@ -612,18 +436,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.feeder} *
                 </label>
                 <input
-                  id="field-feederName"
                   type="text"
+                  required
                   value={feederName}
-                  onChange={(e) => handleFieldChange('feederName', setFeederName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('feederName', e.target.value)}
-                  className={getInputClass(
-                    'feederName',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setFeederName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="e.g. 11kV Town Feeder-01"
                 />
-                {renderFieldError('feederName')}
               </div>
 
               <div>
@@ -631,12 +450,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.cccOffice}
                 </label>
                 <input
-                  id="field-cccOffice"
                   type="text"
                   value={cccOffice}
                   onChange={(e) => setCccOffice(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="e.g. Burdwan CCC"
+                  placeholder="e.g. Customer Care Center (CCC)"
                 />
               </div>
             </div>
@@ -657,7 +475,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                     1. NSC FORM PARAMETERS (WBSEDCL)
                   </h3>
                   <p className="text-[11px] text-emerald-700 font-semibold">
-                    {lang === 'bn' ? 'নতুন সার্ভিস কানেকশন অফিশিয়াল ফর্ম ফিল্ড (সকল আবশ্যক ফিল্ড যথাযথ পূরণ করুন)' : 'New Service Connection Official Parameters (Fill required fields)'}
+                    {lang === 'bn' ? 'নতুন সার্ভিস কানেকশন অফিশিয়াল ফর্ম ফিল্ড' : 'New Service Connection Official Parameters'}
                   </p>
                 </div>
               </div>
@@ -674,7 +492,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </div>
           )}
 
-          {/* 1. NSC SPECIFIC FORM WITH DISTINCT COLOR CODED FIELDS & STRICT VALIDATION */}
+          {/* 1. NSC SPECIFIC FORM WITH DISTINCT COLOR CODED FIELDS */}
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
               {/* 1. Lineman / Staff Name (Worker Name - Above Work Order No) -> VIBRANT BLUE CARD */}
@@ -684,18 +502,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-bold">Staff</span>
                 </label>
                 <input
-                  id="field-nscWorkerName"
                   type="text"
+                  required
                   value={nscWorkerName}
-                  onChange={(e) => handleFieldChange('nscWorkerName', setNscWorkerName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('nscWorkerName', e.target.value)}
-                  className={getInputClass(
-                    'nscWorkerName',
-                    'w-full px-3 py-2 bg-white border-2 border-blue-300 rounded-lg text-blue-900 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setNscWorkerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-blue-300 rounded-lg text-blue-900 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Lineman / Worker Name"
                 />
-                {renderFieldError('nscWorkerName')}
               </div>
 
               {/* 2. Agency Name (Above Work Order No) -> VIBRANT AMBER / ORANGE CARD */}
@@ -705,7 +518,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold">Agency</span>
                 </label>
                 <input
-                  id="field-agencyName"
                   type="text"
                   value={agencyName}
                   onChange={(e) => setAgencyName(e.target.value)}
@@ -721,7 +533,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold">CCC Unit</span>
                 </label>
                 <input
-                  id="field-cccName"
                   type="text"
                   value={cccName}
                   onChange={(e) => setCccName(e.target.value)}
@@ -737,18 +548,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO</span>
                 </label>
                 <input
-                  id="field-workOrderNo"
                   type="text"
+                  required
                   value={workOrderNo}
-                  onChange={(e) => handleFieldChange('workOrderNo', setWorkOrderNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('workOrderNo', e.target.value)}
-                  className={getInputClass(
-                    'workOrderNo',
-                    'w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 focus:ring-2 focus:ring-teal-500 focus:outline-none font-mono font-black'
-                  )}
+                  onChange={(e) => setWorkOrderNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 focus:ring-2 focus:ring-teal-500 focus:outline-none font-mono font-black"
                   placeholder="e.g. WO-2026-98102"
                 />
-                {renderFieldError('workOrderNo')}
               </div>
 
               {/* 5. Work Order Date -> TEAL CARD */}
@@ -757,17 +563,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.workOrderDate} *
                 </label>
                 <input
-                  id="field-workOrderDate"
                   type="date"
+                  required
                   value={workOrderDate}
-                  onChange={(e) => handleFieldChange('workOrderDate', setWorkOrderDate, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('workOrderDate', e.target.value)}
-                  className={getInputClass(
-                    'workOrderDate',
-                    'w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 font-bold focus:ring-2 focus:ring-teal-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setWorkOrderDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 font-bold focus:ring-2 focus:ring-teal-500 focus:outline-none"
                 />
-                {renderFieldError('workOrderDate')}
               </div>
 
               {/* 6. Application No (Above Consumer Name) -> ROSE / PINK CARD */}
@@ -777,61 +578,45 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-rose-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">App No</span>
                 </label>
                 <input
-                  id="field-applicationNo"
                   type="text"
+                  required
                   value={applicationNo}
-                  onChange={(e) => handleFieldChange('applicationNo', setApplicationNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('applicationNo', e.target.value)}
-                  className={getInputClass(
-                    'applicationNo',
-                    'w-full px-3 py-2 bg-white border-2 border-rose-300 rounded-lg text-rose-900 focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono font-black text-xs'
-                  )}
+                  onChange={(e) => setApplicationNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-rose-300 rounded-lg text-rose-900 focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono font-black text-xs"
                   placeholder="e.g. CA / Quota / Application No"
                 />
-                {renderFieldError('applicationNo')}
               </div>
 
-              {/* 7. Consumer ID (Above Consumer Name) -> SKY BLUE CARD (Mandatory 9 Digits Format) */}
+              {/* 7. Consumer ID (Above Consumer Name) -> SKY BLUE CARD */}
               <div className="bg-sky-50/80 border-2 border-sky-300 rounded-xl p-3.5 shadow-xs hover:border-sky-400 transition-colors">
                 <label className="block font-black text-sky-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.consumerId} *</span>
-                  <span className="text-[9px] bg-sky-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">9 Digits</span>
+                  <span className="text-[9px] bg-sky-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">ID</span>
                 </label>
                 <input
-                  id="field-consumerId"
                   type="text"
-                  maxLength={15}
+                  required
                   value={consumerId}
-                  onChange={(e) => handleFieldChange('consumerId', setConsumerId, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerId', e.target.value)}
-                  className={getInputClass(
-                    'consumerId',
-                    'w-full px-3 py-2 bg-white border-2 border-sky-300 rounded-lg text-sky-900 focus:ring-2 focus:ring-sky-500 focus:outline-none font-mono font-black'
-                  )}
+                  onChange={(e) => setConsumerId(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-sky-300 rounded-lg text-sky-900 focus:ring-2 focus:ring-sky-500 focus:outline-none font-mono font-black"
                   placeholder="e.g. 100293847 (9 Digits)"
                 />
-                {renderFieldError('consumerId')}
               </div>
 
-              {/* 8. Meter No (Above Consumer Name) -> EMERALD GREEN CARD (Alphanumeric format) */}
+              {/* 8. Meter No (Above Consumer Name) -> EMERALD GREEN CARD */}
               <div className="bg-emerald-50/80 border-2 border-emerald-300 rounded-xl p-3.5 shadow-xs hover:border-emerald-400 transition-colors">
                 <label className="block font-black text-emerald-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.meterNo} *</span>
-                  <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Meter No</span>
+                  <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Meter</span>
                 </label>
                 <input
-                  id="field-meterNo"
                   type="text"
+                  required
                   value={meterNo}
-                  onChange={(e) => handleFieldChange('meterNo', setMeterNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('meterNo', e.target.value)}
-                  className={getInputClass(
-                    'meterNo',
-                    'w-full px-3 py-2 bg-white border-2 border-emerald-300 rounded-lg text-emerald-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono font-black'
-                  )}
+                  onChange={(e) => setMeterNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-emerald-300 rounded-lg text-emerald-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono font-black"
                   placeholder="e.g. WB26-987654"
                 />
-                {renderFieldError('meterNo')}
               </div>
 
               {/* 9. Meter Seal No (Above Consumer Name) -> VIOLET CARD */}
@@ -841,18 +626,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="text-[9px] bg-violet-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Seal</span>
                 </label>
                 <input
-                  id="field-sealNo"
                   type="text"
+                  required
                   value={sealNo}
-                  onChange={(e) => handleFieldChange('sealNo', setSealNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('sealNo', e.target.value)}
-                  className={getInputClass(
-                    'sealNo',
-                    'w-full px-3 py-2 bg-white border-2 border-violet-300 rounded-lg text-violet-900 focus:ring-2 focus:ring-violet-500 focus:outline-none font-mono font-black'
-                  )}
+                  onChange={(e) => setSealNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-violet-300 rounded-lg text-violet-900 focus:ring-2 focus:ring-violet-500 focus:outline-none font-mono font-black"
                   placeholder="e.g. WB-SL-98214"
                 />
-                {renderFieldError('sealNo')}
               </div>
 
               {/* 10. Consumer Name -> INDIGO CARD */}
@@ -861,18 +641,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.consumerName} *
                 </label>
                 <input
-                  id="field-consumerName"
                   type="text"
+                  required
                   value={consumerName}
-                  onChange={(e) => handleFieldChange('consumerName', setConsumerName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerName', e.target.value)}
-                  className={getInputClass(
-                    'consumerName',
-                    'w-full px-3 py-2 bg-white border-2 border-indigo-300 rounded-lg text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold'
-                  )}
+                  onChange={(e) => setConsumerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-indigo-300 rounded-lg text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold"
                   placeholder="Enter Full Consumer Name"
                 />
-                {renderFieldError('consumerName')}
               </div>
 
               {/* 11. Father's / Husband's Name -> INDIGO CARD */}
@@ -881,7 +656,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.fatherHusbandName}
                 </label>
                 <input
-                  id="field-fatherName"
                   type="text"
                   value={fatherName}
                   onChange={(e) => setFatherName(e.target.value)}
@@ -890,26 +664,18 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 12. Mobile No -> ORANGE CARD (10 Digits Validation) */}
+              {/* 12. Mobile No -> ORANGE CARD */}
               <div className="bg-orange-50/80 border-2 border-orange-300 rounded-xl p-3.5 shadow-xs hover:border-orange-400 transition-colors">
-                <label className="block font-black text-orange-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.mobileNo}</span>
-                  <span className="text-[9px] bg-orange-600 text-white px-1.5 py-0.5 rounded font-mono font-bold">10 Digits</span>
+                <label className="block font-black text-orange-950 mb-1.5 text-xs">
+                  {t.mobileNo}
                 </label>
                 <input
-                  id="field-mobile"
                   type="tel"
-                  maxLength={10}
                   value={mobile}
-                  onChange={(e) => handleFieldChange('mobile', setMobile, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('mobile', e.target.value)}
-                  className={getInputClass(
-                    'mobile',
-                    'w-full px-3 py-2 bg-white border-2 border-orange-300 rounded-lg text-orange-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setMobile(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-orange-300 rounded-lg text-orange-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono font-bold"
                   placeholder="e.g. 98300XXXXX"
                 />
-                {renderFieldError('mobile')}
               </div>
 
               {/* 13. Initial Meter Reading -> ORANGE CARD */}
@@ -918,7 +684,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.initialReading}
                 </label>
                 <input
-                  id="field-initialReading"
                   type="text"
                   value={initialReading}
                   onChange={(e) => setInitialReading(e.target.value)}
@@ -933,7 +698,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.appliedLoad}
                 </label>
                 <input
-                  id="field-appliedLoad"
                   type="text"
                   value={appliedLoad}
                   onChange={(e) => setAppliedLoad(e.target.value)}
@@ -948,7 +712,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.phaseSupply}
                 </label>
                 <input
-                  id="field-phase"
                   type="text"
                   value={phase}
                   onChange={(e) => setPhase(e.target.value)}
@@ -963,7 +726,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.tariffCategory}
                 </label>
                 <input
-                  id="field-tariffCategory"
                   type="text"
                   value={tariffCategory}
                   onChange={(e) => setTariffCategory(e.target.value)}
@@ -978,7 +740,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.serviceCableLength}
                 </label>
                 <input
-                  id="field-serviceCableLength"
                   type="text"
                   value={serviceCableLength}
                   onChange={(e) => setServiceCableLength(e.target.value)}
@@ -993,18 +754,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.addressLocation} *
                 </label>
                 <input
-                  id="field-address"
                   type="text"
+                  required
                   value={address}
-                  onChange={(e) => handleFieldChange('address', setAddress, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('address', e.target.value)}
-                  className={getInputClass(
-                    'address',
-                    'w-full px-3 py-2 bg-white border-2 border-slate-300 rounded-lg text-slate-900 font-bold focus:ring-2 focus:ring-slate-700 focus:outline-none'
-                  )}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-slate-300 rounded-lg text-slate-900 font-bold focus:ring-2 focus:ring-slate-700 focus:outline-none"
                   placeholder="Village / GP / Municipality / Post Office / Pin Code"
                 />
-                {renderFieldError('address')}
               </div>
 
               {/* 19. Meter Install Date -> FUCHSIA CARD */}
@@ -1013,17 +769,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.meterInstallDate} *
                 </label>
                 <input
-                  id="field-meterInstallDate"
                   type="date"
+                  required
                   value={meterInstallDate}
-                  onChange={(e) => handleFieldChange('meterInstallDate', setMeterInstallDate, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('meterInstallDate', e.target.value)}
-                  className={getInputClass(
-                    'meterInstallDate',
-                    'w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setMeterInstallDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none"
                 />
-                {renderFieldError('meterInstallDate')}
               </div>
 
               {/* 20. Inspection Agency Name -> FUCHSIA CARD */}
@@ -1032,7 +783,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.inspectionAgencyName}
                 </label>
                 <input
-                  id="field-inspectionAgencyName"
                   type="text"
                   value={inspectionAgencyName}
                   onChange={(e) => setInspectionAgencyName(e.target.value)}
@@ -1043,28 +793,21 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </div>
           )}
 
-          {/* 2. DISCONNECTION SPECIFIC FORM WITH VALIDATION */}
+          {/* 2. DISCONNECTION SPECIFIC FORM */}
           {category === 'DISCONNECTION' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.consumerId} *</span>
-                  <span className="text-[9px] bg-blue-100 text-blue-800 font-mono font-bold px-1.5 py-0.5 rounded">9 Digits</span>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.consumerId} *
                 </label>
                 <input
-                  id="field-consumerId"
                   type="text"
-                  maxLength={15}
+                  required
                   value={consumerId}
-                  onChange={(e) => handleFieldChange('consumerId', setConsumerId, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerId', e.target.value)}
-                  className={getInputClass(
-                    'consumerId',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setConsumerId(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                   placeholder="e.g. 100234567"
                 />
-                {renderFieldError('consumerId')}
               </div>
 
               <div>
@@ -1072,37 +815,27 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.consumerName} *
                 </label>
                 <input
-                  id="field-consumerName"
                   type="text"
+                  required
                   value={consumerName}
-                  onChange={(e) => handleFieldChange('consumerName', setConsumerName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerName', e.target.value)}
-                  className={getInputClass(
-                    'consumerName',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-bold'
-                  )}
+                  onChange={(e) => setConsumerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Consumer Full Name"
                 />
-                {renderFieldError('consumerName')}
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.arrearAmount} (₹) *
+                  {t.arrearAmount} *
                 </label>
                 <input
-                  id="field-arrearAmount"
                   type="text"
+                  required
                   value={arrearAmount}
-                  onChange={(e) => handleFieldChange('arrearAmount', setArrearAmount, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('arrearAmount', e.target.value)}
-                  className={getInputClass(
-                    'arrearAmount',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-red-600'
-                  )}
-                  placeholder="e.g. 7850"
+                  onChange={(e) => setArrearAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-red-600"
+                  placeholder="e.g. ₹ 7,850"
                 />
-                {renderFieldError('arrearAmount')}
               </div>
 
               <div>
@@ -1110,38 +843,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.finalReading} (kWh) *
                 </label>
                 <input
-                  id="field-finalReading"
                   type="text"
+                  required
                   value={finalReading}
-                  onChange={(e) => handleFieldChange('finalReading', setFinalReading, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('finalReading', e.target.value)}
-                  className={getInputClass(
-                    'finalReading',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setFinalReading(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                   placeholder="e.g. 14230"
                 />
-                {renderFieldError('finalReading')}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.mobileNo}
-                </label>
-                <input
-                  id="field-mobile"
-                  type="tel"
-                  maxLength={10}
-                  value={mobile}
-                  onChange={(e) => handleFieldChange('mobile', setMobile, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('mobile', e.target.value)}
-                  className={getInputClass(
-                    'mobile',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono'
-                  )}
-                  placeholder="e.g. 9830012345"
-                />
-                {renderFieldError('mobile')}
               </div>
 
               <div>
@@ -1149,7 +857,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.noticeNo}
                 </label>
                 <input
-                  id="field-noticeNo"
                   type="text"
                   value={noticeNo}
                   onChange={(e) => setNoticeNo(e.target.value)}
@@ -1163,7 +870,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.disconnectionType}
                 </label>
                 <select
-                  id="field-disconnectionType"
                   value={disconnectionType}
                   onChange={(e) => setDisconnectionType(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
@@ -1198,7 +904,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.cutoutSealNo}
                 </label>
                 <input
-                  id="field-cutoutSealNo"
                   type="text"
                   value={cutoutSealNo}
                   onChange={(e) => setCutoutSealNo(e.target.value)}
@@ -1212,7 +917,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.poleNo} / Meter No
                 </label>
                 <input
-                  id="field-poleNo"
                   type="text"
                   value={poleNo}
                   onChange={(e) => setPoleNo(e.target.value)}
@@ -1221,28 +925,23 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              <div className="sm:col-span-2 lg:col-span-3">
+              <div className="sm:col-span-3">
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.addressLocation} *
                 </label>
                 <input
-                  id="field-address"
                   type="text"
+                  required
                   value={address}
-                  onChange={(e) => handleFieldChange('address', setAddress, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('address', e.target.value)}
-                  className={getInputClass(
-                    'address',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Premises / Shop / Residence Address"
                 />
-                {renderFieldError('address')}
               </div>
             </div>
           )}
 
-          {/* 3. POLE CASE SPECIFIC FORM WITH VALIDATION */}
+          {/* 3. POLE CASE SPECIFIC FORM */}
           {category === 'POLE CASE' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
@@ -1250,18 +949,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.poleNo} *
                 </label>
                 <input
-                  id="field-poleNo"
                   type="text"
+                  required
                   value={poleNo}
-                  onChange={(e) => handleFieldChange('poleNo', setPoleNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('poleNo', e.target.value)}
-                  className={getInputClass(
-                    'poleNo',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setPoleNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
                   placeholder="e.g. Pole No P-84 / Span 04"
                 />
-                {renderFieldError('poleNo')}
               </div>
 
               <div>
@@ -1269,7 +963,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.poleType}
                 </label>
                 <select
-                  id="field-poleType"
                   value={poleType}
                   onChange={(e) => setPoleType(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1287,7 +980,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.lineVoltage}
                 </label>
                 <select
-                  id="field-lineVoltage"
                   value={lineVoltage}
                   onChange={(e) => setLineVoltage(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1303,7 +995,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.issueType} *
                 </label>
                 <select
-                  id="field-issueType"
                   value={issueType}
                   onChange={(e) => setIssueType(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-rose-700"
@@ -1322,7 +1013,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.priority}
                 </label>
                 <select
-                  id="field-priority"
                   value={priority}
                   onChange={(e) => setPriority(e.target.value as any)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-bold"
@@ -1339,7 +1029,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.conductorType}
                 </label>
                 <input
-                  id="field-conductorType"
                   type="text"
                   value={conductorType}
                   onChange={(e) => setConductorType(e.target.value)}
@@ -1353,18 +1042,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.actionTaken} *
                 </label>
                 <input
-                  id="field-actionTaken"
                   type="text"
+                  required
                   value={actionTaken}
-                  onChange={(e) => handleFieldChange('actionTaken', setActionTaken, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('actionTaken', e.target.value)}
-                  className={getInputClass(
-                    'actionTaken',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setActionTaken(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="e.g. নতুন পোল স্থাপন, কংক্রিটিং ও কন্ডাক্টর টানা সম্পন্ন"
                 />
-                {renderFieldError('actionTaken')}
               </div>
 
               <div>
@@ -1372,7 +1056,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.ptwShutdownRef}
                 </label>
                 <input
-                  id="field-ptwShutdownRef"
                   type="text"
                   value={ptwShutdownRef}
                   onChange={(e) => setPtwShutdownRef(e.target.value)}
@@ -1386,7 +1069,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.materialUsed}
                 </label>
                 <input
-                  id="field-materialUsed"
                   type="text"
                   value={materialUsed}
                   onChange={(e) => setMaterialUsed(e.target.value)}
@@ -1400,44 +1082,32 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.addressLocation} *
                 </label>
                 <input
-                  id="field-address"
                   type="text"
+                  required
                   value={address}
-                  onChange={(e) => handleFieldChange('address', setAddress, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('address', e.target.value)}
-                  className={getInputClass(
-                    'address',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Location landmark / Village / Road point"
                 />
-                {renderFieldError('address')}
               </div>
             </div>
           )}
 
-          {/* 4. METER REPLACEMENT SPECIFIC FORM WITH STRICT VALIDATION */}
+          {/* 4. METER REPLACEMENT SPECIFIC FORM */}
           {category === 'METER REPLESMENT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.consumerId} *</span>
-                  <span className="text-[9px] bg-blue-100 text-blue-800 font-mono font-bold px-1.5 py-0.5 rounded">9 Digits</span>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.consumerId} *
                 </label>
                 <input
-                  id="field-consumerId"
                   type="text"
-                  maxLength={15}
+                  required
                   value={consumerId}
-                  onChange={(e) => handleFieldChange('consumerId', setConsumerId, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerId', e.target.value)}
-                  className={getInputClass(
-                    'consumerId',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setConsumerId(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                   placeholder="e.g. 100289123"
                 />
-                {renderFieldError('consumerId')}
               </div>
 
               <div>
@@ -1445,38 +1115,27 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.consumerName} *
                 </label>
                 <input
-                  id="field-consumerName"
                   type="text"
+                  required
                   value={consumerName}
-                  onChange={(e) => handleFieldChange('consumerName', setConsumerName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('consumerName', e.target.value)}
-                  className={getInputClass(
-                    'consumerName',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-bold'
-                  )}
+                  onChange={(e) => setConsumerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Consumer Name"
                 />
-                {renderFieldError('consumerName')}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.oldMeterNo} *</span>
-                  <span className="text-[9px] bg-slate-200 text-slate-800 font-mono px-1.5 py-0.5 rounded">Old Meter</span>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.oldMeterNo} *
                 </label>
                 <input
-                  id="field-oldMeterNo"
                   type="text"
+                  required
                   value={oldMeterNo}
-                  onChange={(e) => handleFieldChange('oldMeterNo', setOldMeterNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('oldMeterNo', e.target.value)}
-                  className={getInputClass(
-                    'oldMeterNo',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono'
-                  )}
+                  onChange={(e) => setOldMeterNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                   placeholder="e.g. OLD-WB-9821"
                 />
-                {renderFieldError('oldMeterNo')}
               </div>
 
               <div>
@@ -1484,18 +1143,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.oldMeterReading} (kWh) *
                 </label>
                 <input
-                  id="field-oldMeterReading"
                   type="text"
+                  required
                   value={oldMeterReading}
-                  onChange={(e) => handleFieldChange('oldMeterReading', setOldMeterReading, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('oldMeterReading', e.target.value)}
-                  className={getInputClass(
-                    'oldMeterReading',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setOldMeterReading(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
                   placeholder="e.g. 08945"
                 />
-                {renderFieldError('oldMeterReading')}
               </div>
 
               <div>
@@ -1503,7 +1157,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.replacementReason}
                 </label>
                 <select
-                  id="field-replacementReason"
                   value={replacementReason}
                   onChange={(e) => setReplacementReason(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1516,23 +1169,17 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.newMeterNo} *</span>
-                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-mono font-bold px-1.5 py-0.5 rounded">New Meter</span>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.newMeterNo} *
                 </label>
                 <input
-                  id="field-newMeterNo"
                   type="text"
+                  required
                   value={newMeterNo}
-                  onChange={(e) => handleFieldChange('newMeterNo', setNewMeterNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('newMeterNo', e.target.value)}
-                  className={getInputClass(
-                    'newMeterNo',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-emerald-700'
-                  )}
+                  onChange={(e) => setNewMeterNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-emerald-700"
                   placeholder="e.g. WB26-GEN-88319"
                 />
-                {renderFieldError('newMeterNo')}
               </div>
 
               <div>
@@ -1540,7 +1187,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.newMeterInitialReading}
                 </label>
                 <input
-                  id="field-newMeterInitialReading"
                   type="text"
                   value={newMeterInitialReading}
                   onChange={(e) => setNewMeterInitialReading(e.target.value)}
@@ -1554,18 +1200,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.newMeterSealNo} *
                 </label>
                 <input
-                  id="field-newMeterSealNo"
                   type="text"
+                  required
                   value={newMeterSealNo}
-                  onChange={(e) => handleFieldChange('newMeterSealNo', setNewMeterSealNo, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('newMeterSealNo', e.target.value)}
-                  className={getInputClass(
-                    'newMeterSealNo',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-blue-700 font-bold'
-                  )}
+                  onChange={(e) => setNewMeterSealNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-blue-700 font-bold"
                   placeholder="e.g. WB-SL-90312"
                 />
-                {renderFieldError('newMeterSealNo')}
               </div>
 
               <div>
@@ -1573,7 +1214,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.meterType}
                 </label>
                 <select
-                  id="field-meterType"
                   value={meterType}
                   onChange={(e) => setMeterType(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1589,23 +1229,18 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.addressLocation} *
                 </label>
                 <input
-                  id="field-address"
                   type="text"
+                  required
                   value={address}
-                  onChange={(e) => handleFieldChange('address', setAddress, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('address', e.target.value)}
-                  className={getInputClass(
-                    'address',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Consumer Premises Address"
                 />
-                {renderFieldError('address')}
               </div>
             </div>
           )}
 
-          {/* 5. DTR REPLACEMENT SPECIFIC FORM WITH VALIDATION */}
+          {/* 5. DTR REPLACEMENT SPECIFIC FORM */}
           {category === 'DTR REPLESMENT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
@@ -1613,18 +1248,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.dtrName} *
                 </label>
                 <input
-                  id="field-dtrName"
                   type="text"
+                  required
                   value={dtrName}
-                  onChange={(e) => handleFieldChange('dtrName', setDtrName, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('dtrName', e.target.value)}
-                  className={getInputClass(
-                    'dtrName',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold'
-                  )}
+                  onChange={(e) => setDtrName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
                   placeholder="e.g. DTR-VILLAGE-04"
                 />
-                {renderFieldError('dtrName')}
               </div>
 
               <div>
@@ -1632,7 +1262,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.existingCapacity} *
                 </label>
                 <select
-                  id="field-existingCapacity"
                   value={existingCapacity}
                   onChange={(e) => setExistingCapacity(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-rose-700"
@@ -1651,7 +1280,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.newCapacity} *
                 </label>
                 <select
-                  id="field-newCapacity"
                   value={newCapacity}
                   onChange={(e) => setNewCapacity(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-emerald-700"
@@ -1669,7 +1297,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.oldDtrSerial}
                 </label>
                 <input
-                  id="field-oldDtrSerial"
                   type="text"
                   value={oldDtrSerial}
                   onChange={(e) => setOldDtrSerial(e.target.value)}
@@ -1679,23 +1306,17 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.newDtrSerial} *</span>
-                  <span className="text-[9px] bg-blue-100 text-blue-800 font-mono font-bold px-1.5 py-0.5 rounded">Serial</span>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.newDtrSerial} *
                 </label>
                 <input
-                  id="field-newDtrSerial"
                   type="text"
+                  required
                   value={newDtrSerial}
-                  onChange={(e) => handleFieldChange('newDtrSerial', setNewDtrSerial, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('newDtrSerial', e.target.value)}
-                  className={getInputClass(
-                    'newDtrSerial',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-blue-700'
-                  )}
+                  onChange={(e) => setNewDtrSerial(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-blue-700"
                   placeholder="e.g. WB-DTR-2026-081"
                 />
-                {renderFieldError('newDtrSerial')}
               </div>
 
               <div>
@@ -1703,7 +1324,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.dtrFailureReason}
                 </label>
                 <select
-                  id="field-dtrFailureReason"
                   value={dtrFailureReason}
                   onChange={(e) => setDtrFailureReason(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1737,7 +1357,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.earthPitResistance}
                 </label>
                 <input
-                  id="field-earthPitResistance"
                   type="text"
                   value={earthPitResistance}
                   onChange={(e) => setEarthPitResistance(e.target.value)}
@@ -1751,7 +1370,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.hgFuseRating} & MCCB
                 </label>
                 <input
-                  id="field-hgFuseRating"
                   type="text"
                   value={hgFuseRating}
                   onChange={(e) => setHgFuseRating(e.target.value)}
@@ -1765,18 +1383,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.addressLocation} *
                 </label>
                 <input
-                  id="field-address"
                   type="text"
+                  required
                   value={address}
-                  onChange={(e) => handleFieldChange('address', setAddress, e.target.value)}
-                  onBlur={(e) => handleFieldBlur('address', e.target.value)}
-                  className={getInputClass(
-                    'address',
-                    'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none'
-                  )}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="DTR Sub-station Yard Location / Village / Pole Structure"
                 />
-                {renderFieldError('address')}
               </div>
             </div>
           )}
@@ -1909,48 +1522,20 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           )}
 
           <button
-            id="entry-form-submit-btn"
             type="submit"
-            disabled={loading || submitSuccessAnimation}
-            className={`relative overflow-hidden flex-1 sm:flex-initial px-8 py-3 rounded-xl text-sm font-extrabold transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer ml-auto min-w-[200px] select-none ${
-              submitSuccessAnimation
-                ? 'bg-emerald-600 text-white ring-4 ring-emerald-300/70 scale-[1.02]'
-                : loading
-                ? 'bg-blue-700 text-white cursor-wait opacity-95 ring-2 ring-blue-300'
-                : 'bg-blue-600 hover:bg-blue-700 active:scale-98 text-white'
-            }`}
+            disabled={loading}
+            className="flex-1 sm:flex-initial px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 active:scale-98 ml-auto"
           >
-            {/* Subtle Loading Shimmer Overlay */}
-            {loading && !submitSuccessAnimation && (
-              <span className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer pointer-events-none" />
-            )}
-
-            {/* Success Background Flash */}
-            {submitSuccessAnimation && (
-              <span className="absolute inset-0 bg-emerald-500/30 animate-pulse pointer-events-none rounded-xl" />
-            )}
-
-            {/* Button Content with smooth state transitions */}
-            {submitSuccessAnimation ? (
-              <span className="relative z-10 flex items-center gap-2 text-white animate-in zoom-in-75 duration-200 font-black">
-                <span className="w-5 h-5 rounded-full bg-white text-emerald-600 flex items-center justify-center shadow-xs">
-                  <CheckCircle2 className="w-4 h-4 stroke-[3]" />
-                </span>
-                <span>{lang === 'bn' ? 'দাখিল সফল হয়েছে!' : 'Submitted!'}</span>
-              </span>
-            ) : loading ? (
-              <span className="relative z-10 flex items-center gap-2.5 text-white font-bold">
-                <span className="relative flex h-4 w-4">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-300 opacity-75"></span>
-                  <RefreshCw className="relative inline-flex w-4 h-4 animate-spin text-white" />
-                </span>
+            {loading ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
                 <span>{t.submitting}</span>
-              </span>
+              </>
             ) : (
-              <span className="relative z-10 flex items-center gap-2 font-black">
+              <>
                 <Send className="w-4 h-4" />
                 <span>{t.submit}</span>
-              </span>
+              </>
             )}
           </button>
         </div>

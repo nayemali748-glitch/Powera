@@ -5,15 +5,6 @@ const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
 const USERS_STORAGE_KEY = 'power_registered_users';
 const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
 
-export function convertBengaliDigits(str: string): string {
-  if (!str) return '';
-  const bnToEn: Record<string, string> = {
-    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
-    '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
-  };
-  return str.replace(/[০-৯]/g, (d) => bnToEn[d] || d);
-}
-
 export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
   {
     id: 'adm_8695716192',
@@ -22,12 +13,11 @@ export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
     name: 'Engr. N. Ali (Admin Controller)',
     phone: '8695716192',
     role: 'admin',
-    status: 'active',
     designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
     badgeNo: 'ADM-8695',
     securityQuestion: 'Your Primary Power Substation?',
     securityAnswer: 'Vidyut Bhavan',
-    createdAt: '2026-01-01T00:00:00.000Z'
+    createdAt: new Date().toISOString()
   }
 ];
 
@@ -319,20 +309,9 @@ export async function updateUserStatus(id: string, status: 'active' | 'hold'): P
   }
 }
 
-export async function verifyUserSession(idNo: string): Promise<{ 
-  valid: boolean; 
-  status?: 'active' | 'hold'; 
-  role?: string;
-  name?: string;
-  designation?: string;
-  badgeNo?: string;
-  error?: string;
-}> {
+export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
   try {
-    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-    });
+    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`);
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       return { valid: false, error: errJson.error || 'Session invalid' };
@@ -345,147 +324,58 @@ export async function verifyUserSession(idNo: string): Promise<{
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
-  const rawId = String(loginId).trim();
-  const rawPass = String(password).trim();
-  const cleanId = convertBengaliDigits(rawId);
-  const cleanPass = convertBengaliDigits(rawPass);
-
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ loginId, password }),
     });
-
-    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || 'ভুল আইডি বা পাসওয়ার্ড!');
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'ভুল আইডি বা পাসওয়ার্ড!');
     }
-
-    if (data.session) {
-      // Sync local storage on this device
-      try {
-        localStorage.setItem('power_user_session', JSON.stringify(data.session));
-        localStorage.setItem('power_worker_name', data.session.name);
-        const userIsAdmin = data.session.role === 'admin' || data.session.idNo === '8695716192';
-        localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
-      } catch {}
-      return data.session;
-    }
-    throw new Error('Authentication response did not contain session details');
+    const data = await res.json();
+    return data.session;
   } catch (err: any) {
-    // If backend gave a specific rejection (e.g. hold status, wrong password, user not found), throw it immediately
-    if (err.message && !err.message.includes('fetch') && !err.message.includes('network') && !err.message.includes('Failed to fetch')) {
-      throw err;
-    }
-
-    console.warn('Network offline fallback for login:', err);
-
-    const cleanIdLower = cleanId.toLowerCase();
-    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-    const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
-
-    // Master Admin fallback check
-    const isAdminIdAlias = 
-      cleanIdLower === 'admin' || 
-      cleanIdLower === 'administrator' ||
-      cleanIdLower === 'root' ||
-      cleanIdLower === 'master' ||
-      cleanIdLower === 'nayem' ||
-      cleanIdLower === 'nayem ali' ||
-      cleanIdLower === 'nayemali' ||
-      cleanIdLower === 'nayemali748@gmail.com' ||
-      cleanIdLower === 'powerof2026@gmail.com' ||
-      cleanIdAlphaNum === '8695716192' ||
-      cleanIdAlphaNum === '918695716192' ||
-      cleanIdAlphaNum === '08695716192' ||
-      cleanIdAlphaNum === 'adm8695' ||
-      cleanIdAlphaNum === '8695' ||
-      cleanIdDigits.endsWith('8695716192');
-
-    const isAdminPassValid = 
-      cleanPass === '6293' || 
-      rawPass === '6293' || 
-      cleanPass === '8695716192' ||
-      cleanPass.toLowerCase() === 'admin' || 
-      cleanPass.toLowerCase() === 'admin123' || 
-      cleanPass.toLowerCase() === 'admin@123' || 
-      cleanPass === '1234' ||
-      cleanPass === '123456' ||
-      cleanPass.toLowerCase() === 'nayem' ||
-      cleanPass.toLowerCase() === 'nayem123';
-
-    if (isAdminIdAlias && isAdminPassValid) {
-      const adminSession: UserSession = {
+    // Check local fallback
+    const cleanId = loginId.trim();
+    const cleanPass = password.trim();
+    
+    // Check if master admin 8695716192
+    if (cleanId === '8695716192' && cleanPass === '6293') {
+      return {
         id: 'adm_8695716192',
         idNo: '8695716192',
         name: 'Engr. N. Ali (Admin Controller)',
         phone: '8695716192',
         role: 'admin',
-        status: 'active',
         designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
       };
-      try {
-        localStorage.setItem('power_user_session', JSON.stringify(adminSession));
-        localStorage.setItem('power_worker_name', adminSession.name);
-        localStorage.setItem('power_is_admin', 'true');
-      } catch {}
-      return adminSession;
     }
 
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => {
-      const uId = convertBengaliDigits((u.idNo || '').toLowerCase());
-      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
-      const uPhone = convertBengaliDigits((u.phone || '')).replace(/[^0-9]/g, '');
-      const uName = (u.name || '').toLowerCase();
-      const uDigits = uId.replace(/[^0-9]/g, '');
-
-      return uId === cleanIdLower || u.id === cleanId || 
-             (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) ||
-             (cleanIdDigits && cleanIdDigits.length >= 4 && uDigits === cleanIdDigits) ||
-             (uPhone && uPhone === cleanId.replace(/[^0-9]/g, '')) ||
-             (uName && uName === cleanIdLower);
-    });
-
+    const found = users.find(u => u.idNo.toLowerCase() === cleanId.toLowerCase() || (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')));
     if (found) {
       if (found.status === 'hold') {
         throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
       }
-      const storedPass = String(found.password).trim();
-      if (storedPass === cleanPass || 
-          storedPass === rawPass || 
-          convertBengaliDigits(storedPass) === cleanPass || 
-          storedPass.toLowerCase() === cleanPass.toLowerCase() ||
-          cleanPass === '6293' || 
-          (found.idNo === '8695716192' && cleanPass === '1234')) {
-        const userSession: UserSession = {
+      if (found.password === cleanPass) {
+        return {
           id: found.id,
           idNo: found.idNo,
           name: found.name,
-          phone: found.phone || '',
-          role: found.role || 'worker',
-          status: found.status || 'active',
-          designation: found.designation || (found.role === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
+          phone: found.phone,
+          role: found.role,
+          designation: found.designation,
           badgeNo: found.badgeNo || found.idNo,
           loggedInAt: new Date().toISOString()
         };
-        try {
-          localStorage.setItem('power_user_session', JSON.stringify(userSession));
-          localStorage.setItem('power_worker_name', userSession.name);
-          localStorage.setItem('power_is_admin', userSession.role === 'admin' ? 'true' : 'false');
-        } catch {}
-        return userSession;
       }
-      throw new Error('ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড দিয়ে পুনরায় চেষ্টা করুন।');
     }
-    throw new Error(err.message || 'User ID অথবা পাসওয়ার্ড ভুল! সঠিক তথ্য দিয়ে পুনরায় চেষ্টা করুন।');
+    throw new Error(err.message || 'Invalid ID or Password! Account not found or deactivated.');
   }
 }
 
