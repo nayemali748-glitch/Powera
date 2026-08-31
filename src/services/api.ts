@@ -1,8 +1,9 @@
-import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession } from '../types';
+import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice } from '../types';
 
 const API_BASE = '/api';
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
 const USERS_STORAGE_KEY = 'power_registered_users';
+const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
 
 export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
   {
@@ -173,7 +174,10 @@ export async function fetchStats(): Promise<StatsResponse> {
 // User accounts management APIs
 export async function fetchUsers(): Promise<UserAccount[]> {
   try {
-    const res = await fetch(`${API_BASE}/users`);
+    const res = await fetch(`${API_BASE}/users`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+    });
     if (!res.ok) throw new Error('Failed to fetch users');
     const users: UserAccount[] = await res.json();
     try {
@@ -197,19 +201,28 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   try {
     const res = await fetch(`${API_BASE}/users`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
       body: JSON.stringify(userData),
     });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to create user');
+      throw new Error(errJson.error || 'Failed to create user on server');
     }
     const data = await res.json();
     // Update local cache
-    const current = await fetchUsers();
+    try {
+      const all = await fetchUsers();
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(all));
+    } catch {}
     return data.user;
   } catch (err: any) {
-    // Local fallback
+    if (err.message && (err.message.includes('already exists') || err.message.includes('required') || err.message.includes('server'))) {
+      throw err;
+    }
+    console.warn('Backend create user failed, offline local fallback:', err);
     const newUser: UserAccount = {
       id: `${userData.role || 'user'}_${Date.now()}`,
       idNo: userData.idNo || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -296,9 +309,20 @@ export async function updateUserStatus(id: string, status: 'active' | 'hold'): P
   }
 }
 
-export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
+export async function verifyUserSession(idNo: string): Promise<{ 
+  valid: boolean; 
+  status?: 'active' | 'hold'; 
+  role?: string;
+  name?: string;
+  designation?: string;
+  badgeNo?: string;
+  error?: string;
+}> {
   try {
-    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`);
+    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+    });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       return { valid: false, error: errJson.error || 'Session invalid' };
@@ -311,26 +335,46 @@ export async function verifyUserSession(idNo: string): Promise<{ valid: boolean;
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
+  const cleanId = String(loginId).trim();
+  const cleanPass = String(password).trim();
+
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loginId, password }),
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
+      body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
     });
+
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'ভুল আইডি বা পাসওয়ার্ড!');
+      throw new Error(data.error || 'ভুল আইডি বা পাসওয়ার্ড!');
     }
-    const data = await res.json();
-    return data.session;
+
+    if (data.session) {
+      // Sync local storage on this device
+      try {
+        localStorage.setItem('power_user_session', JSON.stringify(data.session));
+        localStorage.setItem('power_worker_name', data.session.name);
+        const userIsAdmin = data.session.role === 'admin' || data.session.idNo === '8695716192';
+        localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
+      } catch {}
+      return data.session;
+    }
+    throw new Error('Authentication response did not contain session details');
   } catch (err: any) {
-    // Check local fallback
-    const cleanId = loginId.trim();
-    const cleanPass = password.trim();
-    
-    // Check if master admin 8695716192
-    if (cleanId === '8695716192' && cleanPass === '6293') {
-      return {
+    // If backend gave a specific rejection (e.g. hold status, wrong password, user not found), throw it immediately
+    if (err.message && !err.message.includes('fetch') && !err.message.includes('network') && !err.message.includes('Failed to fetch')) {
+      throw err;
+    }
+
+    console.warn('Network offline fallback for login:', err);
+
+    // Master Admin fallback check
+    if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
+      const adminSession: UserSession = {
         id: 'adm_8695716192',
         idNo: '8695716192',
         name: 'Engr. N. Ali (Admin Controller)',
@@ -340,27 +384,45 @@ export async function loginUser(loginId: string, password: string): Promise<User
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
       };
+      try {
+        localStorage.setItem('power_user_session', JSON.stringify(adminSession));
+        localStorage.setItem('power_worker_name', adminSession.name);
+        localStorage.setItem('power_is_admin', 'true');
+      } catch {}
+      return adminSession;
     }
 
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => u.idNo.toLowerCase() === cleanId.toLowerCase() || (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')));
+    const found = users.find(u => {
+      const uId = (u.idNo || '').toLowerCase();
+      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
+      return uId === cleanId.toLowerCase() || u.id === cleanId || (uPhone && uPhone === cleanId.replace(/[^0-9]/g, ''));
+    });
+
     if (found) {
       if (found.status === 'hold') {
         throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
       }
-      if (found.password === cleanPass) {
-        return {
+      if (String(found.password).trim() === cleanPass) {
+        const workerSession: UserSession = {
           id: found.id,
           idNo: found.idNo,
           name: found.name,
-          phone: found.phone,
-          role: found.role,
-          designation: found.designation,
+          phone: found.phone || '',
+          role: found.role || 'worker',
+          designation: found.designation || 'লাইনম্যান (WBSEDCL)',
           badgeNo: found.badgeNo || found.idNo,
           loggedInAt: new Date().toISOString()
         };
+        try {
+          localStorage.setItem('power_user_session', JSON.stringify(workerSession));
+          localStorage.setItem('power_worker_name', workerSession.name);
+          localStorage.setItem('power_is_admin', workerSession.role === 'admin' ? 'true' : 'false');
+        } catch {}
+        return workerSession;
       }
+      throw new Error('Incorrect Password! Please enter valid password.');
     }
     throw new Error(err.message || 'Invalid ID or Password! Account not found or deactivated.');
   }
@@ -493,5 +555,135 @@ export async function clearChatMessages(): Promise<boolean> {
     localStorage.removeItem(CHAT_LOCAL_KEY);
     return true;
   }
+}
+
+// Work Order / Khata Notice API services
+export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotice[]> {
+  try {
+    const params = new URLSearchParams();
+    if (category && category !== 'ALL') params.append('category', category);
+    const res = await fetch(`${API_BASE}/work-orders?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    const data: WorkOrderNotice[] = await res.json();
+    try {
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(data));
+    } catch {}
+    return data;
+  } catch (error) {
+    console.warn('Backend work-orders fetch failed, using local cache:', error);
+    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+    if (cached) {
+      let list: WorkOrderNotice[] = JSON.parse(cached);
+      if (category && category !== 'ALL') {
+        list = list.filter(item => item.category === category || item.category === ('ALL' as any));
+      }
+      return list;
+    }
+    return [];
+  }
+}
+
+export async function uploadWorkOrder(payload: {
+  category: CategoryType;
+  title: string;
+  photoUrl: string;
+  description?: string;
+  uploadedBy: string;
+  adminName: string;
+  adminPhone?: string;
+  isHidden?: boolean;
+}): Promise<WorkOrderNotice> {
+  try {
+    const res = await fetch(`${API_BASE}/work-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Failed to upload work order photo');
+    }
+    const data = await res.json();
+    return data.workOrder;
+  } catch (error: any) {
+    const now = new Date();
+    const fallbackOrder: WorkOrderNotice = {
+      id: `wo_${Date.now()}`,
+      category: payload.category,
+      title: payload.title || 'Work Order / Khata Notice',
+      photoUrl: payload.photoUrl,
+      description: payload.description || '',
+      uploadedBy: payload.uploadedBy || 'admin',
+      adminName: payload.adminName || 'Admin Controller',
+      adminPhone: payload.adminPhone || '8695716192',
+      uploadDate: now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      uploadTime: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      createdAt: now.toISOString(),
+      isHidden: Boolean(payload.isHidden)
+    };
+    try {
+      const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+      const list: WorkOrderNotice[] = cached ? JSON.parse(cached) : [];
+      list.unshift(fallbackOrder);
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(list.slice(0, 15)));
+    } catch (cacheErr) {
+      console.warn('LocalStorage save failed for work order (quota or disabled):', cacheErr);
+    }
+    return fallbackOrder;
+  }
+}
+
+export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): Promise<boolean> {
+  try {
+    let res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/visibility`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isHidden }),
+    });
+    if (!res.ok) {
+      // Try POST fallback
+      res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/visibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isHidden }),
+      });
+    }
+  } catch (err) {
+    console.warn('Network toggle error, applying locally:', err);
+  }
+
+  // Update client cache
+  try {
+    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+    if (cached) {
+      const list: WorkOrderNotice[] = JSON.parse(cached);
+      const updated = list.map(item => String(item.id) === String(id) ? { ...item, isHidden } : item);
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updated));
+    }
+  } catch {}
+  return true;
+}
+
+export async function deleteWorkOrder(id: string): Promise<boolean> {
+  try {
+    let res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      // Try POST /delete fallback
+      res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/delete`, { method: 'POST' });
+    }
+  } catch (err) {
+    console.warn('Network delete error, applying locally:', err);
+  }
+
+  // Update client cache
+  try {
+    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+    if (cached) {
+      const list: WorkOrderNotice[] = JSON.parse(cached);
+      const updated = list.filter(item => String(item.id) !== String(id));
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updated));
+    }
+  } catch {}
+  return true;
 }
 

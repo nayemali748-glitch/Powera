@@ -26,7 +26,9 @@ import {
   UserPlus,
   Users,
   Edit3,
-  Globe
+  Globe,
+  FileText,
+  Camera
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
@@ -59,6 +61,360 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [editingEntry, setEditingEntry] = useState<PowerEntry | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState<boolean>(false);
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+
+  // Category-specific Excel/CSV Export handler
+  const handleExportCategoryExcel = (targetCategory: string = selectedCategory) => {
+    let targetEntries = entries;
+    if (targetCategory !== 'ALL') {
+      targetEntries = entries.filter((e) => e.category === targetCategory);
+    }
+
+    if (targetEntries.length === 0) {
+      alert(
+        lang === 'bn'
+          ? `"${targetCategory}" ক্যাটাগরিতে কোনো ডাটা পাওয়া যায়নি`
+          : `No data found in category "${targetCategory}"`
+      );
+      return;
+    }
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    let filename = `WBSEDCL_${targetCategory}_Report_${dateStamp}.csv`;
+    let headers: string[] = [];
+    let rows: string[][] = [];
+
+    if (targetCategory === 'NSC') {
+      filename = `WBSEDCL_NSC_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'Work Order No',
+        'Work Order Date',
+        'Application No',
+        'Consumer ID',
+        'Meter No',
+        'Meter Seal No',
+        'Consumer Name',
+        "Father's / Husband's Name",
+        'Mobile No',
+        'Initial Reading',
+        'Sanctioned Load (kW)',
+        'Supply Phase',
+        'Tariff Category',
+        'Service Cable Length (Meters)',
+        'Premises / Location Address',
+        'Meter Installation Date',
+        'Inspection Agency Name',
+        'Lineman / Staff Name',
+        'Agency Name',
+        'CCC Name',
+        'Feeder Name',
+        'Substation',
+        'Status',
+        'GPS Coordinates',
+        'Remarks / Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${e.workOrderNo || ''}"`,
+        `"${e.workOrderDate || ''}"`,
+        `"${e.applicationNo || ''}"`,
+        `"${e.consumerId || ''}"`,
+        `"${e.meterNo || ''}"`,
+        `"${e.sealNo || ''}"`,
+        `"${(e.consumerName || '').replace(/"/g, '""')}"`,
+        `"${(e.fatherName || '').replace(/"/g, '""')}"`,
+        `"${e.mobile || ''}"`,
+        `"${e.initialReading || ''}"`,
+        `"${e.appliedLoad || ''}"`,
+        `"${e.phase || ''}"`,
+        `"${e.tariffCategory || ''}"`,
+        `"${e.serviceCableLength || ''}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${e.meterInstallDate || ''}"`,
+        `"${(e.inspectionAgencyName || '').replace(/"/g, '""')}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${(e.agencyName || '').replace(/"/g, '""')}"`,
+        `"${(e.cccName || e.cccOffice || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${(e.substation || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    } else if (targetCategory === 'DISCONNECTION') {
+      filename = `WBSEDCL_Disconnection_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'Consumer ID',
+        'Consumer Name',
+        'Mobile No',
+        'Address / Location',
+        'Arrear Amount (INR)',
+        'Disconnection Reason',
+        'Final Meter Reading (kWh)',
+        'Meter No',
+        'Pole No',
+        'Lineman / Staff Name',
+        'Feeder Name',
+        'CCC Office',
+        'Status',
+        'GPS Coordinates',
+        'Remarks / Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${e.consumerId || ''}"`,
+        `"${(e.consumerName || '').replace(/"/g, '""')}"`,
+        `"${e.mobile || ''}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${e.arrearAmount || ''}"`,
+        `"${(e.reason || '').replace(/"/g, '""')}"`,
+        `"${e.finalReading || ''}"`,
+        `"${e.meterNo || ''}"`,
+        `"${e.poleNo || ''}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${(e.cccOffice || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    } else if (targetCategory === 'POLE CASE') {
+      filename = `WBSEDCL_Pole_Case_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'Pole Number',
+        'Fault / Issue Type',
+        'Priority Level',
+        'Location / Address',
+        'Maintenance Action Taken',
+        'Materials Consumed',
+        'Lineman / Staff Name',
+        'Feeder Name',
+        'Substation',
+        'Status',
+        'GPS Coordinates',
+        'Remarks / Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${e.poleNo || ''}"`,
+        `"${(e.issueType || '').replace(/"/g, '""')}"`,
+        `"${e.priority || ''}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${(e.actionTaken || '').replace(/"/g, '""')}"`,
+        `"${(e.materialUsed || '').replace(/"/g, '""')}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${(e.substation || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    } else if (targetCategory === 'METER REPLESMENT') {
+      filename = `WBSEDCL_Meter_Replacement_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'Consumer ID',
+        'Consumer Name',
+        'Mobile No',
+        'Address / Location',
+        'Old Defective Meter No',
+        'Old Meter Final Reading',
+        'New Meter Serial No',
+        'New Initial Reading',
+        'Security Seal No',
+        'Replacement Reason',
+        'Lineman / Staff Name',
+        'Feeder Name',
+        'Status',
+        'GPS Coordinates',
+        'Remarks / Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${e.consumerId || ''}"`,
+        `"${(e.consumerName || '').replace(/"/g, '""')}"`,
+        `"${e.mobile || ''}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${e.oldMeterNo || ''}"`,
+        `"${e.finalReading || ''}"`,
+        `"${e.newMeterNo || ''}"`,
+        `"${e.initialReading || ''}"`,
+        `"${e.sealNo || ''}"`,
+        `"${(e.reason || '').replace(/"/g, '""')}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    } else if (targetCategory === 'DTR REPLESMENT') {
+      filename = `WBSEDCL_DTR_Replacement_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'DTR Code / Name',
+        'Existing Capacity',
+        'Upgraded / New Capacity',
+        'Old DTR Serial No',
+        'New DTR Serial No',
+        'Earth Resistance (Ohms)',
+        'Substation',
+        'Feeder Name',
+        'Location / Address',
+        'Lineman / Staff Name',
+        'Status',
+        'GPS Coordinates',
+        'Remarks / Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${(e.dtrName || '').replace(/"/g, '""')}"`,
+        `"${e.existingCapacity || ''}"`,
+        `"${e.newCapacity || ''}"`,
+        `"${e.oldDtrSerial || ''}"`,
+        `"${e.newDtrSerial || ''}"`,
+        `"${e.earthResistance || ''}"`,
+        `"${(e.substation || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    } else {
+      // ALL CATEGORIES COMPREHENSIVE MASTER REPORT
+      filename = `WBSEDCL_Master_All_Categories_Report_${dateStamp}.csv`;
+      headers = [
+        'SL No',
+        'Record ID',
+        'Date Time',
+        'Category',
+        'Lineman / Worker Name',
+        'Agency Name',
+        'CCC Name',
+        'Feeder Name',
+        'Substation',
+        'Status',
+        'Work Order No',
+        'Work Order Date',
+        'Application No',
+        'Consumer ID',
+        'Consumer Name',
+        "Father's / Husband's Name",
+        'Mobile No',
+        'Address / Location',
+        'Meter No',
+        'Meter Seal No',
+        'Initial Reading',
+        'Final Reading',
+        'Applied Load',
+        'Supply Phase',
+        'Tariff Category',
+        'Service Cable Length',
+        'Meter Install Date',
+        'Inspection Agency',
+        'Pole No',
+        'Arrear Amount',
+        'Reason',
+        'Issue Type',
+        'Priority',
+        'Action Taken',
+        'Material Used',
+        'Old Meter No',
+        'New Meter No',
+        'DTR Name',
+        'Existing Capacity',
+        'New Capacity',
+        'Old DTR Serial',
+        'New DTR Serial',
+        'Earth Resistance',
+        'GPS Coordinates',
+        'Notes'
+      ];
+      rows = targetEntries.map((e, idx) => [
+        String(idx + 1),
+        `"${e.id}"`,
+        `"${new Date(e.date).toLocaleString()}"`,
+        `"${e.category}"`,
+        `"${(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${(e.agencyName || '').replace(/"/g, '""')}"`,
+        `"${(e.cccName || e.cccOffice || '').replace(/"/g, '""')}"`,
+        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${(e.substation || '').replace(/"/g, '""')}"`,
+        `"${e.status}"`,
+        `"${e.workOrderNo || ''}"`,
+        `"${e.workOrderDate || ''}"`,
+        `"${e.applicationNo || ''}"`,
+        `"${e.consumerId || ''}"`,
+        `"${(e.consumerName || '').replace(/"/g, '""')}"`,
+        `"${(e.fatherName || '').replace(/"/g, '""')}"`,
+        `"${e.mobile || ''}"`,
+        `"${(e.address || '').replace(/"/g, '""')}"`,
+        `"${e.meterNo || ''}"`,
+        `"${e.sealNo || ''}"`,
+        `"${e.initialReading || ''}"`,
+        `"${e.finalReading || ''}"`,
+        `"${e.appliedLoad || ''}"`,
+        `"${e.phase || ''}"`,
+        `"${e.tariffCategory || ''}"`,
+        `"${e.serviceCableLength || ''}"`,
+        `"${e.meterInstallDate || ''}"`,
+        `"${(e.inspectionAgencyName || '').replace(/"/g, '""')}"`,
+        `"${e.poleNo || ''}"`,
+        `"${e.arrearAmount || ''}"`,
+        `"${(e.reason || '').replace(/"/g, '""')}"`,
+        `"${(e.issueType || '').replace(/"/g, '""')}"`,
+        `"${e.priority || ''}"`,
+        `"${(e.actionTaken || '').replace(/"/g, '""')}"`,
+        `"${(e.materialUsed || '').replace(/"/g, '""')}"`,
+        `"${e.oldMeterNo || ''}"`,
+        `"${e.newMeterNo || ''}"`,
+        `"${(e.dtrName || '').replace(/"/g, '""')}"`,
+        `"${e.existingCapacity || ''}"`,
+        `"${e.newCapacity || ''}"`,
+        `"${e.oldDtrSerial || ''}"`,
+        `"${e.newDtrSerial || ''}"`,
+        `"${e.earthResistance || ''}"`,
+        `"${e.locationGps || ''}"`,
+        `"${(e.notes || '').replace(/"/g, '""')}"`
+      ]);
+    }
+
+    // UTF-8 BOM prefix \uFEFF ensures Microsoft Excel opens Bengali text and numbers cleanly
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   // Auto-refresh entries when Admin Dashboard is active to immediately reflect worker submissions
   React.useEffect(() => {
@@ -283,14 +639,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span>User ID & Worker Management</span>
             </button>
 
-            <button
-              id="admin-export-csv-btn"
-              onClick={onExportCsv}
-              className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-              <span>Export CSV / Excel</span>
-            </button>
+            {/* Category-Specific Excel / CSV Export Button & Dropdown */}
+            <div className="relative">
+              <div className="inline-flex rounded-lg shadow-xs">
+                <button
+                  id="admin-export-csv-btn"
+                  onClick={() => handleExportCategoryExcel(selectedCategory)}
+                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-l-lg text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                  title={`Download ${selectedCategory === 'ALL' ? 'All' : selectedCategory} Excel / CSV Report`}
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                  <span>
+                    Export {selectedCategory === 'ALL' ? 'Master' : selectedCategory} Excel
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowExportMenu(!showExportMenu)}
+                  className="px-2 py-2 bg-slate-800 hover:bg-slate-700 text-white border-l border-slate-700 rounded-r-lg text-xs transition-colors cursor-pointer"
+                  title="Choose Category to Export"
+                >
+                  ▼
+                </button>
+              </div>
+
+              {/* Category Export Dropdown */}
+              {showExportMenu && (
+                <div 
+                  className="absolute right-0 mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in"
+                  onClick={() => setShowExportMenu(false)}
+                >
+                  <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100">
+                    {lang === 'bn' ? 'ক্যাটাগরি ভিত্তিক এক্সেল ডাউনলোড' : 'Category-Specific Excel Export'}
+                  </div>
+                  
+                  <button
+                    onClick={() => handleExportCategoryExcel('NSC')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center justify-between"
+                  >
+                    <span className="flex items-center gap-1.5 text-amber-700">
+                      <Zap className="w-3.5 h-3.5" />
+                      1. NSC Only ({nscCount})
+                    </span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('DISCONNECTION')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-rose-50 text-xs font-bold text-slate-800 flex items-center justify-between"
+                  >
+                    <span className="text-rose-700">2. Disconnection Only ({discCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('POLE CASE')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-blue-50 text-xs font-bold text-slate-800 flex items-center justify-between"
+                  >
+                    <span className="text-blue-700">3. Pole Case Only ({poleCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('METER REPLESMENT')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-purple-50 text-xs font-bold text-slate-800 flex items-center justify-between"
+                  >
+                    <span className="text-purple-700">4. Meter Replacement ({meterCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('DTR REPLESMENT')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center justify-between"
+                  >
+                    <span className="text-emerald-700">5. DTR Replacement ({dtrCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <div className="border-t border-slate-100 my-1"></div>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('ALL')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold flex items-center justify-between hover:bg-slate-800"
+                  >
+                    <span>Download All 5 Categories ({total})</span>
+                    <Download className="w-3 h-3 text-emerald-400" />
+                  </button>
+                </div>
+              )}
+            </div>
 
             <button
               id="admin-refresh-btn"
@@ -565,8 +1002,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </td>
 
                       <td className="px-4 py-3.5">
-                        <div className="font-semibold text-slate-900 group-hover:text-amber-700 transition-colors">
-                          {item.consumerName || item.dtrName || item.poleNo || 'Field Point'}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-900 group-hover:text-amber-700 transition-colors">
+                            {item.consumerName || item.dtrName || item.poleNo || 'Field Point'}
+                          </span>
+                          {item.workOrderPhoto && (
+                            <span className="inline-flex items-center gap-0.5 text-[9px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded" title="Admin Work Order / Khata Slip Attached">
+                              <FileText className="w-2.5 h-2.5 text-amber-700" />
+                              <span>Khata Slip</span>
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-500 truncate max-w-xs">
                           {item.consumerId && `ID: ${item.consumerId} • `}
@@ -822,17 +1267,72 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
-              {/* Photo Evidence if any */}
-              {selectedEntry.photoUrl && (
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="text-xs font-bold text-slate-700 mb-2">Attached Site Media:</div>
-                  <img 
-                    src={selectedEntry.photoUrl} 
-                    alt="Site evidence" 
-                    className="max-h-48 rounded-lg border border-slate-200 object-contain mx-auto"
-                  />
-                </div>
-              )}
+              {/* Photos Section: Field Photo & Official Work Order Khata Photo */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* 1. Official Admin Work Order / Khata Slip Photo */}
+                {selectedEntry.workOrderPhoto && (
+                  <div className="bg-amber-50/90 p-3.5 rounded-xl border-2 border-amber-300 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-amber-950 flex items-center gap-1.5">
+                          <FileText className="w-4 h-4 text-amber-700" />
+                          <span>Official Work Order & Khata Slip</span>
+                        </span>
+                        <span className="text-[10px] bg-amber-600 text-white font-bold px-2 py-0.5 rounded">
+                          Admin Order
+                        </span>
+                      </div>
+                      {selectedEntry.workOrderNoticeTitle && (
+                        <div className="text-[11px] font-bold text-amber-900 mb-1">
+                          {selectedEntry.workOrderNoticeTitle}
+                        </div>
+                      )}
+                      {selectedEntry.workOrderNoticeDate && (
+                        <div className="text-[10px] text-amber-800 font-mono mb-2 flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-amber-700" />
+                          <span>Uploaded: {selectedEntry.workOrderNoticeDate}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative group rounded-lg overflow-hidden border border-amber-300 bg-slate-950">
+                      <img 
+                        src={selectedEntry.workOrderPhoto} 
+                        alt="Work Order Khata Slip" 
+                        className="max-h-52 w-full object-contain mx-auto"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Field Site Photo / Lineman Installation Evidence */}
+                {selectedEntry.photoUrl && (
+                  <div className="bg-emerald-50/90 p-3.5 rounded-xl border-2 border-emerald-300 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                          <Camera className="w-4 h-4 text-emerald-700" />
+                          <span>Field Site / Installation Media</span>
+                        </span>
+                        <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-0.5 rounded">
+                          Worker Evidence
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-emerald-800 mb-2">
+                        Captured by Lineman / Staff at field location
+                      </div>
+                    </div>
+                    <div className="relative group rounded-lg overflow-hidden border border-emerald-300 bg-slate-950">
+                      <img 
+                        src={selectedEntry.photoUrl} 
+                        alt="Field evidence" 
+                        className="max-h-52 w-full object-contain mx-auto"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Modal Footer */}

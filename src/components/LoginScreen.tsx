@@ -207,8 +207,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  // Forgot Password Step 1: Verify ID
-  const handleForgotVerify = (e: React.FormEvent) => {
+  // Forgot Password Step 1: Verify ID across all registered devices
+  const handleForgotVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     const cleanForgotId = forgotId.trim();
@@ -218,17 +218,32 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // Direct check in local accounts or special admin ID
-    let found = accounts.find(
-      (a) => a.idNo.toLowerCase() === cleanForgotId.toLowerCase() || a.phone.replace(/[^0-9]/g, '') === cleanForgotId.replace(/[^0-9]/g, '')
-    );
+    let accs = accounts;
+    // Always refresh accounts list from server to capture newly created accounts from any device
+    try {
+      const refreshed = await fetchUsers();
+      if (refreshed && refreshed.length > 0) {
+        accs = refreshed;
+        setAccounts(refreshed);
+      }
+    } catch {}
 
-    if (!found && (cleanForgotId === '8695716192' || cleanForgotId === 'admin')) {
+    const cleanAlphaNum = cleanForgotId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+    // Flexible match
+    let found = accs.find((a) => {
+      const aId = (a.idNo || '').toLowerCase();
+      const aAlpha = aId.replace(/[^a-zA-Z0-9]/g, '');
+      const aPhone = (a.phone || '').replace(/[^0-9]/g, '');
+      return aId === cleanForgotId.toLowerCase() || (cleanAlphaNum && aAlpha === cleanAlphaNum) || (aPhone && aPhone === cleanForgotId.replace(/[^0-9]/g, ''));
+    });
+
+    if (!found && (cleanForgotId === '8695716192' || cleanAlphaNum === '8695716192' || cleanForgotId.toLowerCase() === 'admin')) {
       found = DEFAULT_WBSEDCL_ACCOUNTS[0];
     }
 
     if (!found) {
-      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন।');
+      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন অথবা এডমিনের সাথে যোগাযোগ করুন।');
       return;
     }
 

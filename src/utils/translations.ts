@@ -180,6 +180,8 @@ export interface Translations {
   languageSelectSubtitle: string;
   installAppTitle: string;
   installAppSubtitle: string;
+  helpSupport: string;
+  helpSupportDesc: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -359,6 +361,8 @@ export const translations: Record<Language, Translations> = {
     languageSelectSubtitle: 'আপনার পছন্দের ভাষা নির্বাচন করে Done করুন',
     installAppTitle: 'অ্যান্ড্রয়েড / মোবাইল অ্যাপ ইনস্টল',
     installAppSubtitle: 'ফিল্ডে দ্রুত ব্যবহারের জন্য ফোনে সরাসরি অ্যাপটি ইনস্টল করুন',
+    helpSupport: 'হেল্প ও সাপোর্ট (Help & Support)',
+    helpSupportDesc: 'ইমেইল সাপোর্ট ও এডমিনের সাথে লাইভ চ্যাট (Email & Live Chat)',
   },
 
   en: {
@@ -537,6 +541,8 @@ export const translations: Record<Language, Translations> = {
     languageSelectSubtitle: 'Choose your language and click Done to apply instantly',
     installAppTitle: 'Install Android & PC App',
     installAppSubtitle: 'Install this utility directly on your mobile device for rapid field operations',
+    helpSupport: 'Help & Support',
+    helpSupportDesc: 'Official email assistance & Live Chat with Admin',
   },
 
   hi: {
@@ -715,6 +721,8 @@ export const translations: Record<Language, Translations> = {
     languageSelectSubtitle: 'अपनी भाषा चुनें और तुरंत लागू करने के लिए Done दबाएं',
     installAppTitle: 'मोबाइल ऐप इंस्टॉल करें',
     installAppSubtitle: 'फील्ड में त्वरित उपयोग के लिए सीधे अपने फोन में इंस्टॉल करें',
+    helpSupport: 'सहायता एवं समर्थन (Help & Support)',
+    helpSupportDesc: 'ईमेल सहायता एवं एडमिन के साथ लाइव चैट',
   },
 
   ur: {
@@ -893,5 +901,7 @@ export const translations: Record<Language, Translations> = {
     languageSelectSubtitle: 'اپنی پسندیدہ زبان منتخب کریں اور فوری طور پر لاگو کرنے کے لیے Done کریں',
     installAppTitle: 'اینڈرائیڈ موبائل ایپ انسٹال کریں',
     installAppSubtitle: 'فیلڈ میں تیز رفتار استعمال کے لیے براہ راست اپنے فون پر انسٹال کریں',
+    helpSupport: 'مدد اور سپورٹ (Help & Support)',
+    helpSupportDesc: 'ای میل سپورٹ اور ایڈمن کے ساتھ براہ راست چیٹ',
   }
 };

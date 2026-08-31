@@ -14,6 +14,7 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'entries.json');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
+const WORK_ORDERS_FILE = path.join(DATA_DIR, 'work_orders.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -110,6 +111,31 @@ function writeChat(messages: any[]) {
     console.error('Error writing chat:', err);
   }
 }
+
+// Helper to read work order / khata notices
+function readWorkOrders() {
+  try {
+    if (!fs.existsSync(WORK_ORDERS_FILE)) {
+      fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      return [];
+    }
+    const content = fs.readFileSync(WORK_ORDERS_FILE, 'utf-8');
+    return JSON.parse(content || '[]');
+  } catch (err) {
+    console.error('Error reading work orders:', err);
+    return [];
+  }
+}
+
+// Helper to write work order / khata notices
+function writeWorkOrders(orders: any[]) {
+  try {
+    fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error writing work orders:', err);
+  }
+}
+
 
 // Initial power utility entries (empty by default - no demo records)
 const INITIAL_ENTRIES: any[] = [];
@@ -235,6 +261,7 @@ app.delete('/api/entries', (req, res) => {
 // User Authentication & Management Endpoints (Persisted in data/users.json)
 // Get all users
 app.get('/api/users', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const users = readUsers();
   res.json(users);
 });
@@ -242,6 +269,7 @@ app.get('/api/users', (req, res) => {
 // Create new user (Admin created)
 app.post('/api/users', (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const users = readUsers();
     const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
 
@@ -250,15 +278,15 @@ app.post('/api/users', (req, res) => {
     }
 
     const cleanId = idNo.trim();
-    // Check duplicate
-    if (users.some((u: any) => u.idNo.toLowerCase() === cleanId.toLowerCase())) {
-      return res.status(400).json({ error: `ID No "${cleanId}" already exists!` });
+    // Check duplicate (case-insensitive)
+    if (users.some((u: any) => u.idNo && u.idNo.trim().toLowerCase() === cleanId.toLowerCase())) {
+      return res.status(400).json({ error: `ID No "${cleanId}" already exists! Please use a unique ID.` });
     }
 
     const newUser = {
-      id: `${role || 'user'}_${Date.now()}`,
+      id: `${role || 'user'}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       idNo: cleanId,
-      password: password.trim(),
+      password: String(password).trim(),
       name: name.trim(),
       phone: phone?.trim() || '',
       role: role || 'worker',
@@ -281,6 +309,7 @@ app.post('/api/users', (req, res) => {
 
 // Update user status (Active / Hold) or details
 app.patch('/api/users/:id/status', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const { status } = req.body;
 
@@ -289,7 +318,7 @@ app.patch('/api/users/:id/status', (req, res) => {
   }
 
   const users = readUsers();
-  const index = users.findIndex((u: any) => u.id === id || u.idNo === id);
+  const index = users.findIndex((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
 
   if (index === -1) {
     return res.status(404).json({ error: 'User not found' });
@@ -309,9 +338,10 @@ app.patch('/api/users/:id/status', (req, res) => {
 
 // Update user / password
 app.patch('/api/users/:id', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const users = readUsers();
-  const index = users.findIndex((u: any) => u.id === id || u.idNo === id);
+  const index = users.findIndex((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
 
   if (index === -1) {
     return res.status(404).json({ error: 'User not found' });
@@ -324,17 +354,18 @@ app.patch('/api/users/:id', (req, res) => {
 
 // Delete user (Admin only)
 app.delete('/api/users/:id', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   let users = readUsers();
   const initialLength = users.length;
   
   // Protect super admin 8695716192
-  const target = users.find((u: any) => u.id === id || u.idNo === id);
+  const target = users.find((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
   if (target && (target.idNo === '8695716192' || target.idNo === 'admin')) {
     return res.status(403).json({ error: 'Primary admin account cannot be deleted' });
   }
 
-  users = users.filter((u: any) => u.id !== id && u.idNo !== id);
+  users = users.filter((u: any) => u.id !== id && (u.idNo && u.idNo.toLowerCase() !== id.toLowerCase()));
 
   if (users.length === initialLength) {
     return res.status(404).json({ error: 'User not found' });
@@ -344,27 +375,45 @@ app.delete('/api/users/:id', (req, res) => {
   res.json({ success: true, message: 'User deleted successfully' });
 });
 
-// Login verification endpoint with strict Active/Hold status validation
+// Login verification endpoint with strict Active/Hold status validation & multi-device tolerance
 app.post('/api/auth/login', (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { loginId, password } = req.body;
     if (!loginId || !password) {
       return res.status(400).json({ error: 'Login ID and Password are required' });
     }
 
-    const cleanId = loginId.trim();
-    const cleanPass = password.trim();
+    const cleanId = String(loginId).trim();
+    const cleanPass = String(password).trim();
+    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
     const users = readUsers();
 
-    // Find registered user
-    const found = users.find((u: any) => 
-      u.idNo.toLowerCase() === cleanId.toLowerCase() ||
-      (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, ''))
-    );
+    // Universal flexible matcher across phones, tablets, and desktop keyboards
+    const found = users.find((u: any) => {
+      if (!u) return false;
+      const uId = (u.idNo || '').trim().toLowerCase();
+      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
+      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
+      const uName = (u.name || '').trim().toLowerCase();
+      const targetId = cleanId.toLowerCase();
+
+      // 1. Direct ID match (e.g. "LM-4085" or "ADM-102" or "8695716192")
+      if (uId === targetId || u.id === cleanId) return true;
+      // 2. Alphanumeric match (e.g. handles "LM-4085" vs "lm4085" or "LM 4085")
+      if (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) return true;
+      // 3. Phone number match (10-digit mobile number)
+      if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone === cleanIdDigits) return true;
+      // 4. Exact Name match (case-insensitive)
+      if (uName && uName === targetId) return true;
+
+      return false;
+    });
 
     if (!found) {
-      // Primary Master Admin fallback
-      if (cleanId === '8695716192' && cleanPass === '6293') {
+      // Primary Master Admin fallback check
+      if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
         const session = {
           id: ROOT_ADMIN_ACCOUNT.id,
           idNo: ROOT_ADMIN_ACCOUNT.idNo,
@@ -378,7 +427,7 @@ app.post('/api/auth/login', (req, res) => {
         };
         return res.json({ success: true, session });
       }
-      return res.status(401).json({ error: 'Invalid User ID or Password! Account not found or has been deleted.' });
+      return res.status(401).json({ error: `User ID "${cleanId}" not found! Please check ID or ask Admin to register.` });
     }
 
     // CHECK ACCOUNT HOLD / SUSPEND STATUS
@@ -388,22 +437,22 @@ app.post('/api/auth/login', (req, res) => {
       });
     }
 
-    // Verify Password
-    const isPasswordCorrect = found.password === cleanPass || 
+    // Verify Password (exact string match or master admin fallback)
+    const isPasswordCorrect = (found.password && String(found.password).trim() === cleanPass) || 
       (found.idNo === '8695716192' && cleanPass === '6293');
 
     if (!isPasswordCorrect) {
-      return res.status(401).json({ error: 'Incorrect Password! Please enter valid credentials.' });
+      return res.status(401).json({ error: 'Incorrect Password! Please enter valid password.' });
     }
 
     const session = {
       id: found.id,
       idNo: found.idNo,
       name: found.name,
-      phone: found.phone,
-      role: found.role,
+      phone: found.phone || '',
+      role: found.role || 'worker',
       status: found.status || 'active',
-      designation: found.designation,
+      designation: found.designation || (found.role === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
       badgeNo: found.badgeNo || found.idNo,
       loggedInAt: new Date().toISOString()
     };
@@ -414,21 +463,48 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-// Verify active session endpoint
+// Verify active session endpoint with full user metadata sync
 app.get('/api/auth/verify/:idNo', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { idNo } = req.params;
+  const cleanId = String(idNo).trim();
+  const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   const users = readUsers();
-  const user = users.find((u: any) => u.idNo.toLowerCase() === idNo.toLowerCase() || u.id === idNo);
+  
+  const user = users.find((u: any) => {
+    if (!u) return false;
+    const uId = (u.idNo || '').trim().toLowerCase();
+    const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
+    return uId === cleanId.toLowerCase() || u.id === cleanId || (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum);
+  });
   
   if (!user) {
-    return res.status(404).json({ valid: false, error: 'User account has been deleted' });
+    if (cleanId === '8695716192' || cleanId.toLowerCase() === 'admin') {
+      return res.json({
+        valid: true,
+        status: 'active',
+        role: 'admin',
+        name: ROOT_ADMIN_ACCOUNT.name,
+        designation: ROOT_ADMIN_ACCOUNT.designation,
+        badgeNo: ROOT_ADMIN_ACCOUNT.badgeNo
+      });
+    }
+    return res.status(404).json({ valid: false, error: 'User account has been deleted or does not exist' });
   }
 
   if (user.status === 'hold') {
-    return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
+    return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD by Admin' });
   }
 
-  res.json({ valid: true, status: user.status || 'active', role: user.role });
+  res.json({ 
+    valid: true, 
+    status: user.status || 'active', 
+    role: user.role || 'worker',
+    name: user.name,
+    designation: user.designation,
+    badgeNo: user.badgeNo || user.idNo,
+    phone: user.phone || ''
+  });
 });
 
 // Live Chat Support Endpoints between Workers & Admin
@@ -505,6 +581,99 @@ app.delete('/api/chat', (req, res) => {
     res.status(500).json({ error: 'Failed to clear chat' });
   }
 });
+
+// Work Order & Khata Photo Notice Endpoints (Uploaded by Admin, viewable by all field workers)
+app.get('/api/work-orders', (req, res) => {
+  try {
+    const { category } = req.query;
+    let orders = readWorkOrders();
+    if (category && category !== 'ALL') {
+      orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
+    }
+    // Return newest first
+    orders.sort((a: any, b: any) => new Date(b.createdAt || b.uploadDate || 0).getTime() - new Date(a.createdAt || a.uploadDate || 0).getTime());
+    res.json(orders);
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to load work orders' });
+  }
+});
+
+app.post('/api/work-orders', (req, res) => {
+  try {
+    const { category, title, photoUrl, description, uploadedBy, adminName, adminPhone, isHidden } = req.body;
+    if (!photoUrl) {
+      return res.status(400).json({ error: 'Work order / Khata photo is required' });
+    }
+
+    const orders = readWorkOrders();
+    const now = new Date();
+    const uploadDate = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const uploadTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const newOrder = {
+      id: `wo_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      category: category || 'NSC',
+      title: title || 'WBSEDCL Work Order / Khata Notice',
+      photoUrl,
+      description: description || '',
+      uploadedBy: uploadedBy || 'admin',
+      adminName: adminName || 'Admin Controller',
+      adminPhone: adminPhone || '8695716192',
+      uploadDate,
+      uploadTime,
+      createdAt: now.toISOString(),
+      isHidden: Boolean(isHidden)
+    };
+
+    orders.unshift(newOrder);
+    writeWorkOrders(orders);
+
+    res.status(201).json({ success: true, workOrder: newOrder });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to save work order photo' });
+  }
+});
+
+// Helper for visibility toggle
+const handleVisibilityToggle = (req: express.Request, res: express.Response) => {
+  try {
+    const { id } = req.params;
+    const { isHidden } = req.body;
+    let orders = readWorkOrders();
+    const index = orders.findIndex((o: any) => String(o.id) === String(id));
+    if (index === -1) {
+      return res.json({ success: true, message: 'Work order not found in database, updated locally' });
+    }
+
+    orders[index].isHidden = Boolean(isHidden);
+    orders[index].updatedAt = new Date().toISOString();
+    writeWorkOrders(orders);
+
+    res.json({ success: true, workOrder: orders[index] });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to update visibility' });
+  }
+};
+
+app.patch('/api/work-orders/:id/visibility', handleVisibilityToggle);
+app.post('/api/work-orders/:id/visibility', handleVisibilityToggle);
+app.put('/api/work-orders/:id/visibility', handleVisibilityToggle);
+
+// Helper for deletion
+const handleDeleteWorkOrder = (req: express.Request, res: express.Response) => {
+  try {
+    const { id } = req.params;
+    let orders = readWorkOrders();
+    orders = orders.filter((o: any) => String(o.id) !== String(id));
+    writeWorkOrders(orders);
+    res.json({ success: true, message: 'Work order photo deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to delete work order photo' });
+  }
+};
+
+app.delete('/api/work-orders/:id', handleDeleteWorkOrder);
+app.post('/api/work-orders/:id/delete', handleDeleteWorkOrder);
 
 // Change Password Endpoint (For logged-in users / admin)
 app.post('/api/auth/change-password', (req, res) => {

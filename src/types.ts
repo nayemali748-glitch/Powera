@@ -21,6 +21,10 @@ export interface PowerEntry {
   photoUrl?: string;
   photoBeforeUrl?: string;
   photoAfterUrl?: string;
+  workOrderPhoto?: string;
+  workOrderNoticeId?: string;
+  workOrderNoticeTitle?: string;
+  workOrderNoticeDate?: string;
   createdAt: string;
   updatedAt?: string;
 
@@ -102,7 +106,7 @@ export interface StatsResponse {
   };
 }
 
-export type ActiveTab = 'entry' | 'admin' | 'my-submissions';
+export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance';
 
 export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_reports' | null;
 
@@ -143,4 +147,19 @@ export interface ChatMessage {
   message: string;
   timestamp: string;
   status?: 'sent' | 'delivered' | 'read';
+}
+
+export interface WorkOrderNotice {
+  id: string;
+  category: CategoryType;
+  title: string;
+  photoUrl: string;
+  description?: string;
+  uploadedBy: string;
+  adminName: string;
+  adminPhone?: string;
+  uploadDate: string;
+  uploadTime: string;
+  createdAt: string;
+  isHidden?: boolean;
 }

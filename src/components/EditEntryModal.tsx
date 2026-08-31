@@ -182,15 +182,53 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
                   </div>
 
                   {isNsc && (
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-600 block">{t.applicationNo}</label>
-                      <input
-                        type="text"
-                        value={formData.applicationNo || ''}
-                        onChange={(e) => handleChange('applicationNo', e.target.value)}
-                        className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-purple-700 focus:bg-white"
-                      />
-                    </div>
+                    <>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block">{t.workOrderNo} (Work Order No)</label>
+                        <input
+                          type="text"
+                          value={formData.workOrderNo || ''}
+                          onChange={(e) => handleChange('workOrderNo', e.target.value)}
+                          className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-teal-700 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block">{t.workOrderDate} (Work Order Date)</label>
+                        <input
+                          type="date"
+                          value={formData.workOrderDate || ''}
+                          onChange={(e) => handleChange('workOrderDate', e.target.value)}
+                          className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block">{t.agencyName} (Agency Name)</label>
+                        <input
+                          type="text"
+                          value={formData.agencyName || ''}
+                          onChange={(e) => handleChange('agencyName', e.target.value)}
+                          className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block">{t.cccName} (CCC Name)</label>
+                        <input
+                          type="text"
+                          value={formData.cccName || ''}
+                          onChange={(e) => handleChange('cccName', e.target.value)}
+                          className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block">{t.applicationNo}</label>
+                        <input
+                          type="text"
+                          value={formData.applicationNo || ''}
+                          onChange={(e) => handleChange('applicationNo', e.target.value)}
+                          className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-purple-700 focus:bg-white"
+                        />
+                      </div>
+                    </>
                   )}
 
                   <div>

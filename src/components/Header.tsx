@@ -15,15 +15,16 @@ import {
   Menu, 
   CheckCircle2, 
   Home,
-  Globe
+  Globe,
+  BarChart3
 } from 'lucide-react';
-import { CornerOptionKey, UserSession } from '../types';
+import { CornerOptionKey, UserSession, ActiveTab } from '../types';
 import { Language, translations } from '../utils/translations';
 
 interface HeaderProps {
   isAdmin: boolean;
-  activeTab: 'entry' | 'admin' | 'my-submissions';
-  setActiveTab: (tab: 'entry' | 'admin' | 'my-submissions') => void;
+  activeTab: ActiveTab;
+  setActiveTab: (tab: ActiveTab) => void;
   workerName: string;
   setWorkerName: (name: string) => void;
   currentUser?: UserSession | null;
@@ -138,6 +139,19 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Home className="w-3.5 h-3.5 text-amber-500" />
             <span>Home</span>
+          </button>
+
+          <button
+            id="nav-tab-performance"
+            onClick={() => setActiveTab('performance')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'performance'
+                ? 'bg-blue-600 text-white shadow-xs font-bold'
+                : 'text-blue-700 hover:text-blue-900 hover:bg-blue-50'
+            }`}
+          >
+            <BarChart3 className={`w-3.5 h-3.5 ${activeTab === 'performance' ? 'text-white' : 'text-blue-600'}`} />
+            <span>Dashboard</span>
           </button>
 
           <button
