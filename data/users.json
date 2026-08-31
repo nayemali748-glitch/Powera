@@ -1,0 +1,58 @@
+[
+  {
+    "id": "adm_8695716192",
+    "idNo": "8695716192",
+    "password": "6293",
+    "name": "Engr. N. Ali (Admin Controller)",
+    "phone": "8695716192",
+    "role": "admin",
+    "status": "active",
+    "designation": "Assistant Engineer / Divisional Admin (WBSEDCL)",
+    "badgeNo": "ADM-8695",
+    "securityQuestion": "Your Primary Power Substation?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  },
+  {
+    "id": "worker_01",
+    "idNo": "worker",
+    "password": "1234",
+    "name": "R. Ghosh (Senior Lineman)",
+    "phone": "9830012345",
+    "role": "worker",
+    "status": "active",
+    "designation": "সিনিয়র লাইনম্যান (WBSEDCL CCC)",
+    "badgeNo": "LM-101",
+    "securityQuestion": "আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  },
+  {
+    "id": "worker_02",
+    "idNo": "worker2",
+    "password": "1234",
+    "name": "S. Karmakar (Technical Assistant)",
+    "phone": "9830054321",
+    "role": "worker",
+    "status": "active",
+    "designation": "টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)",
+    "badgeNo": "LM-102",
+    "securityQuestion": "আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  },
+  {
+    "id": "worker_03",
+    "idNo": "worker3",
+    "password": "1234",
+    "name": "B. Mondal (Meter Reader)",
+    "phone": "9830078901",
+    "role": "worker",
+    "status": "active",
+    "designation": "মিটার রিডার / টেকনিশিয়ান (WBSEDCL)",
+    "badgeNo": "LM-103",
+    "securityQuestion": "আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  }
+]

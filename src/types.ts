@@ -116,6 +116,7 @@ export interface UserSession {
   name: string;
   phone?: string;
   role: 'admin' | 'worker' | 'supervisor';
+  status?: 'active' | 'hold';
   designation: string;
   badgeNo?: string;
   loggedInAt: string;
