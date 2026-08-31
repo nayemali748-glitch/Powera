@@ -30,7 +30,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Standard WBSEDCL Accounts (Master Admin + Official Field Workers)
+// Helper to convert Bengali digits to standard English digits
+function convertBengaliDigits(str: string): string {
+  if (!str) return '';
+  const bnToEn: Record<string, string> = {
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+    '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
+  };
+  return str.replace(/[০-৯]/g, (d) => bnToEn[d] || d);
+}
+
+// Standard WBSEDCL Accounts (Master Admin only - No example worker IDs)
 const DEFAULT_WBSEDCL_ACCOUNTS = [
   {
     id: 'adm_8695716192',
@@ -45,54 +55,12 @@ const DEFAULT_WBSEDCL_ACCOUNTS = [
     securityQuestion: 'Your Primary Power Substation?',
     securityAnswer: 'Vidyut Bhavan',
     createdAt: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'worker_01',
-    idNo: 'worker',
-    password: '1234',
-    name: 'R. Ghosh (Senior Lineman)',
-    phone: '9830012345',
-    role: 'worker',
-    status: 'active',
-    designation: 'সিনিয়র লাইনম্যান (WBSEDCL CCC)',
-    badgeNo: 'LM-101',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'worker_02',
-    idNo: 'worker2',
-    password: '1234',
-    name: 'S. Karmakar (Technical Assistant)',
-    phone: '9830054321',
-    role: 'worker',
-    status: 'active',
-    designation: 'টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)',
-    badgeNo: 'LM-102',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'worker_03',
-    idNo: 'worker3',
-    password: '1234',
-    name: 'B. Mondal (Meter Reader)',
-    phone: '9830078901',
-    role: 'worker',
-    status: 'active',
-    designation: 'মিটার রিডার / টেকনিশিয়ান (WBSEDCL)',
-    badgeNo: 'LM-103',
-    securityQuestion: 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: '2026-01-01T00:00:00.000Z'
   }
 ];
 
 const ROOT_ADMIN_ACCOUNT = DEFAULT_WBSEDCL_ACCOUNTS[0];
 
-// Helper to read users (Ensures default Admin & Worker accounts exist + custom created accounts)
+// Helper to read users (Ensures default Admin exists + custom created accounts)
 function readUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) {
@@ -105,33 +73,31 @@ function readUsers() {
       fs.writeFileSync(USERS_FILE, JSON.stringify(DEFAULT_WBSEDCL_ACCOUNTS, null, 2), 'utf-8');
       return DEFAULT_WBSEDCL_ACCOUNTS;
     }
+
+    // Filter out old mock worker example IDs if any (worker_01, worker_02, worker_03)
+    parsed = parsed.filter((u: any) => {
+      if (!u) return false;
+      const uId = String(u.idNo || '').toLowerCase();
+      // Remove mock example IDs
+      if (uId === 'worker' || uId === 'worker2' || uId === 'worker3' || u.id === 'worker_01' || u.id === 'worker_02' || u.id === 'worker_03') {
+        return false;
+      }
+      return true;
+    });
+
     // Ensure all users have status property (default 'active')
     parsed = parsed.map((u: any) => ({
       ...u,
       status: u.status || 'active'
     }));
 
-    // Ensure default core accounts (Admin + Workers) are always available
-    let updated = false;
-    for (const defAcc of DEFAULT_WBSEDCL_ACCOUNTS) {
-      const idx = parsed.findIndex(u => 
-        (u.idNo && u.idNo.toLowerCase() === defAcc.idNo.toLowerCase()) || 
-        (u.id && u.id === defAcc.id)
-      );
-      if (idx === -1) {
-        parsed.push(defAcc);
-        updated = true;
-      } else {
-        // Ensure active
-        if (defAcc.role === 'admin') {
-          parsed[idx].status = 'active';
-        }
-      }
-    }
-
-    if (updated) {
+    // Ensure Admin account is present
+    const hasAdmin = parsed.some((u: any) => u.idNo === '8695716192' || u.idNo === 'admin' || u.id === ROOT_ADMIN_ACCOUNT.id);
+    if (!hasAdmin) {
+      parsed.unshift(ROOT_ADMIN_ACCOUNT);
       fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
     }
+
     return parsed;
   } catch (err) {
     console.error('Error reading users:', err);
@@ -441,19 +407,24 @@ app.post('/api/auth/login', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { loginId, password } = req.body;
     if (!loginId || !password) {
-      return res.status(400).json({ error: 'Login ID and Password are required' });
+      return res.status(400).json({ error: 'User ID এবং Password প্রয়োজন।' });
     }
 
-    const cleanId = String(loginId).trim();
-    const cleanPass = String(password).trim();
+    const rawId = String(loginId).trim();
+    const rawPass = String(password).trim();
+    
+    // Normalize Bengali digits if typed in Bengali keyboard
+    const cleanId = convertBengaliDigits(rawId);
+    const cleanPass = convertBengaliDigits(rawPass);
+
     const cleanIdLower = cleanId.toLowerCase();
     const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
     const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
     const users = readUsers();
 
-    // 1. Direct Quick Alias Check for Master Admin
+    // 1. Direct Master Admin Check
     const isAdminAlias = cleanIdLower === 'admin' || cleanIdAlphaNum === '8695716192' || cleanIdAlphaNum === 'adm8695' || cleanIdLower === 'nayem';
-    const isAdminPass = cleanPass === '6293' || cleanPass === 'admin' || cleanPass === 'admin123' || cleanPass === '1234';
+    const isAdminPass = cleanPass === '6293' || rawPass === '6293' || cleanPass === 'admin' || cleanPass === '1234';
     if (isAdminAlias && isAdminPass) {
       const session = {
         id: ROOT_ADMIN_ACCOUNT.id,
@@ -469,67 +440,18 @@ app.post('/api/auth/login', (req, res) => {
       return res.json({ success: true, session });
     }
 
-    // 2. Direct Quick Alias Check for Official Workers
-    if ((cleanIdLower === 'worker' || cleanIdLower === 'worker1' || cleanIdAlphaNum === 'worker1' || cleanIdAlphaNum === 'lm101' || cleanIdLower === 'lineman') && (cleanPass === '1234' || cleanPass === 'worker')) {
-      const w1 = users.find((u: any) => u.idNo === 'worker' || u.idNo === 'LM-101') || DEFAULT_WBSEDCL_ACCOUNTS[1];
-      const session = {
-        id: w1.id,
-        idNo: w1.idNo,
-        name: w1.name,
-        phone: w1.phone || '9830012345',
-        role: 'worker',
-        status: w1.status || 'active',
-        designation: w1.designation || 'সিনিয়র লাইনম্যান (WBSEDCL CCC)',
-        badgeNo: w1.badgeNo || 'LM-101',
-        loggedInAt: new Date().toISOString()
-      };
-      return res.json({ success: true, session });
-    }
-
-    if ((cleanIdLower === 'worker2' || cleanIdAlphaNum === 'worker2' || cleanIdAlphaNum === 'lm102') && (cleanPass === '1234' || cleanPass === 'worker')) {
-      const w2 = users.find((u: any) => u.idNo === 'worker2' || u.idNo === 'LM-102') || DEFAULT_WBSEDCL_ACCOUNTS[2];
-      const session = {
-        id: w2.id,
-        idNo: w2.idNo,
-        name: w2.name,
-        phone: w2.phone || '9830054321',
-        role: 'worker',
-        status: w2.status || 'active',
-        designation: w2.designation || 'টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)',
-        badgeNo: w2.badgeNo || 'LM-102',
-        loggedInAt: new Date().toISOString()
-      };
-      return res.json({ success: true, session });
-    }
-
-    if ((cleanIdLower === 'worker3' || cleanIdAlphaNum === 'worker3' || cleanIdAlphaNum === 'lm103') && (cleanPass === '1234' || cleanPass === 'worker')) {
-      const w3 = users.find((u: any) => u.idNo === 'worker3' || u.idNo === 'LM-103') || DEFAULT_WBSEDCL_ACCOUNTS[3];
-      const session = {
-        id: w3.id,
-        idNo: w3.idNo,
-        name: w3.name,
-        phone: w3.phone || '9830078901',
-        role: 'worker',
-        status: w3.status || 'active',
-        designation: w3.designation || 'মিটার রিডার / টেকনিশিয়ান (WBSEDCL)',
-        badgeNo: w3.badgeNo || 'LM-103',
-        loggedInAt: new Date().toISOString()
-      };
-      return res.json({ success: true, session });
-    }
-
-    // 3. Search in all registered users (database + memory)
+    // 2. Search in all registered users (database + memory)
     const found = users.find((u: any) => {
       if (!u) return false;
-      const uId = (u.idNo || '').trim().toLowerCase();
+      const uId = convertBengaliDigits((u.idNo || '').trim()).toLowerCase();
       const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
-      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
-      const uBadge = (u.badgeNo || '').trim().toLowerCase();
+      const uPhone = convertBengaliDigits((u.phone || '')).replace(/[^0-9]/g, '');
+      const uBadge = convertBengaliDigits((u.badgeNo || '').trim()).toLowerCase();
       const uName = (u.name || '').trim().toLowerCase();
 
       // Direct ID match
-      if (uId === cleanIdLower || u.id === cleanId) return true;
-      // Alphanumeric match (e.g. LM-4085 vs lm4085)
+      if (uId === cleanIdLower || u.id === cleanId || uId === rawId.toLowerCase()) return true;
+      // Alphanumeric match (e.g. LM-9851 vs lm9851)
       if (cleanIdAlphaNum && (uIdAlphaNum === cleanIdAlphaNum || uBadge.replace(/[^a-zA-Z0-9]/g, '') === cleanIdAlphaNum)) return true;
       // Phone number match (10-digit mobile number)
       if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone === cleanIdDigits) return true;
@@ -541,25 +463,28 @@ app.post('/api/auth/login', (req, res) => {
 
     if (!found) {
       return res.status(401).json({ 
-        error: `User ID "${cleanId}" খুঁজে পাওয়া যায়নি! সঠিক আইডি লিখুন বা এডমিন আইডি (8695716192) অথবা কর্মী আইডি (worker) ব্যবহার করুন।` 
+        error: 'User ID খুঁজে পাওয়া যায়নি! সঠিক User ID ও পাসওয়ার্ড দিয়ে চেষ্টা করুন।' 
       });
     }
 
     // CHECK ACCOUNT HOLD / SUSPEND STATUS
     if (found.status === 'hold') {
       return res.status(403).json({ 
-        error: `Account ID "${found.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Please contact Admin (8695716192) or email powerof2026@gmail.com for account activation.` 
+        error: `Account ID "${found.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Please contact Admin.` 
       });
     }
 
     // Verify Password (exact string match or master password override)
+    const storedPass = String(found.password || '').trim();
     const isPasswordCorrect = 
-      (found.password && String(found.password).trim() === cleanPass) || 
+      storedPass === cleanPass || 
+      storedPass === rawPass ||
+      convertBengaliDigits(storedPass) === cleanPass ||
       (found.idNo === '8695716192' && (cleanPass === '6293' || cleanPass === '1234')) ||
       (cleanPass === '6293'); // Admin master password override
 
     if (!isPasswordCorrect) {
-      return res.status(401).json({ error: 'ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড দিন অথবা পাসওয়ার্ড ভুলে গেলে নিচে রিসেট অপশন ব্যবহার করুন।' });
+      return res.status(401).json({ error: 'ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড দিয়ে পুনরায় চেষ্টা করুন।' });
     }
 
     const session = {
@@ -577,6 +502,60 @@ app.post('/api/auth/login', (req, res) => {
     res.json({ success: true, session });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Login authentication failed' });
+  }
+});
+
+// Forgot / Reset Password endpoint
+app.post('/api/auth/reset-password', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const { idNo, phone, newPassword } = req.body;
+
+    if (!idNo || !newPassword) {
+      return res.status(400).json({ error: 'User ID এবং নতুন পাসওয়ার্ড প্রদান করা আবশ্যক।' });
+    }
+
+    const cleanId = String(idNo).trim().toLowerCase();
+    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '');
+    const cleanPhone = phone ? String(phone).replace(/[^0-9]/g, '') : '';
+    const cleanNewPass = String(newPassword).trim();
+
+    if (cleanNewPass.length < 4) {
+      return res.status(400).json({ error: 'পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।' });
+    }
+
+    const users = readUsers();
+    const index = users.findIndex((u: any) => {
+      if (!u) return false;
+      const uId = (u.idNo || '').trim().toLowerCase();
+      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
+      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
+
+      if (uId === cleanId || u.id === idNo) return true;
+      if (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) return true;
+      if (cleanPhone && cleanPhone.length >= 10 && uPhone === cleanPhone) return true;
+      return false;
+    });
+
+    if (index === -1) {
+      return res.status(404).json({ error: 'এই User ID টি সিস্টেমে পাওয়া যায়নি। সঠিক ID দিন বা এডমিনের সাথে যোগাযোগ করুন।' });
+    }
+
+    // If phone is provided, verify phone matches if user has phone
+    if (cleanPhone && users[index].phone) {
+      const userPhone = users[index].phone.replace(/[^0-9]/g, '');
+      if (userPhone && !userPhone.includes(cleanPhone) && !cleanPhone.includes(userPhone)) {
+        return res.status(400).json({ error: 'প্রদত্ত মোবাইল নম্বরটি এই ইউজার আইডির সাথে মিলছে না।' });
+      }
+    }
+
+    users[index].password = cleanNewPass;
+    users[index].updatedAt = new Date().toISOString();
+    writeUsers(users);
+
+    res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে। এখন নতুন পাসওয়ার্ড দিয়ে লগইন করুন।' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে।' });
   }
 });
 
