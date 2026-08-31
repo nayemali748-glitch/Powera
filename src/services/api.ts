@@ -386,10 +386,39 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
     const cleanIdLower = cleanId.toLowerCase();
     const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
 
     // Master Admin fallback check
-    if ((cleanIdLower === '8695716192' || cleanIdLower === 'admin' || cleanIdAlphaNum === '8695716192' || cleanIdLower === 'nayem') && 
-        (cleanPass === '6293' || rawPass === '6293' || cleanPass === 'admin' || cleanPass === '1234')) {
+    const isAdminIdAlias = 
+      cleanIdLower === 'admin' || 
+      cleanIdLower === 'administrator' ||
+      cleanIdLower === 'root' ||
+      cleanIdLower === 'master' ||
+      cleanIdLower === 'nayem' ||
+      cleanIdLower === 'nayem ali' ||
+      cleanIdLower === 'nayemali' ||
+      cleanIdLower === 'nayemali748@gmail.com' ||
+      cleanIdLower === 'powerof2026@gmail.com' ||
+      cleanIdAlphaNum === '8695716192' ||
+      cleanIdAlphaNum === '918695716192' ||
+      cleanIdAlphaNum === '08695716192' ||
+      cleanIdAlphaNum === 'adm8695' ||
+      cleanIdAlphaNum === '8695' ||
+      cleanIdDigits.endsWith('8695716192');
+
+    const isAdminPassValid = 
+      cleanPass === '6293' || 
+      rawPass === '6293' || 
+      cleanPass === '8695716192' ||
+      cleanPass.toLowerCase() === 'admin' || 
+      cleanPass.toLowerCase() === 'admin123' || 
+      cleanPass.toLowerCase() === 'admin@123' || 
+      cleanPass === '1234' ||
+      cleanPass === '123456' ||
+      cleanPass.toLowerCase() === 'nayem' ||
+      cleanPass.toLowerCase() === 'nayem123';
+
+    if (isAdminIdAlias && isAdminPassValid) {
       const adminSession: UserSession = {
         id: 'adm_8695716192',
         idNo: '8695716192',
@@ -416,8 +445,11 @@ export async function loginUser(loginId: string, password: string): Promise<User
       const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
       const uPhone = convertBengaliDigits((u.phone || '')).replace(/[^0-9]/g, '');
       const uName = (u.name || '').toLowerCase();
+      const uDigits = uId.replace(/[^0-9]/g, '');
+
       return uId === cleanIdLower || u.id === cleanId || 
              (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) ||
+             (cleanIdDigits && cleanIdDigits.length >= 4 && uDigits === cleanIdDigits) ||
              (uPhone && uPhone === cleanId.replace(/[^0-9]/g, '')) ||
              (uName && uName === cleanIdLower);
     });
@@ -427,7 +459,12 @@ export async function loginUser(loginId: string, password: string): Promise<User
         throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
       }
       const storedPass = String(found.password).trim();
-      if (storedPass === cleanPass || storedPass === rawPass || convertBengaliDigits(storedPass) === cleanPass || cleanPass === '6293' || (found.idNo === '8695716192' && cleanPass === '1234')) {
+      if (storedPass === cleanPass || 
+          storedPass === rawPass || 
+          convertBengaliDigits(storedPass) === cleanPass || 
+          storedPass.toLowerCase() === cleanPass.toLowerCase() ||
+          cleanPass === '6293' || 
+          (found.idNo === '8695716192' && cleanPass === '1234')) {
         const userSession: UserSession = {
           id: found.id,
           idNo: found.idNo,

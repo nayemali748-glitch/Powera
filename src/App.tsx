@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import appLogo from './assets/images/power_round_logo_1787860440979.jpg';
 import { Header } from './components/Header';
 import { CategorySelector } from './components/CategorySelector';
@@ -55,7 +55,9 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed && parsed.idNo) return parsed;
+        if (parsed && typeof parsed === 'object' && parsed.idNo) {
+          return parsed;
+        }
       } catch (e) {
         // ignore
       }
@@ -95,37 +97,165 @@ export default function App() {
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
 
+  const currentUserRef = useRef<UserSession | null>(currentUser);
+  currentUserRef.current = currentUser;
+
   const handleSelectLanguage = (lang: Language) => {
     setCurrentLanguage(lang);
     localStorage.setItem('power_app_lang', lang);
   };
 
-  // Cross-device session verification and status check
+  const handleUserLogout = useCallback(() => {
+    localStorage.removeItem('power_user_session');
+    localStorage.removeItem('power_is_admin');
+    localStorage.removeItem('power_worker_name');
+    setCurrentUser(null);
+    setIsAdmin(false);
+    setWorkerName('');
+    setActiveTab('entry');
+  }, []);
+
+  const handleUserLoginSuccess = useCallback((session: UserSession) => {
+    setCurrentUser(session);
+    setWorkerName(session.name);
+    try {
+      localStorage.setItem('power_user_session', JSON.stringify(session));
+      localStorage.setItem('power_worker_name', session.name);
+      const userIsAdmin = session.role === 'admin' || session.idNo === '8695716192';
+      setIsAdmin(userIsAdmin);
+      localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
+    } catch (e) {
+      console.warn('Failed to save session to local storage:', e);
+    }
+  }, []);
+
+  // Robust session verification against localStorage metadata and server synchronization
   useEffect(() => {
-    if (!currentUser?.idNo) return;
+    // 1. Validate and reconcile local state against localStorage on mount
+    const saved = localStorage.getItem('power_user_session');
+    let activeSession: UserSession | null = null;
+    
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && parsed.idNo) {
+          activeSession = parsed;
+          
+          // Reconcile metadata in localStorage and React state to avoid any timing drops
+          const shouldBeAdmin = parsed.role === 'admin' || parsed.idNo === '8695716192';
+          const storedIsAdmin = localStorage.getItem('power_is_admin') === 'true';
+          const storedWorkerName = localStorage.getItem('power_worker_name');
+
+          if (shouldBeAdmin !== storedIsAdmin) {
+            localStorage.setItem('power_is_admin', shouldBeAdmin ? 'true' : 'false');
+            setIsAdmin(shouldBeAdmin);
+          }
+          if (parsed.name && parsed.name !== storedWorkerName) {
+            localStorage.setItem('power_worker_name', parsed.name);
+            setWorkerName(parsed.name);
+          }
+          if (!currentUserRef.current || currentUserRef.current.idNo !== parsed.idNo) {
+            setCurrentUser(parsed);
+          }
+        }
+      } catch (e) {
+        console.warn('Session parse error from localStorage:', e);
+      }
+    }
+
+    const sessionToVerify = activeSession || currentUserRef.current;
+    if (!sessionToVerify || !sessionToVerify.idNo) return;
     
     // Master admin account bypass
-    if (currentUser.idNo === '8695716192') return;
+    if (sessionToVerify.idNo === '8695716192') return;
 
-    verifyUserSession(currentUser.idNo).then((result) => {
-      if (!result.valid) {
-        alert(result.error || 'আপনার অ্যাকাউন্টটি মুছে ফেলা হয়েছে বা আর সক্রিয় নেই।');
-        handleUserLogout();
-      } else if (result.status === 'hold') {
-        alert('আপনার অ্যাকাউন্টটি এডমিন কর্তৃক সাময়িকভাবে স্থগিত (ON HOLD) করা হয়েছে।');
-        handleUserLogout();
-      } else if (result.role && result.role !== currentUser.role) {
-        const updatedSession = { ...currentUser, role: result.role as 'admin' | 'worker' };
-        setCurrentUser(updatedSession);
-        localStorage.setItem('power_user_session', JSON.stringify(updatedSession));
-        const userIsAdmin = result.role === 'admin';
-        setIsAdmin(userIsAdmin);
-        localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
+    const performVerification = async () => {
+      const current = currentUserRef.current;
+      if (!current?.idNo || current.idNo === '8695716192') return;
+
+      try {
+        const result = await verifyUserSession(current.idNo);
+        if (!result.valid) {
+          alert(result.error || 'আপনার অ্যাকাউন্টটি মুছে ফেলা হয়েছে বা আর সক্রিয় নেই।');
+          handleUserLogout();
+          return;
+        }
+        
+        if (result.status === 'hold') {
+          alert('আপনার অ্যাকাউন্টটি এডমিন কর্তৃক সাময়িকভাবে স্থগিত (ON HOLD) করা হয়েছে।');
+          handleUserLogout();
+          return;
+        }
+
+        // Sync metadata without discarding persistent session
+        let hasChanges = false;
+        const updatedSession = { ...current };
+
+        if (result.role && result.role !== current.role) {
+          updatedSession.role = result.role as 'admin' | 'worker';
+          hasChanges = true;
+        }
+        if (result.name && result.name !== current.name) {
+          updatedSession.name = result.name;
+          setWorkerName(result.name);
+          localStorage.setItem('power_worker_name', result.name);
+          hasChanges = true;
+        }
+        if (result.designation && result.designation !== current.designation) {
+          updatedSession.designation = result.designation;
+          hasChanges = true;
+        }
+        if (result.badgeNo && result.badgeNo !== current.badgeNo) {
+          updatedSession.badgeNo = result.badgeNo;
+          hasChanges = true;
+        }
+
+        if (hasChanges) {
+          setCurrentUser(updatedSession);
+          localStorage.setItem('power_user_session', JSON.stringify(updatedSession));
+          const userIsAdmin = updatedSession.role === 'admin';
+          setIsAdmin(userIsAdmin);
+          localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
+        }
+      } catch (err) {
+        // Retain persistent session if backend is slow/offline, preventing premature logout
+        console.warn('Session verification fallback (offline/cached mode):', err);
       }
-    }).catch((err) => {
-      console.warn('Session verification fallback:', err);
-    });
-  }, [currentUser?.idNo]);
+    };
+
+    // Initial check on load
+    performVerification();
+
+    // Re-verify on focus and periodically
+    const interval = setInterval(performVerification, 30000);
+    window.addEventListener('focus', performVerification);
+
+    // Cross-tab synchronization via Storage event
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'power_user_session') {
+        if (!e.newValue) {
+          handleUserLogout();
+        } else {
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (parsed && parsed.idNo) {
+              setCurrentUser(parsed);
+              setWorkerName(parsed.name || '');
+              const userIsAdmin = parsed.role === 'admin' || parsed.idNo === '8695716192';
+              setIsAdmin(userIsAdmin);
+            }
+          } catch {}
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', performVerification);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [handleUserLogout]);
 
   // Capture Android/PWA install prompt
   useEffect(() => {
@@ -209,30 +339,6 @@ export default function App() {
   const handleAdminLogout = () => {
     setIsAdmin(false);
     localStorage.removeItem('power_is_admin');
-    setActiveTab('entry');
-  };
-
-  const handleUserLoginSuccess = (session: UserSession) => {
-    setCurrentUser(session);
-    setWorkerName(session.name);
-    try {
-      localStorage.setItem('power_user_session', JSON.stringify(session));
-      localStorage.setItem('power_worker_name', session.name);
-      const userIsAdmin = session.role === 'admin' || session.idNo === '8695716192';
-      setIsAdmin(userIsAdmin);
-      localStorage.setItem('power_is_admin', userIsAdmin ? 'true' : 'false');
-    } catch (e) {
-      console.warn('Failed to save session to local storage:', e);
-    }
-  };
-
-  const handleUserLogout = () => {
-    localStorage.removeItem('power_user_session');
-    localStorage.removeItem('power_is_admin');
-    localStorage.removeItem('power_worker_name');
-    setCurrentUser(null);
-    setIsAdmin(false);
-    setWorkerName('');
     setActiveTab('entry');
   };
 
