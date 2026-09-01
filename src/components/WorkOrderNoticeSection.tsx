@@ -86,9 +86,9 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     })()
   );
 
-  const loadNotices = async () => {
+  const loadNotices = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await fetchWorkOrders(category);
       setNotices(data);
       // Auto select latest visible notice if not yet selected and onSelectNotice provided
@@ -99,15 +99,31 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     } catch (err) {
       console.error('Failed to load work orders:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadNotices();
-    const interval = setInterval(loadNotices, 8000);
-    return () => clearInterval(interval);
-  }, [category]);
+    loadNotices(false);
+    // Real-time synchronization every 3 seconds so workers immediately see newly uploaded photos
+    const interval = setInterval(() => {
+      loadNotices(true);
+    }, 3000);
+
+    const onFocus = () => loadNotices(true);
+    const onVisibilityChange = () => {
+      if (!document.hidden) loadNotices(true);
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [category, isAdmin]);
 
   // Compress high-res camera photos into lightweight, crystal-clear Web-ready images
   const compressImageFile = (file: File): Promise<string> => {

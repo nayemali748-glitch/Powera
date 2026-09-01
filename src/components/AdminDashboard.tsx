@@ -29,12 +29,16 @@ import {
   Edit3,
   Globe,
   FileText,
-  Camera
+  Camera,
+  FileImage,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
 import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
+import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
 import { Language, translations } from '../utils/translations';
 
 interface AdminDashboardProps {
@@ -64,6 +68,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isUserModalOpen, setIsUserModalOpen] = useState<boolean>(false);
   const [userModalTab, setUserModalTab] = useState<'create' | 'list' | 'change-password'>('create');
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+  const [showWorkOrdersManager, setShowWorkOrdersManager] = useState<boolean>(false);
 
   // Category-specific Excel/CSV Export handler
   const handleExportCategoryExcel = (targetCategory: string = selectedCategory) => {
@@ -632,6 +637,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             <button
+              id="admin-work-orders-toggle-btn"
+              onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
+              className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer ${
+                showWorkOrdersManager 
+                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400' 
+                  : 'bg-amber-600 hover:bg-amber-700 text-white'
+              }`}
+              title="Upload and manage NSC Work Orders and Khata Slips for field workers"
+            >
+              <FileImage className="w-4 h-4 text-amber-200" />
+              <span>NSC Work Order & Khata Photo ({showWorkOrdersManager ? 'Hide' : 'Manage'})</span>
+            </button>
+
+            <button
               id="admin-manage-users-btn"
               onClick={() => {
                 setUserModalTab('create');
@@ -887,6 +906,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ADMIN WORK ORDER / KHATA PHOTO MANAGEMENT SECTION */}
+      {showWorkOrdersManager && (
+        <div className="bg-slate-900/5 p-4 sm:p-6 rounded-2xl border border-amber-300 shadow-sm animate-in fade-in space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 bg-amber-500 text-slate-950 rounded-lg">
+                <FileImage className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {lang === 'bn' ? '⚡ NSC ওয়ার্ক অর্ডার ও খাতার ফটো ম্যানেজমেন্ট (Admin Upload & Control)' : '⚡ NSC Work Order & Khata Photo Management'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {lang === 'bn' ? 'এখানে আপলোড করা ছবি ফিল্ড কর্মীরা NSC এন্ট্রি করার সময় সঙ্গে সঙ্গে দেখতে পাবে' : 'Photos uploaded here will be instantly visible to field workers during NSC entries'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowWorkOrdersManager(false)}
+              className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+              title="Close Panel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <WorkOrderNoticeSection
+            category="NSC"
+            currentUser={{
+              idNo: '8695716192',
+              phone: '8695716192',
+              name: 'Admin Controller',
+              role: 'admin',
+              status: 'active'
+            }}
+            lang={lang}
+            isAdmin={true}
+          />
+        </div>
+      )}
 
       {/* Filter and Search Controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">

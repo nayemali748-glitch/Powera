@@ -46,8 +46,15 @@ export async function fetchEntries(filters?: {
     if (filters?.category && filters.category !== 'ALL') params.append('category', filters.category);
     if (filters?.status && filters.status !== 'ALL') params.append('status', filters.status);
     if (filters?.search) params.append('search', filters.search);
+    params.append('_t', Date.now().toString());
 
-    const res = await fetch(`${API_BASE}/entries?${params.toString()}`);
+    const res = await fetch(`${API_BASE}/entries?${params.toString()}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
+    });
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: PowerEntry[] = await res.json();
     
@@ -83,26 +90,41 @@ export async function createEntry(entryData: Partial<PowerEntry>): Promise<Power
   try {
     const res = await fetch(`${API_BASE}/entries`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
       body: JSON.stringify(entryData),
     });
     if (!res.ok) throw new Error('Failed to submit entry');
     const result = await res.json();
-    return result.entry;
+    const savedEntry: PowerEntry = result.entry;
+
+    // Update local cache with new saved entry
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
+      const updatedList = [savedEntry, ...list.filter(e => e.id !== savedEntry.id)];
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 100)));
+    } catch {}
+
+    return savedEntry;
   } catch (error) {
-    console.warn('API submit error, saving locally:', error);
+    console.warn('API submit error, saving locally as fallback:', error);
     const fallbackEntry: PowerEntry = {
       ...entryData as any,
       id: entryData.id || `PWR-${Date.now().toString().slice(-6)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: entryData.date || new Date().toISOString(),
       status: entryData.status || 'Pending',
     };
     
     // Save to local cache
-    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
-    list.unshift(fallbackEntry);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
+      list.unshift(fallbackEntry);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list.slice(0, 100)));
+    } catch {}
     return fallbackEntry;
   }
 }
@@ -217,6 +239,8 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   const cleanPass = (userData.password || '').toString().trim();
   const cleanName = (userData.name || cleanId || 'কর্মী').toString().trim();
 
+  let createdOrUpdatedUser: UserAccount | null = null;
+
   try {
     const res = await fetch(`${API_BASE}/users`, {
       method: 'POST',
@@ -231,42 +255,58 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
         name: cleanName
       }),
     });
-    if (!res.ok) {
+
+    if (res.ok) {
+      const data = await res.json();
+      createdOrUpdatedUser = data.user;
+    } else {
       const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to create user on server');
+      console.warn('Server create user failed, trying fallback:', errJson);
+      // If server returned specific validation error
+      if (errJson.error && !errJson.error.includes('Failed to create')) {
+        throw new Error(errJson.error);
+      }
     }
-    const data = await res.json();
-    // Update local cache
-    try {
-      const all = await fetchUsers();
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(all));
-    } catch {}
-    return data.user;
   } catch (err: any) {
-    if (err.message && (err.message.includes('already exists') || err.message.includes('required') || err.message.includes('server'))) {
+    if (err.message && (err.message.includes('required') || err.message.includes('already exists'))) {
       throw err;
     }
-    console.warn('Backend create user failed, offline local fallback:', err);
+    console.warn('Backend create user error, using local fallback:', err);
+  }
+
+  // If server didn't return user, create or update in local cache
+  if (!createdOrUpdatedUser) {
     const newUser: UserAccount = {
-      id: `${userData.role || 'user'}_${Date.now()}`,
+      id: `${userData.role || 'user'}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       idNo: cleanId || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
       password: cleanPass || '1234',
       name: cleanName,
       phone: userData.phone || '',
       role: userData.role || 'worker',
-      designation: userData.designation || 'লাইনম্যান (WBSEDCL)',
+      designation: userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
       badgeNo: userData.badgeNo || cleanId,
       status: userData.status || 'active',
       securityQuestion: userData.securityQuestion || 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
       securityAnswer: userData.securityAnswer || 'Vidyut Bhavan',
       createdAt: new Date().toISOString()
     };
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    const list: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
-    list.unshift(newUser);
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-    return newUser;
+    createdOrUpdatedUser = newUser;
   }
+
+  // Update local storage cache
+  try {
+    const cached = localStorage.getItem(USERS_STORAGE_KEY);
+    let list: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
+    const existingIndex = list.findIndex(u => u && (u.id === createdOrUpdatedUser!.id || (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase())));
+    if (existingIndex !== -1) {
+      list[existingIndex] = { ...list[existingIndex], ...createdOrUpdatedUser };
+    } else {
+      list.unshift(createdOrUpdatedUser);
+    }
+    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
+  } catch {}
+
+  return createdOrUpdatedUser;
 }
 
 export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
@@ -590,11 +630,19 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
   try {
     const params = new URLSearchParams();
     if (category && category !== 'ALL') params.append('category', category);
-    const res = await fetch(`${API_BASE}/work-orders?${params.toString()}`);
+    params.append('_t', Date.now().toString());
+
+    const res = await fetch(`${API_BASE}/work-orders?${params.toString()}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
+    });
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: WorkOrderNotice[] = await res.json();
     try {
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(data.slice(0, 20)));
     } catch {}
     return data;
   } catch (error) {
@@ -624,7 +672,10 @@ export async function uploadWorkOrder(payload: {
   try {
     const res = await fetch(`${API_BASE}/work-orders`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -632,8 +683,16 @@ export async function uploadWorkOrder(payload: {
       throw new Error(errJson.error || 'Failed to upload work order photo');
     }
     const data = await res.json();
-    return data.workOrder;
+    const savedOrder: WorkOrderNotice = data.workOrder;
+    try {
+      const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+      const list: WorkOrderNotice[] = cached ? JSON.parse(cached) : [];
+      const updatedList = [savedOrder, ...list.filter(w => w.id !== savedOrder.id)];
+      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 20)));
+    } catch {}
+    return savedOrder;
   } catch (error: any) {
+    console.warn('Backend work-order upload failed, creating fallback:', error);
     const now = new Date();
     const fallbackOrder: WorkOrderNotice = {
       id: `wo_${Date.now()}`,

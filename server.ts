@@ -200,11 +200,13 @@ function writeEntries(entries: any[]) {
 
 // REST API Endpoints
 app.get('/api/health', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.json({ status: 'ok', app: 'POWER Utility Management' });
 });
 
 // Get all entries with optional category/status/search query
 app.get('/api/entries', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { category, status, search } = req.query;
   let entries = readEntries();
 
@@ -239,11 +241,12 @@ app.get('/api/entries', (req, res) => {
 // Create new entry
 app.post('/api/entries', (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const entries = readEntries();
     const newEntry = {
       ...req.body,
       id: req.body.id || `PWR-${Date.now().toString().slice(-6)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: req.body.date || new Date().toISOString(),
       status: req.body.status || 'Pending'
     };
 
@@ -252,12 +255,14 @@ app.post('/api/entries', (req, res) => {
 
     res.status(201).json({ success: true, entry: newEntry });
   } catch (error: any) {
+    console.error('Error saving entry:', error);
     res.status(500).json({ error: error.message || 'Failed to save entry' });
   }
 });
 
 // Update status or notes
 app.patch('/api/entries/:id', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const entries = readEntries();
   const index = entries.findIndex((e: any) => e.id === id);
@@ -273,6 +278,7 @@ app.patch('/api/entries/:id', (req, res) => {
 
 // Delete entry (Admin only)
 app.delete('/api/entries/:id', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   let entries = readEntries();
   const initialLength = entries.length;
@@ -288,6 +294,7 @@ app.delete('/api/entries/:id', (req, res) => {
 
 // Clear all entries (Admin only)
 app.delete('/api/entries', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   writeEntries([]);
   res.json({ success: true, message: 'All entries deleted successfully' });
 });
@@ -300,7 +307,7 @@ app.get('/api/users', (req, res) => {
   res.json(users);
 });
 
-// Create new user (Admin created)
+// Create new user or update if ID exists (Admin created)
 app.post('/api/users', (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -319,13 +326,30 @@ app.post('/api/users', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
+    const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
+
     // Check duplicate (case-insensitive)
-    const exists = users.some((u: any) => u && u.idNo && u.idNo.toString().trim().toLowerCase() === cleanId.toLowerCase());
-    if (exists) {
-      return res.status(400).json({ error: `ID No "${cleanId}" already exists! Please choose a different User ID.` });
+    const existingIndex = users.findIndex((u: any) => u && u.idNo && u.idNo.toString().trim().toLowerCase() === cleanId.toLowerCase());
+    
+    if (existingIndex !== -1) {
+      // If user ID already exists, update their credentials, role & details seamlessly
+      users[existingIndex] = {
+        ...users[existingIndex],
+        password: cleanPass,
+        name: cleanName,
+        phone: (phone !== undefined ? phone : users[existingIndex].phone || '').toString().trim(),
+        role: assignedRole,
+        status: status === 'hold' ? 'hold' : 'active',
+        designation: designation?.trim() || users[existingIndex].designation || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
+        badgeNo: badgeNo?.trim() || users[existingIndex].badgeNo || cleanId,
+        securityQuestion: securityQuestion || users[existingIndex].securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
+        securityAnswer: securityAnswer?.trim() || users[existingIndex].securityAnswer || 'Vidyut Bhavan',
+        updatedAt: new Date().toISOString()
+      };
+      writeUsers(users);
+      return res.status(200).json({ success: true, user: users[existingIndex], updated: true });
     }
 
-    const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
     const newUser = {
       id: `${assignedRole}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       idNo: cleanId,
@@ -724,6 +748,7 @@ app.delete('/api/chat', (req, res) => {
 // Work Order & Khata Photo Notice Endpoints (Uploaded by Admin, viewable by all field workers)
 app.get('/api/work-orders', (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { category } = req.query;
     let orders = readWorkOrders();
     if (category && category !== 'ALL') {
@@ -739,6 +764,7 @@ app.get('/api/work-orders', (req, res) => {
 
 app.post('/api/work-orders', (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { category, title, photoUrl, description, uploadedBy, adminName, adminPhone, isHidden } = req.body;
     if (!photoUrl) {
       return res.status(400).json({ error: 'Work order / Khata photo is required' });
@@ -769,6 +795,7 @@ app.post('/api/work-orders', (req, res) => {
 
     res.status(201).json({ success: true, workOrder: newOrder });
   } catch (error: any) {
+    console.error('Error saving work order:', error);
     res.status(500).json({ error: 'Failed to save work order photo' });
   }
 });
@@ -776,6 +803,7 @@ app.post('/api/work-orders', (req, res) => {
 // Helper for visibility toggle
 const handleVisibilityToggle = (req: express.Request, res: express.Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { id } = req.params;
     const { isHidden } = req.body;
     let orders = readWorkOrders();
@@ -801,6 +829,7 @@ app.put('/api/work-orders/:id/visibility', handleVisibilityToggle);
 // Helper for deletion
 const handleDeleteWorkOrder = (req: express.Request, res: express.Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { id } = req.params;
     let orders = readWorkOrders();
     orders = orders.filter((o: any) => String(o.id) !== String(id));

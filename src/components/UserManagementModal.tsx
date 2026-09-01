@@ -143,16 +143,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       return;
     }
 
-    // Check duplicate locally
-    if (users.some(u => u && u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase())) {
-      setError(`"${cleanId}" আইডি নম্বরটি ইতিমধ্যে নিবন্ধিত রয়েছে! অন্য আইডি দিন।`);
-      return;
-    }
+    const isExisting = users.some(u => u && u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase());
 
     setLoading(true);
 
     try {
-      const newUser = await createUserAccount({
+      const savedUser = await createUserAccount({
         idNo: cleanId,
         password: cleanPass,
         name: cleanName,
@@ -163,14 +159,23 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         badgeNo: cleanId,
       });
 
-      setUsers(prev => [newUser, ...prev]);
+      setUsers(prev => {
+        const filtered = prev.filter(u => u && u.idNo?.toLowerCase() !== cleanId.toLowerCase() && u.id !== savedUser.id);
+        return [savedUser, ...filtered];
+      });
+
       setCreatedUserCard({
         idNo: cleanId,
         password: cleanPass,
         name: cleanName,
         role: role === 'admin' ? 'এডমিন (Admin)' : 'ফিল্ড ওয়ার্কার (Worker)'
       });
-      setSuccess(`নতুন ${role === 'admin' ? 'এডমিন' : 'ওয়ার্কার'} আইডি "${cleanId}" সফলভাবে তৈরি হয়েছে!`);
+
+      if (isExisting) {
+        setSuccess(`User ID "${cleanId}" (${cleanName}) এর পাসওয়ার্ড ও তথ্য সফলভাবে আপডেট করা হয়েছে!`);
+      } else {
+        setSuccess(`নতুন ${role === 'admin' ? 'এডমিন' : 'ওয়ার্কার'} আইডি "${cleanId}" সফলভাবে তৈরি হয়েছে!`);
+      }
       
       // Reset form for next user
       setName('');
@@ -178,7 +183,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       setPassword('1234');
       setIdNo(role === 'worker' ? `LM-${Math.floor(1000 + Math.random() * 9000)}` : `ADM-${Math.floor(100 + Math.random() * 900)}`);
     } catch (err: any) {
-      setError(err.message || 'ইউজার তৈরি ব্যর্থ হয়েছে');
+      setError(err.message || 'ইউজার তৈরি বা আপডেট করতে সমস্যা হয়েছে');
     } finally {
       setLoading(false);
     }

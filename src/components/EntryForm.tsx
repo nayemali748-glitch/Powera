@@ -328,6 +328,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       }
       setSuccessMessage(t.entryCreatedSuccess);
       setSubmissionModalEntry(created);
+      onSuccess(created);
     } catch (err: any) {
       console.error('Error creating entry:', err);
       alert('Error saving data: ' + (err.message || 'Check connection'));

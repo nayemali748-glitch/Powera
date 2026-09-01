@@ -132,31 +132,53 @@ export default function App() {
     }
   }, []);
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await fetchEntries();
       setEntries(data || []);
     } catch (err) {
       console.error('Failed to load power entries:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
+    // Real-time background sync every 3.5 seconds so Admin Panel & Worker Views stay 100% in sync
+    const interval = setInterval(() => {
+      loadData(true);
+    }, 3500);
+
+    const onFocus = () => loadData(true);
+    const onVisibilityChange = () => {
+      if (!document.hidden) loadData(true);
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
     if (activeTab === 'admin' && !isAdmin) {
       setActiveTab('entry');
     }
+    if (activeTab === 'admin' || activeTab === 'submissions') {
+      loadData(true);
+    }
   }, [activeTab, isAdmin]);
 
   const handleEntrySuccess = (newEntry: PowerEntry) => {
-    setEntries((prev) => [newEntry, ...prev]);
+    setEntries((prev) => [newEntry, ...prev.filter(e => e.id !== newEntry.id)]);
     setActiveFormCategory(null);
+    loadData(true);
   };
 
   const handleAdminLogin = () => {
