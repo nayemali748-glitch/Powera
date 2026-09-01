@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { UserAccount } from '../types';
 import { fetchUsers, createUserAccount, deleteUserAccount, updateUserStatus, updateUserAccount, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
 import { Language, translations } from '../utils/translations';
 
 interface UserManagementModalProps {
@@ -128,10 +129,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setSuccess(null);
     setCreatedUserCard(null);
 
-    const cleanId = idNo.trim();
+    const cleanId = normalizeUniversalText(idNo);
     const cleanName = (name.trim() || cleanId || 'কর্মী');
-    const cleanPhone = phone.trim();
-    const cleanPass = password.trim();
+    const cleanPhone = normalizeUniversalText(phone).replace(/[^0-9]/g, '');
+    const cleanPass = normalizePassword(password);
 
     if (!cleanId) {
       setError('User ID লিখুন (যেমন: LM-4085 বা ADM-102 বা কর্মীর মোবাইল নম্বর)');
@@ -143,7 +144,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       return;
     }
 
-    const isExisting = users.some(u => u && u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase());
+    const isExisting = users.some(u => u && u.idNo && normalizeUniversalText(u.idNo).toLowerCase() === cleanId.toLowerCase());
 
     setLoading(true);
 
@@ -160,7 +161,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       });
 
       setUsers(prev => {
-        const filtered = prev.filter(u => u && u.idNo?.toLowerCase() !== cleanId.toLowerCase() && u.id !== savedUser.id);
+        const filtered = prev.filter(u => u && normalizeUniversalText(u.idNo)?.toLowerCase() !== cleanId.toLowerCase() && u.id !== savedUser.id);
         return [savedUser, ...filtered];
       });
 
@@ -197,7 +198,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   };
 
   const handleSaveEdit = async (userAcc: UserAccount) => {
-    if (!editPasswordValue.trim()) {
+    const cleanPass = normalizePassword(editPasswordValue);
+    if (!cleanPass) {
       alert('পাসওয়ার্ড খালি রাখা যাবে না');
       return;
     }
@@ -205,9 +207,9 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setLoading(true);
     try {
       const updated = await updateUserAccount(userAcc.id || userAcc.idNo, {
-        password: editPasswordValue.trim(),
+        password: cleanPass,
         name: editNameValue.trim() || userAcc.name,
-        phone: editPhoneValue.trim()
+        phone: normalizeUniversalText(editPhoneValue).replace(/[^0-9]/g, '')
       });
 
       setUsers(prev => prev.map(u => (u.id === userAcc.id || u.idNo === userAcc.idNo) ? { ...u, ...updated } : u));

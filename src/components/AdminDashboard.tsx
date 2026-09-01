@@ -32,7 +32,16 @@ import {
   Camera,
   FileImage,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  PowerOff,
+  Wrench,
+  ShieldAlert,
+  Coins,
+  Sparkles,
+  Check,
+  Activity,
+  Hash,
+  ArrowRight
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
@@ -817,92 +826,147 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* 5 Requested Category Metric Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 mt-4">
           <div 
-            onClick={() => setSelectedCategory('ALL')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('ALL');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'ALL'
-                ? 'bg-slate-900 text-white border-slate-900 shadow-sm ring-1 ring-slate-900'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-800 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-slate-300'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase ${selectedCategory === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>Total Entries</div>
+            <div className="flex items-center justify-between">
+              <span className={`text-[11px] font-bold uppercase ${selectedCategory === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>Total Entries</span>
+              <Layers className={`w-3.5 h-3.5 ${selectedCategory === 'ALL' ? 'text-amber-400' : 'text-slate-400'}`} />
+            </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'ALL' ? 'text-amber-400' : 'text-slate-900'}`}>{total}</div>
-            <div className={`text-[10px] ${selectedCategory === 'ALL' ? 'text-slate-400' : 'text-slate-500'}`}>All Categories</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>All 5 Categories</span>
+              {selectedCategory === 'ALL' && (
+                <span className="text-[9px] bg-amber-400 text-slate-950 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
 
           <div 
-            onClick={() => setSelectedCategory('NSC')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('NSC');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'NSC'
-                ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-sm ring-1 ring-amber-500'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-amber-300'
             }`}
           >
             <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-amber-700'}`}>
-              <span>NSC</span>
-              <Zap className="w-3.5 h-3.5" />
+              <span>1. NSC</span>
+              <Zap className="w-3.5 h-3.5 fill-current" />
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-slate-900'}`}>{nscCount}</div>
-            <div className={`text-[10px] ${selectedCategory === 'NSC' ? 'text-slate-800' : 'text-slate-500'}`}>New Connection</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'NSC' ? 'text-slate-900 font-semibold' : 'text-slate-500'}`}>New Connection</span>
+              {selectedCategory === 'NSC' && (
+                <span className="text-[9px] bg-slate-950 text-amber-400 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
 
           <div 
-            onClick={() => setSelectedCategory('DISCONNECTION')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('DISCONNECTION');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'DISCONNECTION'
-                ? 'bg-rose-600 text-white border-rose-600 shadow-sm ring-1 ring-rose-600'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-400 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-rose-300'
             }`}
           >
             <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-700'}`}>
-              <span>DISCONNECT</span>
+              <span>2. DISCONNECT</span>
+              <PowerOff className="w-3.5 h-3.5" />
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'DISCONNECTION' ? 'text-white' : 'text-slate-900'}`}>{discCount}</div>
-            <div className={`text-[10px] ${selectedCategory === 'DISCONNECTION' ? 'text-rose-200' : 'text-slate-500'}`}>Disconnections</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100 font-semibold' : 'text-slate-500'}`}>Disconnections</span>
+              {selectedCategory === 'DISCONNECTION' && (
+                <span className="text-[9px] bg-white text-rose-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
 
           <div 
-            onClick={() => setSelectedCategory('POLE CASE')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('POLE CASE');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'POLE CASE'
-                ? 'bg-sky-600 text-white border-sky-600 shadow-sm ring-1 ring-sky-600'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-sky-600 text-white border-sky-600 shadow-md ring-2 ring-sky-400 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-sky-300'
             }`}
           >
             <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'POLE CASE' ? 'text-sky-100' : 'text-sky-700'}`}>
-              <span>POLE CASE</span>
+              <span>3. POLE CASE</span>
+              <ShieldAlert className="w-3.5 h-3.5" />
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'POLE CASE' ? 'text-white' : 'text-slate-900'}`}>{poleCount}</div>
-            <div className={`text-[10px] ${selectedCategory === 'POLE CASE' ? 'text-sky-200' : 'text-slate-500'}`}>Poles & Lines</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'POLE CASE' ? 'text-sky-100 font-semibold' : 'text-slate-500'}`}>Poles & Lines</span>
+              {selectedCategory === 'POLE CASE' && (
+                <span className="text-[9px] bg-white text-sky-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
 
           <div 
-            onClick={() => setSelectedCategory('METER REPLESMENT')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('METER REPLESMENT');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'METER REPLESMENT'
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm ring-1 ring-emerald-600'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-emerald-300'
             }`}
           >
             <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100' : 'text-emerald-700'}`}>
-              <span>METER REP.</span>
+              <span>4. METER REP.</span>
+              <RefreshCw className="w-3.5 h-3.5" />
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'METER REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{meterCount}</div>
-            <div className={`text-[10px] ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-200' : 'text-slate-500'}`}>Replacement</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100 font-semibold' : 'text-slate-500'}`}>Replacement</span>
+              {selectedCategory === 'METER REPLESMENT' && (
+                <span className="text-[9px] bg-white text-emerald-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
 
           <div 
-            onClick={() => setSelectedCategory('DTR REPLESMENT')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            onClick={() => {
+              setSelectedCategory('DTR REPLESMENT');
+              document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
               selectedCategory === 'DTR REPLESMENT'
-                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm ring-1 ring-indigo-600'
-                : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-400 scale-[1.02]'
+                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-indigo-300'
             }`}
           >
             <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100' : 'text-indigo-700'}`}>
-              <span>DTR REP.</span>
+              <span>5. DTR REP.</span>
+              <Activity className="w-3.5 h-3.5" />
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'DTR REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{dtrCount}</div>
-            <div className={`text-[10px] ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-200' : 'text-slate-500'}`}>Transformer</div>
+            <div className="flex items-center justify-between mt-1">
+              <span className={`text-[10px] ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100 font-semibold' : 'text-slate-500'}`}>Transformer</span>
+              {selectedCategory === 'DTR REPLESMENT' && (
+                <span className="text-[9px] bg-white text-indigo-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -926,7 +990,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <button
               onClick={() => setShowWorkOrdersManager(false)}
-              className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+              className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
               title="Close Panel"
             >
               <X className="w-5 h-5" />
@@ -948,223 +1012,648 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* Filter and Search Controls */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
-        {/* Search Bar */}
-        <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            id="admin-search-input"
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search Consumer, ID, Pole, Meter, Worker..."
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+      {/* DEDICATED CATEGORY DATA SECTION CONTAINER */}
+      <div id="admin-category-data-view" className="space-y-4 pt-2">
+        {/* Dynamic Category Hero Banner */}
+        <div className={`p-4 sm:p-5 rounded-2xl border transition-all shadow-sm ${
+          selectedCategory === 'NSC' ? 'bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-amber-300' :
+          selectedCategory === 'DISCONNECTION' ? 'bg-gradient-to-r from-rose-500/10 via-rose-500/5 to-transparent border-rose-300' :
+          selectedCategory === 'POLE CASE' ? 'bg-gradient-to-r from-sky-500/10 via-sky-500/5 to-transparent border-sky-300' :
+          selectedCategory === 'METER REPLESMENT' ? 'bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border-emerald-300' :
+          selectedCategory === 'DTR REPLESMENT' ? 'bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-transparent border-indigo-300' :
+          'bg-gradient-to-r from-slate-900/10 via-slate-900/5 to-transparent border-slate-300'
+        }`}>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
+                selectedCategory === 'NSC' ? 'bg-amber-500 text-slate-950' :
+                selectedCategory === 'DISCONNECTION' ? 'bg-rose-600 text-white' :
+                selectedCategory === 'POLE CASE' ? 'bg-sky-600 text-white' :
+                selectedCategory === 'METER REPLESMENT' ? 'bg-emerald-600 text-white' :
+                selectedCategory === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white' :
+                'bg-slate-900 text-white'
+              }`}>
+                {selectedCategory === 'NSC' && <Zap className="w-6 h-6 fill-current" />}
+                {selectedCategory === 'DISCONNECTION' && <PowerOff className="w-6 h-6" />}
+                {selectedCategory === 'POLE CASE' && <ShieldAlert className="w-6 h-6" />}
+                {selectedCategory === 'METER REPLESMENT' && <RefreshCw className="w-6 h-6" />}
+                {selectedCategory === 'DTR REPLESMENT' && <Activity className="w-6 h-6" />}
+                {selectedCategory === 'ALL' && <Layers className="w-6 h-6" />}
+              </div>
+              
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                    {selectedCategory === 'NSC' && (lang === 'bn' ? '⚡ NSC — নতুন সার্ভিস কানেকশন ডাটা (New Service Connection)' : '⚡ NSC — New Service Connection Data')}
+                    {selectedCategory === 'DISCONNECTION' && (lang === 'bn' ? '🚫 DISCONNECTION — বিদ্যুৎ বিচ্ছিন্নকরণ ডাটা' : '🚫 DISCONNECTION — Power Disconnection Data')}
+                    {selectedCategory === 'POLE CASE' && (lang === 'bn' ? '🏗️ POLE CASE — খুঁটি ও তার লাইন মেরামত ডাটা' : '🏗️ POLE CASE — Poles & Overhead Line Data')}
+                    {selectedCategory === 'METER REPLESMENT' && (lang === 'bn' ? '🔄 METER REPLACEMENT — মিটার পরিবর্তন ও নতুন সিল ডাটা' : '🔄 METER REPLACEMENT — Meter Replacement Data')}
+                    {selectedCategory === 'DTR REPLESMENT' && (lang === 'bn' ? '⚡ DTR REPLACEMENT — ট্রান্সফরমার পরিবর্তন ও মেরামত ডাটা' : '⚡ DTR REPLACEMENT — Distribution Transformer Data')}
+                    {selectedCategory === 'ALL' && (lang === 'bn' ? '📋 MASTER OVERVIEW — সমস্ত ৫টি ক্যাটাগরির মাস্টার ডাটা' : '📋 MASTER OVERVIEW — All 5 Categories Master Data')}
+                  </h2>
+                  <span className={`text-xs font-black px-2.5 py-0.5 rounded-full border shadow-xs ${
+                    selectedCategory === 'NSC' ? 'bg-amber-100 text-amber-900 border-amber-300' :
+                    selectedCategory === 'DISCONNECTION' ? 'bg-rose-100 text-rose-900 border-rose-300' :
+                    selectedCategory === 'POLE CASE' ? 'bg-sky-100 text-sky-900 border-sky-300' :
+                    selectedCategory === 'METER REPLESMENT' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
+                    selectedCategory === 'DTR REPLESMENT' ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
+                    'bg-slate-200 text-slate-900 border-slate-300'
+                  }`}>
+                    {filteredEntries.length} Records Found
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {selectedCategory === 'NSC' && (lang === 'bn' ? 'ওয়ার্ক অর্ডার, কনজিউমার নাম, মোবাইল, মিটার নম্বর, সিকিউরিটি সিল, লোড, ফেজ ও খাতার ফটোর লাইভ রেকর্ড' : 'Live records of work orders, consumers, meter & seal numbers, loads, phases, and khata slips')}
+                  {selectedCategory === 'DISCONNECTION' && (lang === 'bn' ? 'কনজিউমার আইডি, মোট বকেয়া টাকা (Arrears), ডিসকানেকশনের কারণ, ফাইনাল রিডিং ও পোল রেকর্ডের লাইভ ডাটা' : 'Live records of consumer IDs, arrear amounts, disconnection reasons, and final meter readings')}
+                  {selectedCategory === 'POLE CASE' && (lang === 'bn' ? 'পোল নম্বর, ত্রুটির ধরন, প্রায়োরিটি, লাইনে কাজ ও ব্যবহৃত উপাদানের লাইভ ডাটা' : 'Live records of pole numbers, fault types, breakdown priority, and repair materials used')}
+                  {selectedCategory === 'METER REPLESMENT' && (lang === 'bn' ? 'পুরোনো মিটার নম্বর ও রিডিং, নতুন মিটার নম্বর, ইনিশিয়াল রিডিং, নতুন সিল ও কারণ' : 'Live records of old defective meters, final readings, new meter serials, and security seals')}
+                  {selectedCategory === 'DTR REPLESMENT' && (lang === 'bn' ? 'ট্রান্সফরমার নাম, পূর্বের ও নতুন ক্ষমতা (kVA), সিরিয়াল নম্বর ও আর্থ রেজিস্ট্যান্স' : 'Live records of transformer names, existing vs new capacity (kVA), serials, and earth resistance')}
+                  {selectedCategory === 'ALL' && (lang === 'bn' ? 'WBSEDCL এর ৫টি ডিপার্টমেন্টাল কাজের সমন্বিত মাস্টার তালিকা' : 'Consolidated master table of all departmental electrical operations')}
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons for Active Category */}
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <button
+                onClick={() => handleExportCategoryExcel(selectedCategory)}
+                className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                title={`Export ${selectedCategory} Data to Excel / CSV`}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Export {selectedCategory === 'ALL' ? 'Master' : selectedCategory} Excel</span>
+              </button>
+
+              {selectedCategory === 'NSC' && (
+                <button
+                  onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
+                  className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                  title="Upload or Manage NSC Work Orders & Khata Slips"
+                >
+                  <FileImage className="w-3.5 h-3.5" />
+                  <span>{showWorkOrdersManager ? 'Hide Khata Slips' : 'NSC Khata Slips'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Filter and Search Controls Bar */}
+        <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
+          {/* Quick Option Pill Switcher */}
+          <div className="flex items-center gap-1.5 flex-wrap w-full md:w-auto">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider hidden sm:inline mr-1">
+              Select Option:
+            </span>
+            {[
+              { id: 'ALL', label: 'All', count: total },
+              { id: 'NSC', label: '1. NSC', count: nscCount },
+              { id: 'DISCONNECTION', label: '2. Disconnection', count: discCount },
+              { id: 'POLE CASE', label: '3. Pole Case', count: poleCount },
+              { id: 'METER REPLESMENT', label: '4. Meter Rep.', count: meterCount },
+              { id: 'DTR REPLESMENT', label: '5. DTR Rep.', count: dtrCount }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedCategory(tab.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  selectedCategory === tab.id
+                    ? tab.id === 'NSC' ? 'bg-amber-500 text-slate-950 shadow-xs ring-1 ring-amber-400' :
+                      tab.id === 'DISCONNECTION' ? 'bg-rose-600 text-white shadow-xs' :
+                      tab.id === 'POLE CASE' ? 'bg-sky-600 text-white shadow-xs' :
+                      tab.id === 'METER REPLESMENT' ? 'bg-emerald-600 text-white shadow-xs' :
+                      tab.id === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white shadow-xs' :
+                      'bg-slate-900 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  selectedCategory === tab.id ? 'bg-black/20 text-inherit' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {tab.count}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Search and Status Dropdown */}
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <div className="relative flex-1 md:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                id="admin-search-input"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={`Search in ${selectedCategory}...`}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <select
+              value={selectedStatus}
+              onChange={(e) => setSelectedStatus(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-slate-900"
             >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-
-        {/* Filter Badges */}
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
-            <span className="text-slate-500 px-2 font-semibold">Category:</span>
-            {['ALL', 'NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'].map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-all text-xs ${
-                  selectedCategory === cat
-                    ? 'bg-white text-slate-900 shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                {cat === 'ALL' ? 'All' : cat}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
-            <span className="text-slate-500 px-2 font-semibold">Status:</span>
-            {['ALL', 'Completed', 'Approved', 'Pending'].map((st) => (
-              <button
-                key={st}
-                onClick={() => setSelectedStatus(st)}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-all text-xs ${
-                  selectedStatus === st
-                    ? 'bg-white text-slate-900 shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                {st === 'ALL' ? 'All' : st}
-              </button>
-            ))}
+              <option value="ALL">All Status</option>
+              <option value="Approved">Approved</option>
+              <option value="Completed">Completed</option>
+              <option value="Pending">Pending</option>
+            </select>
           </div>
         </div>
-      </div>
 
-      {/* Main Table / Entry List */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        <div className="px-4 sm:px-6 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-slate-700" />
-            <span className="text-sm font-bold text-slate-900">
-              Recorded Entries List ({filteredEntries.length})
+        {/* Specialized Data Table Container */}
+        <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+          <div className="px-4 sm:px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-slate-700" />
+              <span className="text-xs sm:text-sm font-bold text-slate-900">
+                {selectedCategory === 'ALL' ? 'All Recorded Entries' : `${selectedCategory} Data List`} ({filteredEntries.length})
+              </span>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              Click any record to inspect, approve, edit or print receipt
             </span>
           </div>
-          <span className="text-xs text-slate-500">
-            Click row to view details, edit, approve, or print receipt
-          </span>
-        </div>
 
-        {filteredEntries.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 space-y-2">
-            <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
-            <p className="font-semibold text-slate-700">No records found</p>
-            <p className="text-xs text-slate-500">
-              Try resetting the search filters or submit a new entry from the form.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm">
-              <thead className="bg-slate-50 text-slate-600 text-[11px] uppercase tracking-wider border-b border-slate-200 font-bold">
-                <tr>
-                  <th className="px-4 py-3">ID & Date</th>
-                  <th className="px-4 py-3">Category</th>
-                  <th className="px-4 py-3">Consumer / Pole / Site</th>
-                  <th className="px-4 py-3">Worker Name</th>
-                  <th className="px-4 py-3">Feeder / Location</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredEntries.map((item) => {
-                  const isNsc = item.category === 'NSC';
-                  const isDisc = item.category === 'DISCONNECTION';
-                  const isPole = item.category === 'POLE CASE';
-                  const isMeter = item.category === 'METER REPLESMENT';
-                  const isDtr = item.category === 'DTR REPLESMENT';
-
-                  return (
-                    <tr 
-                      key={item.id} 
-                      className="hover:bg-slate-50/80 transition-colors group cursor-pointer"
-                      onClick={() => setSelectedEntry(item)}
-                    >
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="font-mono font-bold text-slate-900">{item.id}</div>
-                        <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
-                          <Clock className="w-3.5 h-3.5 text-slate-400" />
-                          {new Date(item.date).toLocaleDateString('en-IN')} {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${
-                          isNsc ? 'bg-amber-50 text-amber-800 border-amber-200' :
-                          isDisc ? 'bg-rose-50 text-rose-800 border-rose-200' :
-                          isPole ? 'bg-sky-50 text-sky-800 border-sky-200' :
-                          isMeter ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
-                          'bg-indigo-50 text-indigo-800 border-indigo-200'
-                        }`}>
-                          {item.category}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-slate-900 group-hover:text-amber-700 transition-colors">
-                            {item.consumerName || item.dtrName || item.poleNo || 'Field Point'}
-                          </span>
-                          {item.workOrderPhoto && (
-                            <span className="inline-flex items-center gap-0.5 text-[9px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded" title="Admin Work Order / Khata Slip Attached">
-                              <FileText className="w-2.5 h-2.5 text-amber-700" />
-                              <span>Khata Slip</span>
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-500 truncate max-w-xs">
-                          {item.consumerId && `ID: ${item.consumerId} • `}
-                          {item.meterNo && `Meter: ${item.meterNo} • `}
-                          {item.oldMeterNo && `Old Mtr: ${item.oldMeterNo} • `}
-                          {item.arrearAmount && `Arrear: ₹ ${item.arrearAmount} • `}
-                          {item.issueType || item.notes || item.address || ''}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5 text-slate-700 font-medium">
-                          <User className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{item.workerName || 'Worker'}</span>
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3.5 whitespace-nowrap text-slate-600 text-xs">
-                        <div>{item.feederName || 'Main Feeder'}</div>
-                        <div className="text-[10px] text-slate-400 truncate max-w-[150px]">
-                          {item.address || item.locationGps || 'Site'}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                          item.status === 'Approved'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : item.status === 'Completed'
-                            ? 'bg-sky-50 text-sky-700 border-sky-200'
-                            : 'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}>
-                          {item.status}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => setSelectedEntry(item)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-                            title="View Details"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setEditingEntry(item)}
-                            className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
-                            title="Edit Data"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handlePrintCertificate(item)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-700 transition-colors cursor-pointer"
-                            title="Print Receipt"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(item.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 transition-colors cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
+          {filteredEntries.length === 0 ? (
+            <div className="p-12 text-center text-slate-500 space-y-2">
+              <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+              <p className="font-semibold text-slate-700">
+                No records found in {selectedCategory}
+              </p>
+              <p className="text-xs text-slate-500">
+                Try clearing the search query or switch to another category option above.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                {/* 1. Specialized Headers for NSC */}
+                {selectedCategory === 'NSC' && (
+                  <thead className="bg-amber-50/70 text-amber-950 text-[11px] uppercase tracking-wider border-b border-amber-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">App & Work Order No</th>
+                      <th className="px-3.5 py-3">Consumer Details</th>
+                      <th className="px-3.5 py-3">Meter No & Seal No</th>
+                      <th className="px-3.5 py-3">Load & Phase & Reading</th>
+                      <th className="px-3.5 py-3">Lineman & Substation</th>
+                      <th className="px-3.5 py-3">Khata Slip / Photo</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </thead>
+                )}
+
+                {/* 2. Specialized Headers for DISCONNECTION */}
+                {selectedCategory === 'DISCONNECTION' && (
+                  <thead className="bg-rose-50/70 text-rose-950 text-[11px] uppercase tracking-wider border-b border-rose-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">Consumer ID & Name</th>
+                      <th className="px-3.5 py-3">Mobile & Address</th>
+                      <th className="px-3.5 py-3 text-rose-700">Arrear Amount (বকেয়া ₹)</th>
+                      <th className="px-3.5 py-3">Disconnection Reason</th>
+                      <th className="px-3.5 py-3">Final Reading (kWh)</th>
+                      <th className="px-3.5 py-3">Meter & Pole No</th>
+                      <th className="px-3.5 py-3">Lineman & Feeder</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                )}
+
+                {/* 3. Specialized Headers for POLE CASE */}
+                {selectedCategory === 'POLE CASE' && (
+                  <thead className="bg-sky-50/70 text-sky-950 text-[11px] uppercase tracking-wider border-b border-sky-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">Pole No & Location</th>
+                      <th className="px-3.5 py-3">Issue / Fault Type</th>
+                      <th className="px-3.5 py-3">Priority Level</th>
+                      <th className="px-3.5 py-3">Action Taken & Materials</th>
+                      <th className="px-3.5 py-3">Lineman & Feeder</th>
+                      <th className="px-3.5 py-3">Site Photo</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                )}
+
+                {/* 4. Specialized Headers for METER REPLESMENT */}
+                {selectedCategory === 'METER REPLESMENT' && (
+                  <thead className="bg-emerald-50/70 text-emerald-950 text-[11px] uppercase tracking-wider border-b border-emerald-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">Consumer ID & Name</th>
+                      <th className="px-3.5 py-3 text-rose-700">Old Meter & Final Reading</th>
+                      <th className="px-3.5 py-3 text-emerald-800">New Meter & Initial Reading</th>
+                      <th className="px-3.5 py-3">Seal No & Reason</th>
+                      <th className="px-3.5 py-3">Lineman & CCC Office</th>
+                      <th className="px-3.5 py-3">Site Photo</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                )}
+
+                {/* 5. Specialized Headers for DTR REPLESMENT */}
+                {selectedCategory === 'DTR REPLESMENT' && (
+                  <thead className="bg-indigo-50/70 text-indigo-950 text-[11px] uppercase tracking-wider border-b border-indigo-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">DTR / Transformer Name</th>
+                      <th className="px-3.5 py-3">Capacity (Old ➔ New kVA)</th>
+                      <th className="px-3.5 py-3">Serial No (Old ➔ New)</th>
+                      <th className="px-3.5 py-3">Earth Resistance (Ω) & Oil</th>
+                      <th className="px-3.5 py-3">Substation & Feeder</th>
+                      <th className="px-3.5 py-3">Lineman & Agency</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                )}
+
+                {/* 6. Headers for ALL */}
+                {selectedCategory === 'ALL' && (
+                  <thead className="bg-slate-50 text-slate-700 text-[11px] uppercase tracking-wider border-b border-slate-200 font-extrabold">
+                    <tr>
+                      <th className="px-3.5 py-3">ID & Date</th>
+                      <th className="px-3.5 py-3">Category</th>
+                      <th className="px-3.5 py-3">Consumer / Pole / Site</th>
+                      <th className="px-3.5 py-3">Key Attributes & Specifics</th>
+                      <th className="px-3.5 py-3">Lineman / Worker</th>
+                      <th className="px-3.5 py-3">Feeder & Location</th>
+                      <th className="px-3.5 py-3">Status</th>
+                      <th className="px-3.5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                )}
+
+                {/* Dynamic Table Body */}
+                <tbody className="divide-y divide-slate-100">
+                  {filteredEntries.map((item) => {
+                    const isNsc = item.category === 'NSC';
+                    const isDisc = item.category === 'DISCONNECTION';
+                    const isPole = item.category === 'POLE CASE';
+                    const isMeter = item.category === 'METER REPLESMENT';
+                    const isDtr = item.category === 'DTR REPLESMENT';
+
+                    return (
+                      <tr 
+                        key={item.id} 
+                        className="hover:bg-slate-50/90 transition-colors group cursor-pointer"
+                        onClick={() => setSelectedEntry(item)}
+                      >
+                        {/* Common ID & Date Column */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <div className="font-mono font-bold text-slate-900">{item.id}</div>
+                          <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            {new Date(item.date).toLocaleDateString('en-IN')} {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </td>
+
+                        {/* NSC Specific Row Cells */}
+                        {selectedCategory === 'NSC' && (
+                          <>
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-semibold text-slate-900">App: {item.applicationNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">WO: {item.workOrderNo || 'N/A'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="font-bold text-slate-900 group-hover:text-amber-700 transition-colors">
+                                {item.consumerName || 'N/A'}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {item.fatherName ? `C/O: ${item.fatherName} • ` : ''}
+                                {item.mobile ? `Ph: ${item.mobile}` : ''}
+                              </div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-[160px]">
+                                {item.address || ''}
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-mono font-bold text-slate-900">Mtr: {item.meterNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">Seal: {item.sealNo || 'N/A'}</div>
+                              <div className="text-[10px] text-amber-700 font-mono">ID: {item.consumerId || 'N/A'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-semibold text-slate-900">{item.appliedLoad || '1'} kW ({item.phase || '1-Phase'})</div>
+                              <div className="text-[10px] text-slate-500">Init: {item.initialReading || '0'} kWh</div>
+                              <div className="text-[10px] text-slate-400">{item.tariffCategory || 'Domestic'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-medium text-slate-800 flex items-center gap-1">
+                                <User className="w-3 h-3 text-slate-400" />
+                                <span>{item.workerName || 'Worker'}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[130px]">
+                                {item.substation || item.feederName || 'Substation'}
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              {item.workOrderPhoto ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-2 py-0.5 rounded">
+                                  <FileImage className="w-3 h-3 text-amber-700" />
+                                  <span>Khata Slip Attached</span>
+                                </span>
+                              ) : item.photoUrl ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold px-2 py-0.5 rounded">
+                                  <Camera className="w-3 h-3 text-emerald-700" />
+                                  <span>Field Photo</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">None</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+
+                        {/* DISCONNECTION Specific Row Cells */}
+                        {selectedCategory === 'DISCONNECTION' && (
+                          <>
+                            <td className="px-3.5 py-3">
+                              <div className="font-bold text-slate-900">{item.consumerName || 'N/A'}</div>
+                              <div className="text-[10px] text-rose-700 font-mono font-bold">ID: {item.consumerId || 'N/A'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="text-slate-800">{item.mobile || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{item.address || ''}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="text-sm font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 inline-block font-mono">
+                                ₹ {item.arrearAmount || '0'}
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="text-slate-800 truncate max-w-[180px]" title={item.reason}>
+                                {item.reason || 'Non-Payment of Electricity Dues'}
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap font-mono font-bold text-slate-900">
+                              {item.finalReading || '0'} kWh
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-mono text-slate-900">Mtr: {item.meterNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500">Pole: {item.poleNo || 'N/A'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-medium text-slate-800">{item.workerName || 'Worker'}</div>
+                              <div className="text-[10px] text-slate-500">{item.cccOffice || item.feederName || 'CCC'}</div>
+                            </td>
+                          </>
+                        )}
+
+                        {/* POLE CASE Specific Row Cells */}
+                        {selectedCategory === 'POLE CASE' && (
+                          <>
+                            <td className="px-3.5 py-3">
+                              <div className="font-bold text-slate-900">Pole #{item.poleNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[160px]">{item.address || 'Site'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="font-semibold text-slate-800">{item.issueType || 'General Fault'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                item.priority === 'High' ? 'bg-rose-100 text-rose-800 border-rose-200' :
+                                item.priority === 'Medium' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                                'bg-sky-100 text-sky-800 border-sky-200'
+                              }`}>
+                                {item.priority || 'Normal'}
+                              </span>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="text-slate-900 font-medium truncate max-w-[180px]">{item.actionTaken || 'Repair complete'}</div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{item.materialUsed ? `Materials: ${item.materialUsed}` : ''}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-medium text-slate-800">{item.workerName || 'Worker'}</div>
+                              <div className="text-[10px] text-slate-500">{item.feederName || 'Feeder'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              {item.photoUrl ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] bg-sky-100 text-sky-900 border border-sky-300 font-bold px-2 py-0.5 rounded">
+                                  <Camera className="w-3 h-3 text-sky-700" />
+                                  <span>Site Photo</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">None</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+
+                        {/* METER REPLESMENT Specific Row Cells */}
+                        {selectedCategory === 'METER REPLESMENT' && (
+                          <>
+                            <td className="px-3.5 py-3">
+                              <div className="font-bold text-slate-900">{item.consumerName || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">ID: {item.consumerId || 'N/A'} • Ph: {item.mobile || ''}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-mono font-bold text-rose-700">Old: {item.oldMeterNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">Final Rdg: {item.finalReading || '0'} kWh</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-mono font-bold text-emerald-700">New: {item.newMeterNo || item.meterNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">Init Rdg: {item.initialReading || '0'} kWh</div>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="font-mono text-slate-800">Seal: {item.sealNo || 'N/A'}</div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{item.replacementReason || 'Burnt/Defective'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-medium text-slate-800">{item.workerName || 'Worker'}</div>
+                              <div className="text-[10px] text-slate-500">{item.cccOffice || 'CCC'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              {item.photoUrl ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold px-2 py-0.5 rounded">
+                                  <Camera className="w-3 h-3 text-emerald-700" />
+                                  <span>Photo</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">None</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+
+                        {/* DTR REPLESMENT Specific Row Cells */}
+                        {selectedCategory === 'DTR REPLESMENT' && (
+                          <>
+                            <td className="px-3.5 py-3">
+                              <div className="font-bold text-slate-900">{item.dtrName || 'Transformer'}</div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{item.address || ''}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-semibold text-indigo-950">
+                                {item.existingCapacity || '63 kVA'} ➔ <span className="font-bold text-indigo-700">{item.newCapacity || '100 kVA'}</span>
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap font-mono text-[11px]">
+                              <div>Old: {item.oldDtrSerial || 'N/A'}</div>
+                              <div className="text-indigo-700 font-bold">New: {item.newDtrSerial || 'N/A'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-mono text-slate-900">Earth: {item.earthResistance || 'N/A'} Ω</div>
+                              <div className="text-[10px] text-slate-500">Oil: {item.oilLevel || 'Normal'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div>{item.substation || 'Substation'}</div>
+                              <div className="text-[10px] text-slate-500">{item.feederName || 'Feeder'}</div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="font-medium text-slate-800">{item.workerName || 'Worker'}</div>
+                              <div className="text-[10px] text-slate-500">{item.agencyName || 'Agency'}</div>
+                            </td>
+                          </>
+                        )}
+
+                        {/* ALL Specific Row Cells */}
+                        {selectedCategory === 'ALL' && (
+                          <>
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                                isNsc ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                                isDisc ? 'bg-rose-50 text-rose-800 border-rose-200' :
+                                isPole ? 'bg-sky-50 text-sky-800 border-sky-200' :
+                                isMeter ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              }`}>
+                                {item.category}
+                              </span>
+                            </td>
+
+                            <td className="px-3.5 py-3">
+                              <div className="font-semibold text-slate-900 group-hover:text-amber-700 transition-colors">
+                                {item.consumerName || item.dtrName || item.poleNo || 'Field Point'}
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate max-w-xs">
+                                {item.consumerId && `ID: ${item.consumerId} • `}
+                                {item.meterNo && `Meter: ${item.meterNo} • `}
+                                {item.arrearAmount && `₹ ${item.arrearAmount} • `}
+                                {item.address || ''}
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 text-slate-600 text-[11px]">
+                              {isNsc && <div>Load: {item.appliedLoad || '1 kW'} • WO: {item.workOrderNo || 'N/A'}</div>}
+                              {isDisc && <div className="text-rose-700 font-bold">Arrear: ₹ {item.arrearAmount || '0'} • Rdg: {item.finalReading}</div>}
+                              {isPole && <div>Issue: {item.issueType || 'Line fault'} (Priority: {item.priority || 'Normal'})</div>}
+                              {isMeter && <div>Old: {item.oldMeterNo || 'N/A'} ➔ New: {item.newMeterNo || 'N/A'}</div>}
+                              {isDtr && <div>Cap: {item.existingCapacity} ➔ {item.newCapacity}</div>}
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap">
+                              <div className="flex items-center gap-1.5 text-slate-700 font-medium">
+                                <User className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{item.workerName || 'Worker'}</span>
+                              </div>
+                            </td>
+
+                            <td className="px-3.5 py-3 whitespace-nowrap text-slate-600 text-xs">
+                              <div>{item.feederName || 'Main Feeder'}</div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
+                                {item.substation || item.address || 'Site'}
+                              </div>
+                            </td>
+                          </>
+                        )}
+
+                        {/* Status Column */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            item.status === 'Approved'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : item.status === 'Completed'
+                              ? 'bg-sky-50 text-sky-700 border-sky-200'
+                              : 'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}>
+                            {item.status}
+                          </span>
+                        </td>
+
+                        {/* Actions Column */}
+                        <td className="px-3.5 py-3 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => setSelectedEntry(item)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                              title="View Full Details"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setEditingEntry(item)}
+                              className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
+                              title="Edit Data"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handlePrintCertificate(item)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-700 transition-colors cursor-pointer"
+                              title="Print Receipt"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(item.id)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 transition-colors cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Entry Detail Inspector Modal */}

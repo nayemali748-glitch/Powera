@@ -1,4 +1,5 @@
 import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice } from '../types';
+import { normalizeUniversalText, normalizeId, normalizePassword, isUserMatch } from '../utils/textNormalizer';
 
 const API_BASE = '/api';
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
@@ -211,7 +212,7 @@ export async function fetchStats(): Promise<StatsResponse> {
 // User accounts management APIs
 export async function fetchUsers(): Promise<UserAccount[]> {
   try {
-    const res = await fetch(`${API_BASE}/users`, {
+    const res = await fetch(`${API_BASE}/users?_t=${Date.now()}`, {
       cache: 'no-store',
       headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
     });
@@ -235,9 +236,10 @@ export async function fetchUsers(): Promise<UserAccount[]> {
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
-  const cleanId = (userData.idNo || '').toString().trim();
-  const cleanPass = (userData.password || '').toString().trim();
-  const cleanName = (userData.name || cleanId || 'কর্মী').toString().trim();
+  const cleanId = normalizeUniversalText(userData.idNo);
+  const cleanPass = normalizePassword(userData.password);
+  const cleanName = (userData.name ? String(userData.name).trim() : cleanId) || 'কর্মী';
+  const cleanPhone = normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '');
 
   let createdOrUpdatedUser: UserAccount | null = null;
 
@@ -252,7 +254,8 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
         ...userData,
         idNo: cleanId,
         password: cleanPass,
-        name: cleanName
+        name: cleanName,
+        phone: cleanPhone
       }),
     });
 
@@ -281,13 +284,13 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
       idNo: cleanId || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
       password: cleanPass || '1234',
       name: cleanName,
-      phone: userData.phone || '',
+      phone: cleanPhone || '',
       role: userData.role || 'worker',
       designation: userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-      badgeNo: userData.badgeNo || cleanId,
+      badgeNo: userData.badgeNo ? normalizeUniversalText(userData.badgeNo) : cleanId,
       status: userData.status || 'active',
       securityQuestion: userData.securityQuestion || 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-      securityAnswer: userData.securityAnswer || 'Vidyut Bhavan',
+      securityAnswer: userData.securityAnswer ? normalizeUniversalText(userData.securityAnswer) : 'Vidyut Bhavan',
       createdAt: new Date().toISOString()
     };
     createdOrUpdatedUser = newUser;
@@ -297,7 +300,7 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   try {
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     let list: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
-    const existingIndex = list.findIndex(u => u && (u.id === createdOrUpdatedUser!.id || (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase())));
+    const existingIndex = list.findIndex(u => u && (u.id === createdOrUpdatedUser!.id || isUserMatch(cleanId, u)));
     if (existingIndex !== -1) {
       list[existingIndex] = { ...list[existingIndex], ...createdOrUpdatedUser };
     } else {
@@ -422,11 +425,14 @@ export async function verifyUserSession(idNo: string): Promise<{ valid: boolean;
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
+  const cleanId = normalizeUniversalText(loginId);
+  const cleanPass = normalizePassword(password);
+
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loginId, password }),
+      body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
     });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
@@ -435,25 +441,22 @@ export async function loginUser(loginId: string, password: string): Promise<User
     const data = await res.json();
     return data.session;
   } catch (err: any) {
-    // Check local fallback
-    const cleanId = (loginId || '').toString().trim();
-    const cleanPass = (password || '').toString().trim();
-    
-    // Check if master admin 8695716192 or admin
-    if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
+    // Master admin 8695716192 or admin
+    if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin' || cleanId.toLowerCase() === 'adm') && cleanPass === '6293') {
       return {
         id: 'adm_8695716192',
         idNo: '8695716192',
         name: 'Engr. N. Ali (Admin Controller)',
         phone: '8695716192',
         role: 'admin',
+        status: 'active',
         designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
       };
     }
 
-    // Check if default worker
+    // Default worker
     if ((cleanId.toLowerCase() === 'worker' || cleanId.toLowerCase() === 'workar') && cleanPass === '0000') {
       return {
         id: 'worker_default_0000',
@@ -461,6 +464,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
         name: 'Field Worker (WBSEDCL)',
         phone: '',
         role: 'worker',
+        status: 'active',
         designation: 'লাইনম্যান / Worker (WBSEDCL)',
         badgeNo: 'WRK-0000',
         loggedInAt: new Date().toISOString()
@@ -469,23 +473,21 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => u && u.idNo && (
-      u.idNo.toString().toLowerCase() === cleanId.toLowerCase() || 
-      (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')) ||
-      (u.name && u.name.toLowerCase() === cleanId.toLowerCase())
-    ));
+    const found = users.find(u => u && isUserMatch(cleanId, u));
 
     if (found) {
       if (found.status === 'hold') {
         throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
       }
-      if (String(found.password).trim() === cleanPass) {
+      const uPass = normalizePassword(found.password);
+      if (uPass === cleanPass) {
         return {
           id: found.id,
           idNo: found.idNo,
           name: found.name,
           phone: found.phone,
           role: found.role,
+          status: found.status || 'active',
           designation: found.designation,
           badgeNo: found.badgeNo || found.idNo,
           loggedInAt: new Date().toISOString()

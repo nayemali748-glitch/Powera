@@ -8,6 +8,11 @@ export interface Translations {
   fiveCategories: string;
   dataEntry: string;
   mySubmissions: string;
+  workOrders: string;
+  workOrderKhataBoard: string;
+  workOrderNoticeDesc: string;
+  uploadKhataPhoto: string;
+  noWorkOrdersFound: string;
   adminCenter: string;
   installApp: string;
   language: string;
@@ -193,6 +198,11 @@ export const translations: Record<Language, Translations> = {
     fiveCategories: '৫টি প্রধান ক্যাটাগরি',
     dataEntry: 'নতুন ডাটা এন্ট্রি',
     mySubmissions: 'আমার এন্ট্রি তালিকা',
+    workOrders: 'ওয়ার্ক অর্ডার ও খাতা',
+    workOrderKhataBoard: 'ওয়ার্ক অর্ডার ও খাতার নোটিশ বোর্ড',
+    workOrderNoticeDesc: 'এডমিন কর্তৃক আপলোড করা ওয়ার্ক অর্ডার, কনজিউমার লিস্ট ও খাতার ছবি দেখুন',
+    uploadKhataPhoto: 'ওয়ার্ক অর্ডার / খাতার ছবি আপলোড',
+    noWorkOrdersFound: 'কোনো ওয়ার্ক অর্ডার বা খাতার নোটিশ পাওয়া যায়নি',
     adminCenter: 'এডমিন সেন্টার',
     installApp: 'অ্যাপ ইনস্টল করুন (Android/PC)',
     language: 'ভাষা নির্বাচন (Language)',
@@ -373,6 +383,11 @@ export const translations: Record<Language, Translations> = {
     fiveCategories: '5 Main Categories',
     dataEntry: 'New Data Entry',
     mySubmissions: 'My Submissions',
+    workOrders: 'Work Orders & Khata',
+    workOrderKhataBoard: 'Daily Work Orders & Khata Photo Board',
+    workOrderNoticeDesc: 'View official work orders, consumer lists & khata photos uploaded by Admin',
+    uploadKhataPhoto: 'Upload Work Order / Khata Photo',
+    noWorkOrdersFound: 'No work orders or khata notices found',
     adminCenter: 'Admin Center',
     installApp: 'Install App (Android/PC)',
     language: 'Language Settings',
@@ -553,6 +568,11 @@ export const translations: Record<Language, Translations> = {
     fiveCategories: '5 मुख्य श्रेणियां',
     dataEntry: 'नई डेटा प्रविष्टि',
     mySubmissions: 'मेरी प्रविष्टियां (My Submissions)',
+    workOrders: 'वर्क ऑर्डर एवं खाता',
+    workOrderKhataBoard: 'दैनिक वर्क ऑर्डर एवं खाता फोटो बोर्ड',
+    workOrderNoticeDesc: 'एडमिन द्वारा अपलोड किए गए वर्क ऑर्डर, उपभोक्ता सूची और खाता फोटो देखें',
+    uploadKhataPhoto: 'वर्क ऑर्डर / खाता फोटो अपलोड',
+    noWorkOrdersFound: 'कोई वर्क ऑर्डर या खाता नोटिस नहीं मिला',
     adminCenter: 'एडमिन सेंटर',
     installApp: 'ऐप इंस्टॉल करें (Android/PC)',
     language: 'भाषा चुनें (Language)',
@@ -733,6 +753,11 @@ export const translations: Record<Language, Translations> = {
     fiveCategories: '5 اہم زمرے',
     dataEntry: 'نیا ڈیٹا اندراج',
     mySubmissions: 'میری جمع کردہ اندراجات',
+    workOrders: 'ورک آرڈرز اور کھاتہ',
+    workOrderKhataBoard: 'ورک آرڈرز اور کھاتہ فوٹو بورڈ',
+    workOrderNoticeDesc: 'ایڈمن کے اپ لوڈ کردہ ورک آرڈرز، صارفین کی فہرست اور کھاتہ کی تصاویر دیکھیں',
+    uploadKhataPhoto: 'ورک آرڈر / کھاتہ فوٹو اپ لوڈ',
+    noWorkOrdersFound: 'کوئی ورک آرڈر یا کھاتہ نوٹس نہیں ملا',
     adminCenter: 'ایڈمن سنٹر',
     installApp: 'ایپ انسٹال کریں (Android/PC)',
     language: 'زبان منتخب کریں (Language)',

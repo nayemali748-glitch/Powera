@@ -307,6 +307,30 @@ app.get('/api/users', (req, res) => {
   res.json(users);
 });
 
+// Helper to normalize Unicode, non-ASCII numerals (Bengali, Hindi, Arabic), dashes and invisible spaces
+function normalizeUniversal(val: any): string {
+  if (val === null || val === undefined) return '';
+  let s = String(val);
+  try {
+    s = s.normalize('NFKC');
+  } catch {
+    // ignore
+  }
+  // Strip zero-width, BOM, non-breaking spaces
+  s = s.replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F\u180E\u202F\u205F\u3000\u00AD]/g, '');
+  // Bengali numerals ০-৯
+  s = s.replace(/[\u09E6-\u09EF]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x09E6 + 48));
+  // Devanagari numerals ०-९
+  s = s.replace(/[\u0966-\u096F]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x0966 + 48));
+  // Arabic-Indic numerals ٠-٩
+  s = s.replace(/[\u0660-\u0669]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x0660 + 48));
+  // Eastern Arabic numerals ۰-۹
+  s = s.replace(/[\u06F0-\u06F9]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x06F0 + 48));
+  // Standardize various dash symbols to ASCII '-'
+  s = s.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  return s.trim();
+}
+
 // Create new user or update if ID exists (Admin created)
 app.post('/api/users', (req, res) => {
   try {
@@ -314,9 +338,10 @@ app.post('/api/users', (req, res) => {
     const users = readUsers();
     const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
 
-    const cleanId = (idNo || '').toString().trim();
-    const cleanPass = (password || '').toString().trim();
-    const cleanName = (name || cleanId || 'কর্মী').toString().trim();
+    const cleanId = normalizeUniversal(idNo);
+    const cleanPass = normalizeUniversal(password);
+    const cleanName = (name ? String(name).trim() : cleanId) || 'কর্মী';
+    const cleanPhone = normalizeUniversal(phone).replace(/[^0-9]/g, '');
 
     if (!cleanId) {
       return res.status(400).json({ error: 'User ID No is required' });
@@ -328,22 +353,29 @@ app.post('/api/users', (req, res) => {
 
     const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
 
-    // Check duplicate (case-insensitive)
-    const existingIndex = users.findIndex((u: any) => u && u.idNo && u.idNo.toString().trim().toLowerCase() === cleanId.toLowerCase());
+    // Check duplicate (case-insensitive & dash-tolerant)
+    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const existingIndex = users.findIndex((u: any) => {
+      if (!u || !u.idNo) return false;
+      const uId = normalizeUniversal(u.idNo).toLowerCase();
+      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
+      return uId === cleanId.toLowerCase() || (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum);
+    });
     
     if (existingIndex !== -1) {
       // If user ID already exists, update their credentials, role & details seamlessly
       users[existingIndex] = {
         ...users[existingIndex],
+        idNo: cleanId,
         password: cleanPass,
         name: cleanName,
-        phone: (phone !== undefined ? phone : users[existingIndex].phone || '').toString().trim(),
+        phone: cleanPhone || users[existingIndex].phone || '',
         role: assignedRole,
         status: status === 'hold' ? 'hold' : 'active',
         designation: designation?.trim() || users[existingIndex].designation || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-        badgeNo: badgeNo?.trim() || users[existingIndex].badgeNo || cleanId,
+        badgeNo: badgeNo ? normalizeUniversal(badgeNo) : users[existingIndex].badgeNo || cleanId,
         securityQuestion: securityQuestion || users[existingIndex].securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-        securityAnswer: securityAnswer?.trim() || users[existingIndex].securityAnswer || 'Vidyut Bhavan',
+        securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : users[existingIndex].securityAnswer || 'Vidyut Bhavan',
         updatedAt: new Date().toISOString()
       };
       writeUsers(users);
@@ -355,13 +387,13 @@ app.post('/api/users', (req, res) => {
       idNo: cleanId,
       password: cleanPass,
       name: cleanName,
-      phone: (phone || '').toString().trim(),
+      phone: cleanPhone || '',
       role: assignedRole,
       status: status === 'hold' ? 'hold' : 'active',
       designation: designation?.trim() || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-      badgeNo: badgeNo?.trim() || cleanId,
+      badgeNo: badgeNo ? normalizeUniversal(badgeNo) : cleanId,
       securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-      securityAnswer: securityAnswer?.trim() || 'Vidyut Bhavan',
+      securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : 'Vidyut Bhavan',
       createdAt: new Date().toISOString()
     };
 
@@ -466,14 +498,15 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(400).json({ error: 'Login ID and Password are required' });
     }
 
-    const cleanId = String(loginId).trim();
-    const cleanPass = String(password).trim();
-    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const cleanId = normalizeUniversal(loginId);
+    const cleanPass = normalizeUniversal(password);
+    const cleanIdLower = cleanId.toLowerCase();
+    const cleanIdAlphaNum = cleanIdLower.replace(/[^a-z0-9]/g, '');
     const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
     const users = readUsers();
 
     // 1. Direct Master Admin check (8695716192 / admin with 6293)
-    if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
+    if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanIdLower === 'admin' || cleanIdLower === 'adm') && cleanPass === '6293') {
       const session = {
         id: ROOT_ADMIN_ACCOUNT.id,
         idNo: ROOT_ADMIN_ACCOUNT.idNo,
@@ -489,7 +522,7 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     // 2. Direct Worker default check (worker / workar with 0000)
-    if ((cleanId.toLowerCase() === 'worker' || cleanId.toLowerCase() === 'workar') && cleanPass === '0000') {
+    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar' || cleanIdAlphaNum === 'worker' || cleanIdAlphaNum === 'workar') && cleanPass === '0000') {
       const session = {
         id: ROOT_WORKER_ACCOUNT.id,
         idNo: ROOT_WORKER_ACCOUNT.idNo,
@@ -507,20 +540,23 @@ app.post('/api/auth/login', (req, res) => {
     // 3. Search all users matching the entered ID
     const matchingCandidates = users.filter((u: any) => {
       if (!u) return false;
-      const uId = (u.idNo || '').toString().trim().toLowerCase();
-      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
-      const uPhone = (u.phone || '').toString().replace(/[^0-9]/g, '');
+      const rawUId = (u.idNo || '').toString();
+      const uId = normalizeUniversal(rawUId).toLowerCase();
+      const uIdAlphaNum = uId.replace(/[^a-z0-9]/g, '');
+      const uIdDigits = uId.replace(/[^0-9]/g, '');
+      const uPhone = normalizeUniversal(u.phone || '').replace(/[^0-9]/g, '');
       const uName = (u.name || '').toString().trim().toLowerCase();
-      const targetId = cleanId.toLowerCase();
 
       // Direct exact match
-      if (uId === targetId || u.id === cleanId) return true;
-      // Alphanumeric match (e.g. LM-4085 vs lm4085)
-      if (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) return true;
-      // Phone match
-      if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone === cleanIdDigits) return true;
+      if (uId === cleanIdLower || (u.id && u.id.toLowerCase() === cleanIdLower)) return true;
+      // Alphanumeric match (e.g. LM-5239 vs lm5239 vs LM 5239)
+      if (cleanIdAlphaNum && uIdAlphaNum && cleanIdAlphaNum === uIdAlphaNum) return true;
+      // Numeric part match (e.g. user typed 5239 for LM-5239)
+      if (cleanIdDigits && uIdDigits && cleanIdDigits.length >= 3 && cleanIdDigits === uIdDigits) return true;
+      // Phone match (10 digits)
+      if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone && uPhone.includes(cleanIdDigits)) return true;
       // Name match
-      if (uName && uName === targetId) return true;
+      if (uName && (uName === cleanIdLower || uName.includes(cleanIdLower))) return true;
 
       return false;
     });
@@ -529,8 +565,8 @@ app.post('/api/auth/login', (req, res) => {
     if (matchingCandidates.length === 0) {
       const swappedCandidate = users.find((u: any) => {
         if (!u) return false;
-        const uId = (u.idNo || '').toString().trim().toLowerCase();
-        const uPass = (u.password || '').toString().trim();
+        const uId = normalizeUniversal(u.idNo || '').toLowerCase();
+        const uPass = normalizeUniversal(u.password || '');
         return (uId === cleanPass.toLowerCase()) && (uPass === cleanId);
       });
 
@@ -554,13 +590,17 @@ app.post('/api/auth/login', (req, res) => {
         return res.json({ success: true, session });
       }
 
-      return res.status(401).json({ error: `User ID "${cleanId}" not found! Please check your ID or create account in Admin panel.` });
+      return res.status(401).json({ 
+        error: `User ID "${cleanId}" খুঁজে পাওয়া যায়নি! অনুগ্রহ করে সঠিক User ID দিন অথবা এডমিন প্যানেল থেকে আইডি তৈরি করুন।` 
+      });
     }
 
-    // Check password among matched candidates
+    // Check password among matched candidates (with full universal normalization)
     const authenticatedUser = matchingCandidates.find((u: any) => {
-      const uPass = (u.password || '').toString().trim();
-      return uPass === cleanPass || (u.idNo === '8695716192' && cleanPass === '6293');
+      const uPass = normalizeUniversal(u.password || '');
+      const isMasterAdmin = (u.idNo === '8695716192' || u.idNo === 'admin') && cleanPass === '6293';
+      const isMasterWorker = (u.idNo === 'worker' || u.idNo === 'workar') && cleanPass === '0000';
+      return uPass === cleanPass || isMasterAdmin || isMasterWorker;
     });
 
     if (!authenticatedUser) {

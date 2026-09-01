@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { UserSession, UserAccount } from '../types';
 import { fetchUsers, createUserAccount, loginUser, resetUserPassword, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
 import { Language, translations } from '../utils/translations';
 
 interface LoginScreenProps {
@@ -104,8 +105,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     e.preventDefault();
     setError(null);
 
-    const cleanId = loginId.trim();
-    const cleanPass = loginPassword.trim();
+    const cleanId = normalizeUniversalText(loginId);
+    const cleanPass = normalizePassword(loginPassword);
     const cleanIdLower = cleanId.toLowerCase();
 
     if (!cleanId) {
@@ -126,6 +127,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         name: 'Engr. N. Ali (Admin Controller)',
         phone: '8695716192',
         role: 'admin',
+        status: 'active',
         designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
@@ -143,6 +145,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         name: 'Field Worker (WBSEDCL)',
         phone: '',
         role: 'worker',
+        status: 'active',
         designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
         badgeNo: 'WRK-0000',
         loggedInAt: new Date().toISOString()
@@ -168,48 +171,52 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const handleQuickLogin = async (accIdNo: string, accPass: string) => {
     setLoading(true);
     setError(null);
-    setLoginId(accIdNo);
-    setLoginPassword(accPass);
+    const cleanId = normalizeUniversalText(accIdNo);
+    const cleanPass = normalizePassword(accPass);
+    setLoginId(cleanId);
+    setLoginPassword(cleanPass);
 
-    const cleanIdLower = accIdNo.toLowerCase();
+    const cleanIdLower = cleanId.toLowerCase();
 
     // Instant hardcoded bypass for admin & worker
-    if ((cleanIdLower === 'admin' || accIdNo === '8695716192') && accPass === '6293') {
+    if ((cleanIdLower === 'admin' || cleanId === '8695716192') && cleanPass === '6293') {
       const adminSession: UserSession = {
         id: 'adm_8695716192',
         idNo: '8695716192',
         name: 'Engr. N. Ali (Admin Controller)',
         phone: '8695716192',
         role: 'admin',
+        status: 'active',
         designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
         loggedInAt: new Date().toISOString()
       };
-      loginUser(accIdNo, accPass).catch(() => {});
+      loginUser(cleanId, cleanPass).catch(() => {});
       handleSuccess(adminSession);
       setLoading(false);
       return;
     }
 
-    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar') && accPass === '0000') {
+    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar') && cleanPass === '0000') {
       const workerSession: UserSession = {
         id: 'worker_default_0000',
         idNo: 'worker',
         name: 'Field Worker (WBSEDCL)',
         phone: '',
         role: 'worker',
+        status: 'active',
         designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
         badgeNo: 'WRK-0000',
         loggedInAt: new Date().toISOString()
       };
-      loginUser(accIdNo, accPass).catch(() => {});
+      loginUser(cleanId, cleanPass).catch(() => {});
       handleSuccess(workerSession);
       setLoading(false);
       return;
     }
 
     try {
-      const session = await loginUser(accIdNo, accPass);
+      const session = await loginUser(cleanId, cleanPass);
       handleSuccess(session);
     } catch (err: any) {
       setError(err.message || 'লগইন ব্যর্থ হয়েছে');
@@ -224,11 +231,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setError(null);
     setSuccessMsg(null);
 
-    const cleanId = regIdNo.trim();
+    const cleanId = normalizeUniversalText(regIdNo);
     const cleanName = regName.trim();
-    const cleanPhone = regPhone.trim();
-    const cleanPass = regPassword.trim();
-    const cleanConfirm = regConfirmPassword.trim();
+    const cleanPhone = normalizeUniversalText(regPhone).replace(/[^0-9]/g, '');
+    const cleanPass = normalizePassword(regPassword);
+    const cleanConfirm = normalizePassword(regConfirmPassword);
 
     if (!cleanId) {
       setError('একটি User ID লিখুন');
@@ -261,14 +268,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         designation: regDesignation || (regRole === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
         badgeNo: cleanId,
         password: cleanPass,
+        status: 'active',
         securityQuestion: regSecurityQuestion,
-        securityAnswer: regSecurityAnswer.trim() || 'Vidyut Bhavan'
+        securityAnswer: normalizeUniversalText(regSecurityAnswer) || 'Vidyut Bhavan'
       });
 
       // Update accounts list
       setAccounts(prev => [newUser, ...prev]);
 
-      setSuccessMsg(`নতুন ${regRole === 'admin' ? 'এডমিন' : 'কর্মী'} আইডি "${cleanId}" তৈরি হয়েছে! এই আইডি ও পাসওয়ার্ড দিয়ে এখন যেকোনো ডিভাইস থেকে লগইন করা যাবে।`);
+      setSuccessMsg(`নতুন ${regRole === 'admin' ? 'এডমিন' : 'কর্মী'} আইডি "${cleanId}" তৈরি হয়েছে! এই আইডি ও পাসওয়ার্ড দিয়ে এখন যেকোনো ডিভাইস বা ফোন থেকে লগইন করা যাবে।`);
       setLoginId(cleanId);
       setLoginPassword(cleanPass);
       setMode('login');
@@ -283,20 +291,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const handleForgotVerify = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    const cleanForgotId = forgotId.trim();
+    const cleanForgotId = normalizeUniversalText(forgotId);
 
     if (!cleanForgotId) {
       setError('আপনার Login ID No প্রবেশ করান');
       return;
     }
 
-    // Direct check in local accounts or special admin ID
-    let found = accounts.find(
-      (a) => a.idNo.toLowerCase() === cleanForgotId.toLowerCase() || a.phone.replace(/[^0-9]/g, '') === cleanForgotId.replace(/[^0-9]/g, '')
-    );
+    // Direct check in local accounts with flexible matching
+    let found = accounts.find((a) => a && isUserMatch(cleanForgotId, a));
 
-    if (!found && (cleanForgotId === '8695716192' || cleanForgotId === 'admin')) {
-      found = DEFAULT_WBSEDCL_ACCOUNTS[0];
+    if (!found && (cleanForgotId.toLowerCase() === '8695716192' || cleanForgotId.toLowerCase() === 'admin')) {
+      found = DEFAULT_WBSEDCL_ACCOUNTS[1] || DEFAULT_WBSEDCL_ACCOUNTS[0];
     }
 
     if (!found) {
@@ -315,8 +321,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
     if (!targetAccount) return;
 
-    const cleanNewPass = newPassword.trim();
-    const cleanConfirm = confirmNewPassword.trim();
+    const cleanNewPass = normalizePassword(newPassword);
+    const cleanConfirm = normalizePassword(confirmNewPassword);
 
     if (!cleanNewPass || cleanNewPass.length < 4) {
       setError('নতুন পাসওয়ার্ড কমপক্ষে ৪ ডিজিট বা অক্ষরের হতে হবে');
@@ -335,7 +341,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       // Create or update local account state
       const updatedAccounts = accounts.map((acc) => {
-        if (acc.id === targetAccount.id || acc.idNo === targetAccount.idNo) {
+        if (acc.id === targetAccount.id || isUserMatch(targetAccount.idNo, acc)) {
           return { ...acc, password: cleanNewPass };
         }
         return acc;

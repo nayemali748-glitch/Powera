@@ -106,7 +106,7 @@ export interface StatsResponse {
   };
 }
 
-export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance';
+export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance' | 'work-orders';
 
 export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_reports' | null;
 
@@ -116,6 +116,7 @@ export interface UserSession {
   name: string;
   phone?: string;
   role: 'admin' | 'worker' | 'supervisor';
+  status?: 'active' | 'hold';
   designation: string;
   badgeNo?: string;
   loggedInAt: string;
