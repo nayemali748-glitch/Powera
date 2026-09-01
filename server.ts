@@ -30,7 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Single Master Admin Account (No default/sample worker accounts)
+// Default Master Accounts
 const ROOT_ADMIN_ACCOUNT = {
   id: 'adm_8695716192',
   idNo: '8695716192',
@@ -43,39 +43,73 @@ const ROOT_ADMIN_ACCOUNT = {
   badgeNo: 'ADM-8695',
   securityQuestion: 'Your Primary Power Substation?',
   securityAnswer: 'Vidyut Bhavan',
-  createdAt: new Date().toISOString()
+  createdAt: '2026-09-01T00:00:00.000Z'
 };
 
-// Helper to read users (Only Admin created users + Master Admin exist)
+const ROOT_WORKER_ACCOUNT = {
+  id: 'worker_default_0000',
+  idNo: 'worker',
+  password: '0000',
+  name: 'Field Worker (WBSEDCL)',
+  phone: '',
+  role: 'worker',
+  status: 'active',
+  designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
+  badgeNo: 'WRK-0000',
+  securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?',
+  securityAnswer: 'Vidyut Bhavan',
+  createdAt: '2026-09-01T00:00:00.000Z'
+};
+
+// Helper to read users (Admin created users + Master Admin & Default Worker exist)
 function readUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) {
-      fs.writeFileSync(USERS_FILE, JSON.stringify([ROOT_ADMIN_ACCOUNT], null, 2), 'utf-8');
-      return [ROOT_ADMIN_ACCOUNT];
+      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
+      fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+      return initial;
     }
     const content = fs.readFileSync(USERS_FILE, 'utf-8');
     let parsed = JSON.parse(content || '[]');
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      fs.writeFileSync(USERS_FILE, JSON.stringify([ROOT_ADMIN_ACCOUNT], null, 2), 'utf-8');
-      return [ROOT_ADMIN_ACCOUNT];
+      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
+      fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+      return initial;
     }
     // Ensure all users have status property (default 'active')
     parsed = parsed.map((u: any) => ({
       ...u,
       status: u.status || 'active'
     }));
+
+    let updated = false;
+
     // Ensure primary admin 8695716192 exists and is active
-    const adminIdx = parsed.findIndex(u => u.idNo === '8695716192');
+    const adminIdx = parsed.findIndex(u => u && (u.idNo === '8695716192' || u.idNo?.toLowerCase() === 'admin'));
     if (adminIdx === -1) {
       parsed.unshift(ROOT_ADMIN_ACCOUNT);
-      fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
+      updated = true;
     } else {
       parsed[adminIdx].status = 'active';
     }
+
+    // Ensure default worker exists
+    const workerIdx = parsed.findIndex(u => u && (u.idNo?.toLowerCase() === 'worker' || u.idNo?.toLowerCase() === 'workar'));
+    if (workerIdx === -1) {
+      parsed.push(ROOT_WORKER_ACCOUNT);
+      updated = true;
+    } else {
+      parsed[workerIdx].status = 'active';
+    }
+
+    if (updated) {
+      fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
+    }
+
     return parsed;
   } catch (err) {
     console.error('Error reading users:', err);
-    return [ROOT_ADMIN_ACCOUNT];
+    return [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
   }
 }
 
@@ -430,7 +464,23 @@ app.post('/api/auth/login', (req, res) => {
       return res.json({ success: true, session });
     }
 
-    // 2. Search all users matching the entered ID
+    // 2. Direct Worker default check (worker / workar with 0000)
+    if ((cleanId.toLowerCase() === 'worker' || cleanId.toLowerCase() === 'workar') && cleanPass === '0000') {
+      const session = {
+        id: ROOT_WORKER_ACCOUNT.id,
+        idNo: ROOT_WORKER_ACCOUNT.idNo,
+        name: ROOT_WORKER_ACCOUNT.name,
+        phone: ROOT_WORKER_ACCOUNT.phone,
+        role: ROOT_WORKER_ACCOUNT.role,
+        status: 'active',
+        designation: ROOT_WORKER_ACCOUNT.designation,
+        badgeNo: ROOT_WORKER_ACCOUNT.badgeNo,
+        loggedInAt: new Date().toISOString()
+      };
+      return res.json({ success: true, session });
+    }
+
+    // 3. Search all users matching the entered ID
     const matchingCandidates = users.filter((u: any) => {
       if (!u) return false;
       const uId = (u.idNo || '').toString().trim().toLowerCase();
@@ -519,6 +569,64 @@ app.post('/api/auth/login', (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({ error: error.message || 'Login authentication failed' });
   }
+});
+
+// Change password endpoint
+app.post('/api/auth/change-password', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { idNo, currentPassword, newPassword } = req.body;
+  if (!idNo || !newPassword) {
+    return res.status(400).json({ error: 'User ID and New Password are required' });
+  }
+
+  const cleanId = String(idNo).trim();
+  const cleanNewPass = String(newPassword).trim();
+  const users = readUsers();
+
+  const index = users.findIndex((u: any) => u && (u.id === cleanId || (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase())));
+
+  if (index === -1) {
+    return res.status(404).json({ error: `User ID "${cleanId}" not found` });
+  }
+
+  if (currentPassword && users[index].password && users[index].password !== String(currentPassword).trim()) {
+    return res.status(401).json({ error: 'বর্তমান পাসওয়ার্ড সঠিক নয় (Incorrect current password)' });
+  }
+
+  users[index].password = cleanNewPass;
+  users[index].updatedAt = new Date().toISOString();
+  writeUsers(users);
+
+  res.json({ success: true, message: 'Password changed successfully', user: users[index] });
+});
+
+// Reset password endpoint
+app.post('/api/auth/reset-password', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { idNo, phone, newPassword } = req.body;
+  if (!idNo || !newPassword) {
+    return res.status(400).json({ error: 'User ID and New Password are required' });
+  }
+
+  const cleanId = String(idNo).trim();
+  const cleanNewPass = String(newPassword).trim();
+  const users = readUsers();
+
+  const index = users.findIndex((u: any) => u && (
+    u.id === cleanId || 
+    (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase()) ||
+    (phone && u.phone && u.phone.replace(/[^0-9]/g, '') === String(phone).replace(/[^0-9]/g, ''))
+  ));
+
+  if (index === -1) {
+    return res.status(404).json({ error: `User ID "${cleanId}" not found` });
+  }
+
+  users[index].password = cleanNewPass;
+  users[index].updatedAt = new Date().toISOString();
+  writeUsers(users);
+
+  res.json({ success: true, message: 'Password reset successfully', user: users[index] });
 });
 
 // Verify active session endpoint

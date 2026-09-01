@@ -1,0 +1,72 @@
+[
+  {
+    "id": "worker_default_0000",
+    "idNo": "worker",
+    "password": "0000",
+    "name": "Field Worker (WBSEDCL)",
+    "phone": "",
+    "role": "worker",
+    "status": "active",
+    "designation": "লাইনম্যান / Worker (WBSEDCL)",
+    "badgeNo": "WRK-0000",
+    "securityQuestion": "আপনার প্রিয় সাবস্টেশন / অফিস?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-09-01T08:50:00.000Z"
+  },
+  {
+    "id": "worker_1788252415470_215",
+    "idNo": "LM-001",
+    "password": "1234",
+    "name": "Jasim",
+    "phone": "",
+    "role": "worker",
+    "status": "active",
+    "designation": "লাইনম্যান / Worker (WBSEDCL)",
+    "badgeNo": "LM-001",
+    "securityQuestion": "আপনার প্রিয় সাবস্টেশন / অফিস?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-09-01T08:46:55.470Z"
+  },
+  {
+    "id": "admin_1788252397034_204",
+    "idNo": "admin",
+    "password": "6293",
+    "name": "Nayem (Admin)",
+    "phone": "8695716192",
+    "role": "admin",
+    "status": "active",
+    "designation": "Admin Controller",
+    "badgeNo": "admin",
+    "securityQuestion": "আপনার প্রিয় সাবস্টেশন / অফিস?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-09-01T08:46:37.034Z"
+  },
+  {
+    "id": "worker_1788251963958_340",
+    "idNo": "Workar",
+    "password": "0000",
+    "name": "Nejam (Worker)",
+    "phone": "9830000000",
+    "role": "worker",
+    "status": "active",
+    "designation": "লাইনম্যান (WBSEDCL)",
+    "badgeNo": "Workar",
+    "securityQuestion": "আপনার প্রিয় ফিডার / সাবস্টেশন?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-09-01T08:39:23.958Z"
+  },
+  {
+    "id": "adm_8695716192",
+    "idNo": "8695716192",
+    "password": "6293",
+    "name": "Engr. N. Ali (Admin Controller)",
+    "phone": "8695716192",
+    "role": "admin",
+    "status": "active",
+    "designation": "Assistant Engineer / Divisional Admin (WBSEDCL)",
+    "badgeNo": "ADM-8695",
+    "securityQuestion": "Your Primary Power Substation?",
+    "securityAnswer": "Vidyut Bhavan",
+    "createdAt": "2026-09-01T08:20:14.302Z"
+  }
+]

@@ -25,6 +25,7 @@ import {
   LogOut,
   UserPlus,
   Users,
+  KeyRound,
   Edit3,
   Globe,
   FileText,
@@ -61,6 +62,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [editingEntry, setEditingEntry] = useState<PowerEntry | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState<boolean>(false);
+  const [userModalTab, setUserModalTab] = useState<'create' | 'list' | 'change-password'>('create');
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
 
   // Category-specific Excel/CSV Export handler
@@ -631,12 +633,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             <button
               id="admin-manage-users-btn"
-              onClick={() => setIsUserModalOpen(true)}
+              onClick={() => {
+                setUserModalTab('create');
+                setIsUserModalOpen(true);
+              }}
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
               title="Create new worker or admin IDs and manage accounts"
             >
               <UserPlus className="w-4 h-4 text-emerald-200" />
               <span>User ID & Worker Management</span>
+            </button>
+
+            <button
+              id="admin-change-password-btn"
+              onClick={() => {
+                setUserModalTab('change-password');
+                setIsUserModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+              title="যেকোনো কর্মী বা এডমিনের পাসওয়ার্ড পরিবর্তন করুন"
+            >
+              <KeyRound className="w-4 h-4 text-amber-200" />
+              <span>Change Password (পাসওয়ার্ড পরিবর্তন)</span>
             </button>
 
             {/* Category-Specific Excel / CSV Export Button & Dropdown */}
@@ -1401,6 +1419,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={isUserModalOpen}
         onClose={() => setIsUserModalOpen(false)}
         lang={lang}
+        initialTab={userModalTab}
       />
     </div>
   );

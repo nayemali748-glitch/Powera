@@ -7,12 +7,27 @@ const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
 
 export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
   {
+    id: 'worker_default_0000',
+    idNo: 'worker',
+    password: '0000',
+    name: 'Field Worker (WBSEDCL)',
+    phone: '',
+    role: 'worker',
+    status: 'active',
+    designation: 'লাইনম্যান / Worker (WBSEDCL)',
+    badgeNo: 'WRK-0000',
+    securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?',
+    securityAnswer: 'Vidyut Bhavan',
+    createdAt: new Date().toISOString()
+  },
+  {
     id: 'adm_8695716192',
     idNo: '8695716192',
     password: '6293',
     name: 'Engr. N. Ali (Admin Controller)',
     phone: '8695716192',
     role: 'admin',
+    status: 'active',
     designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
     badgeNo: 'ADM-8695',
     securityQuestion: 'Your Primary Power Substation?',
@@ -384,7 +399,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
     const cleanId = (loginId || '').toString().trim();
     const cleanPass = (password || '').toString().trim();
     
-    // Check if master admin 8695716192
+    // Check if master admin 8695716192 or admin
     if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
       return {
         id: 'adm_8695716192',
@@ -394,6 +409,20 @@ export async function loginUser(loginId: string, password: string): Promise<User
         role: 'admin',
         designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
         badgeNo: 'ADM-8695',
+        loggedInAt: new Date().toISOString()
+      };
+    }
+
+    // Check if default worker
+    if ((cleanId.toLowerCase() === 'worker' || cleanId.toLowerCase() === 'workar') && cleanPass === '0000') {
+      return {
+        id: 'worker_default_0000',
+        idNo: 'worker',
+        name: 'Field Worker (WBSEDCL)',
+        phone: '',
+        role: 'worker',
+        designation: 'লাইনম্যান / Worker (WBSEDCL)',
+        badgeNo: 'WRK-0000',
         loggedInAt: new Date().toISOString()
       };
     }

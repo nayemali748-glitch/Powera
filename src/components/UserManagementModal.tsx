@@ -37,22 +37,24 @@ interface UserManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
   lang?: Language;
+  initialTab?: 'create' | 'list' | 'change-password';
 }
 
 export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   isOpen,
   onClose,
-  lang = 'bn'
+  lang = 'bn',
+  initialTab = 'create'
 }) => {
   const t = translations[lang] || translations.bn;
   // Load users from backend / localStorage
   const [users, setUsers] = useState<UserAccount[]>(DEFAULT_WBSEDCL_ACCOUNTS);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'create' | 'list'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'list' | 'change-password'>(initialTab);
   const [search, setSearch] = useState('');
   const [filterRole, setFilterRole] = useState<'all' | 'worker' | 'admin' | 'hold'>('all');
 
-  // Form State
+  // Form State (Create User)
   const [role, setRole] = useState<'worker' | 'admin'>('worker');
   const [idNo, setIdNo] = useState(() => `LM-${Math.floor(1000 + Math.random() * 9000)}`);
   const [name, setName] = useState('');
@@ -61,6 +63,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [password, setPassword] = useState('1234');
   const [showPassword, setShowPassword] = useState(true);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+
+  // Change Password Tab State
+  const [selectedChangeUserId, setSelectedChangeUserId] = useState<string>('');
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('0000');
+  const [showNewPasswordInput, setShowNewPasswordInput] = useState<boolean>(true);
+  const [changePassSearch, setChangePassSearch] = useState<string>('');
 
   // Editing state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -81,8 +89,11 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       setError(null);
       setSuccess(null);
       setCreatedUserCard(null);
+      if (initialTab) {
+        setActiveTab(initialTab);
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, initialTab]);
 
   const loadUsersList = async () => {
     setLoading(true);
@@ -204,6 +215,43 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+
+    const targetUser = users.find(u => (u.id === selectedChangeUserId || u.idNo === selectedChangeUserId));
+    if (!targetUser) {
+      setError('অনুগ্রহ করে একজন ইউজার সিলেক্ট করুন');
+      return;
+    }
+
+    if (!newPasswordInput.trim()) {
+      setError('নতুন পাসওয়ার্ড খালি রাখা যাবে না');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const updated = await updateUserAccount(targetUser.id || targetUser.idNo, {
+        password: newPasswordInput.trim()
+      });
+
+      setUsers(prev => prev.map(u => (u.id === targetUser.id || u.idNo === targetUser.idNo) ? { ...u, ...updated, password: newPasswordInput.trim() } : u));
+      setSuccess(`User ID "${targetUser.idNo}" (${targetUser.name}) এর পাসওয়ার্ড সফলভাবে "${newPasswordInput.trim()}" পরিবর্তন করা হয়েছে!`);
+      setCreatedUserCard({
+        idNo: targetUser.idNo,
+        password: newPasswordInput.trim(),
+        name: targetUser.name,
+        role: targetUser.role === 'admin' ? 'এডমিন (Admin)' : 'ফিল্ড ওয়ার্কার (Worker)'
+      });
+    } catch (err: any) {
+      setError(err.message || 'পাসওয়ার্ড পরিবর্তন করতে সমস্যা হয়েছে');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleToggleStatus = async (userAcc: UserAccount) => {
     if (userAcc.idNo === '8695716192' || userAcc.idNo === 'admin') {
       alert('মুখ্য এডমিন আইডি (8695716192) হোল্ড করা যাবে না!');
@@ -320,10 +368,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-4 pt-2 gap-2">
+        <div className="flex border-b border-slate-200 bg-slate-50 px-4 pt-2 gap-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('create')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
               activeTab === 'create'
                 ? 'border-blue-600 text-blue-600 bg-white rounded-t-lg shadow-xs'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -337,7 +385,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               setActiveTab('list');
               loadUsersList();
             }}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
               activeTab === 'list'
                 ? 'border-blue-600 text-blue-600 bg-white rounded-t-lg shadow-xs'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -345,6 +393,23 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           >
             <Users className="w-4 h-4" />
             <span>User List & Passwords ({users.length})</span>
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('change-password');
+              loadUsersList();
+              if (!selectedChangeUserId && users.length > 0) {
+                setSelectedChangeUserId(users[0].id || users[0].idNo);
+              }
+            }}
+            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+              activeTab === 'change-password'
+                ? 'border-amber-600 text-amber-700 bg-white rounded-t-lg shadow-xs'
+                : 'border-transparent text-amber-700/80 hover:text-amber-900 bg-amber-50/60 rounded-t-lg'
+            }`}
+          >
+            <KeyRound className="w-4 h-4 text-amber-600" />
+            <span>Change Password (পাসওয়ার্ড পরিবর্তন)</span>
           </button>
         </div>
 
@@ -944,6 +1009,194 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   })
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* TAB 3: CHANGE PASSWORD (পাসওয়ার্ড পরিবর্তন) */}
+          {/* ========================================================= */}
+          {activeTab === 'change-password' && (
+            <div className="space-y-4 animate-in fade-in duration-200">
+              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+                <KeyRound className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong>পাসওয়ার্ড পরিবর্তন প্যানেল:</strong> যেকোনো কর্মী বা এডমিন আইডির পাসওয়ার্ড তাৎক্ষণিকভাবে পরিবর্তন করুন। পরিবর্তন করার সাথে সাথে নতুন পাসওয়ার্ড দিয়ে সিস্টেমে লগইন করা যাবে।
+                </div>
+              </div>
+
+              <form onSubmit={handleChangePasswordSubmit} className="space-y-4">
+                {/* 1. Select User Account */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-600" />
+                      <span>ইউজার নির্বাচন করুন (Select User ID) <span className="text-red-500">*</span></span>
+                    </span>
+                    <span className="text-[11px] text-slate-500">মোট ইউজার: {users.length}</span>
+                  </label>
+
+                  {/* Filter / Quick Search */}
+                  <div className="relative mb-2">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={changePassSearch}
+                      onChange={(e) => setChangePassSearch(e.target.value)}
+                      placeholder="নাম, User ID বা মোবাইল দিয়ে ইউজার খুঁজুন..."
+                      className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+                    />
+                  </div>
+
+                  <select
+                    value={selectedChangeUserId}
+                    onChange={(e) => setSelectedChangeUserId(e.target.value)}
+                    required
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all font-mono"
+                  >
+                    <option value="">-- ইউজার নির্বাচন করুন (Select User) --</option>
+                    {users
+                      .filter(u => {
+                        if (!changePassSearch.trim()) return true;
+                        const q = changePassSearch.toLowerCase();
+                        return (
+                          (u.name || '').toLowerCase().includes(q) ||
+                          (u.idNo || '').toLowerCase().includes(q) ||
+                          (u.phone || '').includes(q) ||
+                          (u.role || '').toLowerCase().includes(q)
+                        );
+                      })
+                      .map((u) => (
+                        <option key={u.id || u.idNo} value={u.id || u.idNo}>
+                          {u.role === 'admin' ? '👑 [ADMIN]' : '👷 [WORKER]'} {u.name} (ID: {u.idNo}) {u.phone ? `- Tel: ${u.phone}` : ''} {u.status === 'hold' ? '⚠️ [ON HOLD]' : ''}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* 2. Selected User Overview Card */}
+                {(() => {
+                  const currentSelected = users.find(u => (u.id === selectedChangeUserId || u.idNo === selectedChangeUserId));
+                  if (!currentSelected) return null;
+                  return (
+                    <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentSelected.role === 'admin' ? 'bg-slate-900 text-amber-400' : 'bg-blue-600 text-white'}`}>
+                            {currentSelected.role === 'admin' ? <ShieldCheck className="w-4 h-4" /> : <HardHat className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">{currentSelected.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">User ID: <strong className="text-slate-800">{currentSelected.idNo}</strong></div>
+                          </div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${currentSelected.status === 'hold' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {currentSelected.status === 'hold' ? 'ON HOLD' : 'ACTIVE'}
+                        </span>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600">
+                        <span>বর্তমান পাসওয়ার্ড (Current Password):</span>
+                        <div className="flex items-center gap-1.5 font-mono font-bold bg-white px-2.5 py-1 rounded border border-slate-200 text-slate-900">
+                          <span>{revealedPasswords[currentSelected.idNo] ? currentSelected.password : '••••'}</span>
+                          <button
+                            type="button"
+                            onClick={() => setRevealedPasswords(prev => ({ ...prev, [currentSelected.idNo]: !prev[currentSelected.idNo] }))}
+                            className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                          >
+                            {revealedPasswords[currentSelected.idNo] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 3. New Password Input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                      <span>নতুন পাসওয়ার্ড দিন (New Password) <span className="text-red-500">*</span></span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const randomPin = String(Math.floor(1000 + Math.random() * 9000));
+                        setNewPasswordInput(randomPin);
+                      }}
+                      className="text-xs font-bold text-amber-700 hover:text-amber-800 cursor-pointer flex items-center gap-1"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-600" />
+                      <span>Generate 4-Digit PIN</span>
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type={showNewPasswordInput ? 'text' : 'password'}
+                      required
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                      placeholder="নতুন পাসওয়ার্ড লিখুন (যেমন: 0000, 1234, ইত্যাদি)"
+                      className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 font-mono tracking-wider focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPasswordInput(!showNewPasswordInput)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      {showNewPasswordInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Presets Buttons */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                    দ্রুত পাসওয়ার্ড নির্বাচন (Quick Preset PINs)
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { label: '0000 (Worker)', val: '0000' },
+                      { label: '1234 (Standard)', val: '1234' },
+                      { label: '6293 (Admin)', val: '6293' },
+                      { label: '8899 (Custom)', val: '8899' },
+                    ].map(preset => (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        onClick={() => setNewPasswordInput(preset.val)}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-all cursor-pointer text-center ${
+                          newPasswordInput === preset.val
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {preset.val}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Submit Action Button */}
+                <button
+                  type="submit"
+                  disabled={loading || !selectedChangeUserId || !newPasswordInput.trim()}
+                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 shadow-md shadow-amber-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>আপডেট হচ্ছে...</span>
+                    </span>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>Update Password (পাসওয়ার্ড সংরক্ষণ করুন)</span>
+                    </>
+                  )}
+                </button>
+              </form>
             </div>
           )}
         </div>
