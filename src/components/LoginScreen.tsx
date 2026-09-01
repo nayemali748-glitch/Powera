@@ -526,63 +526,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 </button>
               </form>
 
-              {/* Immediate Testing & Quick Default Credentials Box */}
-              <div className="pt-3 border-t border-slate-200/80 space-y-2.5">
-                <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                  <span className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                    <span>দ্রুত টেস্টিং লগইন (Quick Test Credentials)</span>
-                  </span>
-                  <span className="text-[10px] text-emerald-600 font-mono font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/60">
-                    Instant Access
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin('admin', '6293')}
-                    className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-left transition-all border border-slate-700 shadow-xs cursor-pointer group hover:scale-[1.02] active:scale-[0.98]"
-                    title="এডমিন হিসেবে ১-ক্লিকে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Admin</span>
-                      </span>
-                      <span className="text-[9px] px-1 py-0.2 rounded bg-amber-400/20 text-amber-300 font-mono font-bold">1-Click</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-slate-300 leading-tight">
-                      ID: <strong className="text-white font-bold">admin</strong>
-                    </div>
-                    <div className="text-[10px] font-mono text-slate-400 leading-tight">
-                      Pass: <strong className="text-amber-300 font-bold">6293</strong>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin('worker', '0000')}
-                    className="p-2.5 rounded-xl bg-blue-50 hover:bg-blue-100/90 text-slate-900 text-left transition-all border border-blue-200 shadow-xs cursor-pointer group hover:scale-[1.02] active:scale-[0.98]"
-                    title="কর্মী হিসেবে ১-ক্লিকে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-blue-800 flex items-center gap-1">
-                        <HardHat className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Worker</span>
-                      </span>
-                      <span className="text-[9px] px-1 py-0.2 rounded bg-blue-200 text-blue-900 font-mono font-bold">1-Click</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-slate-700 leading-tight">
-                      ID: <strong className="text-blue-950 font-bold">worker</strong>
-                    </div>
-                    <div className="text-[10px] font-mono text-slate-600 leading-tight">
-                      Pass: <strong className="text-blue-700 font-bold">0000</strong>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
               {/* Secure Info Note */}
               <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
