@@ -273,27 +273,36 @@ app.post('/api/users', (req, res) => {
     const users = readUsers();
     const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
 
-    if (!idNo || !name || !password) {
-      return res.status(400).json({ error: 'ID No, Name, and Password are required' });
+    const cleanId = (idNo || '').toString().trim();
+    const cleanPass = (password || '').toString().trim();
+    const cleanName = (name || cleanId || 'কর্মী').toString().trim();
+
+    if (!cleanId) {
+      return res.status(400).json({ error: 'User ID No is required' });
     }
 
-    const cleanId = idNo.trim();
+    if (!cleanPass) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+
     // Check duplicate (case-insensitive)
-    if (users.some((u: any) => u.idNo && u.idNo.trim().toLowerCase() === cleanId.toLowerCase())) {
-      return res.status(400).json({ error: `ID No "${cleanId}" already exists! Please use a unique ID.` });
+    const exists = users.some((u: any) => u && u.idNo && u.idNo.toString().trim().toLowerCase() === cleanId.toLowerCase());
+    if (exists) {
+      return res.status(400).json({ error: `ID No "${cleanId}" already exists! Please choose a different User ID.` });
     }
 
+    const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
     const newUser = {
-      id: `${role || 'user'}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      id: `${assignedRole}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       idNo: cleanId,
-      password: String(password).trim(),
-      name: name.trim(),
-      phone: phone?.trim() || '',
-      role: role || 'worker',
+      password: cleanPass,
+      name: cleanName,
+      phone: (phone || '').toString().trim(),
+      role: assignedRole,
       status: status === 'hold' ? 'hold' : 'active',
-      designation: designation?.trim() || (role === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
+      designation: designation?.trim() || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
       badgeNo: badgeNo?.trim() || cleanId,
-      securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন?',
+      securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
       securityAnswer: securityAnswer?.trim() || 'Vidyut Bhavan',
       createdAt: new Date().toISOString()
     };
@@ -303,6 +312,7 @@ app.post('/api/users', (req, res) => {
 
     res.status(201).json({ success: true, user: newUser });
   } catch (error: any) {
+    console.error('Error creating user:', error);
     res.status(500).json({ error: error.message || 'Failed to create user' });
   }
 });
@@ -318,7 +328,7 @@ app.patch('/api/users/:id/status', (req, res) => {
   }
 
   const users = readUsers();
-  const index = users.findIndex((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
+  const index = users.findIndex((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
 
   if (index === -1) {
     return res.status(404).json({ error: 'User not found' });
@@ -336,18 +346,32 @@ app.patch('/api/users/:id/status', (req, res) => {
   res.json({ success: true, user: users[index], message: `User status changed to ${status}` });
 });
 
-// Update user / password
+// Update user / password / role / name
 app.patch('/api/users/:id', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const users = readUsers();
-  const index = users.findIndex((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
+  const index = users.findIndex((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
 
   if (index === -1) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  users[index] = { ...users[index], ...req.body, updatedAt: new Date().toISOString() };
+  const updates = req.body || {};
+  if (updates.password) {
+    updates.password = String(updates.password).trim();
+  }
+  if (updates.name) {
+    updates.name = String(updates.name).trim();
+  }
+  if (updates.phone !== undefined) {
+    updates.phone = String(updates.phone).trim();
+  }
+  if (updates.designation) {
+    updates.designation = String(updates.designation).trim();
+  }
+
+  users[index] = { ...users[index], ...updates, updatedAt: new Date().toISOString() };
   writeUsers(users);
   res.json({ success: true, user: users[index] });
 });
@@ -360,12 +384,12 @@ app.delete('/api/users/:id', (req, res) => {
   const initialLength = users.length;
   
   // Protect super admin 8695716192
-  const target = users.find((u: any) => u.id === id || (u.idNo && u.idNo.toLowerCase() === id.toLowerCase()));
+  const target = users.find((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
   if (target && (target.idNo === '8695716192' || target.idNo === 'admin')) {
     return res.status(403).json({ error: 'Primary admin account cannot be deleted' });
   }
 
-  users = users.filter((u: any) => u.id !== id && (u.idNo && u.idNo.toLowerCase() !== id.toLowerCase()));
+  users = users.filter((u: any) => u && u.id !== id && (u.idNo && u.idNo.toString().toLowerCase() !== id.toLowerCase()));
 
   if (users.length === initialLength) {
     return res.status(404).json({ error: 'User not found' });
@@ -390,78 +414,109 @@ app.post('/api/auth/login', (req, res) => {
     const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
     const users = readUsers();
 
-    // Universal flexible matcher across phones/keyboards
-    const found = users.find((u: any) => {
+    // 1. Direct Master Admin check (8695716192 / admin with 6293)
+    if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
+      const session = {
+        id: ROOT_ADMIN_ACCOUNT.id,
+        idNo: ROOT_ADMIN_ACCOUNT.idNo,
+        name: ROOT_ADMIN_ACCOUNT.name,
+        phone: ROOT_ADMIN_ACCOUNT.phone,
+        role: ROOT_ADMIN_ACCOUNT.role,
+        status: 'active',
+        designation: ROOT_ADMIN_ACCOUNT.designation,
+        badgeNo: ROOT_ADMIN_ACCOUNT.badgeNo,
+        loggedInAt: new Date().toISOString()
+      };
+      return res.json({ success: true, session });
+    }
+
+    // 2. Search all users matching the entered ID
+    const matchingCandidates = users.filter((u: any) => {
       if (!u) return false;
-      const uId = (u.idNo || '').trim().toLowerCase();
+      const uId = (u.idNo || '').toString().trim().toLowerCase();
       const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
-      const uIdDigits = uId.replace(/[^0-9]/g, '');
-      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
-      const uName = (u.name || '').trim().toLowerCase();
+      const uPhone = (u.phone || '').toString().replace(/[^0-9]/g, '');
+      const uName = (u.name || '').toString().trim().toLowerCase();
       const targetId = cleanId.toLowerCase();
 
-      // 1. Direct ID match
+      // Direct exact match
       if (uId === targetId || u.id === cleanId) return true;
-      // 2. Alphanumeric match (handles "LM-4085" vs "lm4085" or "LM 4085")
+      // Alphanumeric match (e.g. LM-4085 vs lm4085)
       if (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum) return true;
-      // 3. Digit match (e.g. if ID is LM-4085 and user typed 4085)
-      if (cleanIdDigits && cleanIdDigits.length >= 3 && uIdDigits === cleanIdDigits) return true;
-      // 4. Phone number match
+      // Phone match
       if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone === cleanIdDigits) return true;
-      // 5. Name match (case-insensitive)
+      // Name match
       if (uName && uName === targetId) return true;
 
       return false;
     });
 
-    if (!found) {
-      // Primary Master Admin fallback
-      if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
+    // Check if user accidentally swapped loginId and password
+    if (matchingCandidates.length === 0) {
+      const swappedCandidate = users.find((u: any) => {
+        if (!u) return false;
+        const uId = (u.idNo || '').toString().trim().toLowerCase();
+        const uPass = (u.password || '').toString().trim();
+        return (uId === cleanPass.toLowerCase()) && (uPass === cleanId);
+      });
+
+      if (swappedCandidate) {
+        if (swappedCandidate.status === 'hold') {
+          return res.status(403).json({ 
+            error: `Account ID "${swappedCandidate.idNo}" is currently ON HOLD / SUSPENDED by Admin!` 
+          });
+        }
         const session = {
-          id: ROOT_ADMIN_ACCOUNT.id,
-          idNo: ROOT_ADMIN_ACCOUNT.idNo,
-          name: ROOT_ADMIN_ACCOUNT.name,
-          phone: ROOT_ADMIN_ACCOUNT.phone,
-          role: ROOT_ADMIN_ACCOUNT.role,
-          status: 'active',
-          designation: ROOT_ADMIN_ACCOUNT.designation,
-          badgeNo: ROOT_ADMIN_ACCOUNT.badgeNo,
+          id: swappedCandidate.id,
+          idNo: swappedCandidate.idNo,
+          name: swappedCandidate.name,
+          phone: swappedCandidate.phone,
+          role: swappedCandidate.role,
+          status: swappedCandidate.status || 'active',
+          designation: swappedCandidate.designation,
+          badgeNo: swappedCandidate.badgeNo || swappedCandidate.idNo,
           loggedInAt: new Date().toISOString()
         };
         return res.json({ success: true, session });
       }
-      return res.status(401).json({ error: `User ID "${cleanId}" not found! Please check ID or ask Admin to register.` });
+
+      return res.status(401).json({ error: `User ID "${cleanId}" not found! Please check your ID or create account in Admin panel.` });
     }
 
-    // CHECK ACCOUNT HOLD / SUSPEND STATUS
-    if (found.status === 'hold') {
-      return res.status(403).json({ 
-        error: `Account ID "${found.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Please contact Admin (8695716192) or email powerof2026@gmail.com for account activation.` 
+    // Check password among matched candidates
+    const authenticatedUser = matchingCandidates.find((u: any) => {
+      const uPass = (u.password || '').toString().trim();
+      return uPass === cleanPass || (u.idNo === '8695716192' && cleanPass === '6293');
+    });
+
+    if (!authenticatedUser) {
+      return res.status(401).json({ 
+        error: `ভুল পাসওয়ার্ড (Incorrect Password)! User ID "${matchingCandidates[0].idNo}" এর জন্য সঠিক পাসওয়ার্ড দিন।` 
       });
     }
 
-    // Verify Password (exact or string-trimmed)
-    const isPasswordCorrect = (found.password && String(found.password).trim() === cleanPass) || 
-      (found.idNo === '8695716192' && cleanPass === '6293');
-
-    if (!isPasswordCorrect) {
-      return res.status(401).json({ error: 'Incorrect Password! Please enter valid password.' });
+    // Check hold status
+    if (authenticatedUser.status === 'hold') {
+      return res.status(403).json({ 
+        error: `Account ID "${authenticatedUser.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Contact Admin (8695716192).` 
+      });
     }
 
     const session = {
-      id: found.id,
-      idNo: found.idNo,
-      name: found.name,
-      phone: found.phone,
-      role: found.role,
-      status: found.status || 'active',
-      designation: found.designation,
-      badgeNo: found.badgeNo || found.idNo,
+      id: authenticatedUser.id,
+      idNo: authenticatedUser.idNo,
+      name: authenticatedUser.name,
+      phone: authenticatedUser.phone,
+      role: authenticatedUser.role,
+      status: authenticatedUser.status || 'active',
+      designation: authenticatedUser.designation,
+      badgeNo: authenticatedUser.badgeNo || authenticatedUser.idNo,
       loggedInAt: new Date().toISOString()
     };
 
     res.json({ success: true, session });
   } catch (error: any) {
+    console.error('Login error:', error);
     res.status(500).json({ error: error.message || 'Login authentication failed' });
   }
 });

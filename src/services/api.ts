@@ -198,6 +198,10 @@ export async function fetchUsers(): Promise<UserAccount[]> {
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
+  const cleanId = (userData.idNo || '').toString().trim();
+  const cleanPass = (userData.password || '').toString().trim();
+  const cleanName = (userData.name || cleanId || 'কর্মী').toString().trim();
+
   try {
     const res = await fetch(`${API_BASE}/users`, {
       method: 'POST',
@@ -205,7 +209,12 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store, must-revalidate'
       },
-      body: JSON.stringify(userData),
+      body: JSON.stringify({
+        ...userData,
+        idNo: cleanId,
+        password: cleanPass,
+        name: cleanName
+      }),
     });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
@@ -225,13 +234,14 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
     console.warn('Backend create user failed, offline local fallback:', err);
     const newUser: UserAccount = {
       id: `${userData.role || 'user'}_${Date.now()}`,
-      idNo: userData.idNo || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
-      password: userData.password || '1234',
-      name: userData.name || 'কর্মী',
+      idNo: cleanId || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
+      password: cleanPass || '1234',
+      name: cleanName,
       phone: userData.phone || '',
       role: userData.role || 'worker',
       designation: userData.designation || 'লাইনম্যান (WBSEDCL)',
-      badgeNo: userData.badgeNo || userData.idNo,
+      badgeNo: userData.badgeNo || cleanId,
+      status: userData.status || 'active',
       securityQuestion: userData.securityQuestion || 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
       securityAnswer: userData.securityAnswer || 'Vidyut Bhavan',
       createdAt: new Date().toISOString()
@@ -244,9 +254,42 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   }
 }
 
+export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
+  try {
+    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Failed to update user');
+    }
+    const data = await res.json();
+    // Update local cache
+    try {
+      const all = await fetchUsers();
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(all));
+    } catch {}
+    return data.user;
+  } catch (err: any) {
+    const cached = localStorage.getItem(USERS_STORAGE_KEY);
+    if (cached) {
+      let list: UserAccount[] = JSON.parse(cached);
+      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
+        return list[idx];
+      }
+    }
+    throw err;
+  }
+}
+
 export async function deleteUserAccount(id: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/users/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       throw new Error(errJson.error || 'Failed to delete user');
@@ -254,7 +297,7 @@ export async function deleteUserAccount(id: string): Promise<boolean> {
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     if (cached) {
       let list: UserAccount[] = JSON.parse(cached);
-      list = list.filter(u => u.id !== id && u.idNo !== id);
+      list = list.filter(u => u && u.id !== id && u.idNo !== id);
       localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
     }
     return true;
@@ -262,7 +305,7 @@ export async function deleteUserAccount(id: string): Promise<boolean> {
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     if (cached) {
       let list: UserAccount[] = JSON.parse(cached);
-      list = list.filter(u => u.id !== id && u.idNo !== id);
+      list = list.filter(u => u && u.id !== id && u.idNo !== id);
       localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
       return true;
     }
@@ -272,7 +315,7 @@ export async function deleteUserAccount(id: string): Promise<boolean> {
 
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
   try {
-    const res = await fetch(`${API_BASE}/users/${id}/status`, {
+    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
@@ -287,7 +330,7 @@ export async function updateUserStatus(id: string, status: 'active' | 'hold'): P
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     if (cached) {
       let list: UserAccount[] = JSON.parse(cached);
-      const idx = list.findIndex(u => u.id === id || u.idNo === id);
+      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
       if (idx !== -1) {
         list[idx].status = status;
         localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
@@ -298,7 +341,7 @@ export async function updateUserStatus(id: string, status: 'active' | 'hold'): P
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     if (cached) {
       let list: UserAccount[] = JSON.parse(cached);
-      const idx = list.findIndex(u => u.id === id || u.idNo === id);
+      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
       if (idx !== -1) {
         list[idx].status = status;
         localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
@@ -338,11 +381,11 @@ export async function loginUser(loginId: string, password: string): Promise<User
     return data.session;
   } catch (err: any) {
     // Check local fallback
-    const cleanId = loginId.trim();
-    const cleanPass = password.trim();
+    const cleanId = (loginId || '').toString().trim();
+    const cleanPass = (password || '').toString().trim();
     
     // Check if master admin 8695716192
-    if (cleanId === '8695716192' && cleanPass === '6293') {
+    if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin') && cleanPass === '6293') {
       return {
         id: 'adm_8695716192',
         idNo: '8695716192',
@@ -357,12 +400,17 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
     const cached = localStorage.getItem(USERS_STORAGE_KEY);
     const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => u.idNo.toLowerCase() === cleanId.toLowerCase() || (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')));
+    const found = users.find(u => u && u.idNo && (
+      u.idNo.toString().toLowerCase() === cleanId.toLowerCase() || 
+      (u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, '')) ||
+      (u.name && u.name.toLowerCase() === cleanId.toLowerCase())
+    ));
+
     if (found) {
       if (found.status === 'hold') {
         throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
       }
-      if (found.password === cleanPass) {
+      if (String(found.password).trim() === cleanPass) {
         return {
           id: found.id,
           idNo: found.idNo,
