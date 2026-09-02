@@ -167,6 +167,20 @@ export const Header: React.FC<HeaderProps> = ({
             <span>{t.mySubmissions}</span>
           </button>
 
+          <button
+            id="nav-tab-work-orders"
+            onClick={() => setActiveTab('work-orders')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'work-orders'
+                ? 'bg-amber-500 text-slate-950 shadow-xs font-bold ring-1 ring-amber-600'
+                : 'text-amber-800 hover:text-amber-950 hover:bg-amber-50'
+            }`}
+            title="ওয়ার্ক অর্ডার ও খাতার নোটিশ বোর্ড"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600" />
+            <span>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
+          </button>
+
           {isAdmin && (
             <button
               id="nav-tab-admin"

@@ -20,6 +20,8 @@ import {
   HardHat
 } from 'lucide-react';
 import { CornerOptionKey, PowerEntry } from '../types';
+import { googleSignIn, getAccessToken } from '../services/googleAuth';
+import { syncAllEntriesToGoogleSheet, getSavedSpreadsheetUrl } from '../services/googleSheets';
 
 interface CornerOptionsModalProps {
   activeOption: CornerOptionKey;
@@ -44,6 +46,9 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
 }) => {
   const [adminPin, setAdminPin] = useState('');
   const [pinError, setPinError] = useState(false);
+  const [isSyncingSheets, setIsSyncingSheets] = useState(false);
+  const [sheetsMessage, setSheetsMessage] = useState<string | null>(null);
+  const [sheetUrl, setSheetUrl] = useState<string | null>(() => getSavedSpreadsheetUrl());
   const [safetyChecklist, setSafetyChecklist] = useState({
     lineIsolated: true,
     earthGrounded: true,
@@ -370,6 +375,67 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
                   Summary list of today's total {entries.length} field tasks
                 </div>
               </button>
+            </div>
+
+            {/* Google Sheets Live Backend Sync */}
+            <div className="p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs">
+                    📊
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-emerald-950">Google Sheets Online Backend</div>
+                    <div className="text-[10px] text-emerald-700">স্বয়ংক্রিয় ক্লাউড ব্যাকআপ ও মোবাইল এন্ট্রি ডাটাবেস</div>
+                  </div>
+                </div>
+                <button
+                  id="corner-sync-google-sheets"
+                  onClick={async () => {
+                    setIsSyncingSheets(true);
+                    setSheetsMessage(null);
+                    try {
+                      let token = await getAccessToken();
+                      if (!token) {
+                        const authRes = await googleSignIn();
+                        token = authRes?.accessToken || null;
+                      }
+                      if (!token) {
+                        alert('Google Sign-in was cancelled');
+                        setIsSyncingSheets(false);
+                        return;
+                      }
+                      const result = await syncAllEntriesToGoogleSheet(entries, undefined, token);
+                      setSheetUrl(result.sheetUrl);
+                      setSheetsMessage(`সফলভাবে ${result.syncedCount} টি এন্ট্রি Google Sheets-এ ব্যাকআপ হয়েছে!`);
+                    } catch (err: any) {
+                      alert('Google Sheets Error: ' + (err.message || 'Failed'));
+                    } finally {
+                      setIsSyncingSheets(false);
+                    }
+                  }}
+                  disabled={isSyncingSheets}
+                  className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+                >
+                  {isSyncingSheets ? 'সিঙ্ক হচ্ছে...' : 'Sync to Sheets'}
+                </button>
+              </div>
+
+              {sheetsMessage && (
+                <div className="text-[11px] font-bold text-emerald-800 bg-white/80 p-2 rounded border border-emerald-200 flex items-center justify-between">
+                  <span>{sheetsMessage}</span>
+                  {sheetUrl && (
+                    <a
+                      href={sheetUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline text-emerald-700 hover:text-emerald-900 ml-2"
+                    >
+                      শীট খুলুন ↗
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Sync diagnostic status */}

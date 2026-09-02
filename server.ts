@@ -164,12 +164,15 @@ function readWorkOrders() {
 // Helper to write work order / khata notices
 function writeWorkOrders(orders: any[]) {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error writing work orders:', err);
+    throw err;
   }
 }
-
 
 // Initial power utility entries (empty by default - no demo records)
 const INITIAL_ENTRIES: any[] = [];
@@ -178,6 +181,9 @@ const INITIAL_ENTRIES: any[] = [];
 function readEntries() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
       fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), 'utf-8');
       return [];
     }
@@ -192,9 +198,13 @@ function readEntries() {
 // Helper to write entries
 function writeEntries(entries: any[]) {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error writing entries:', err);
+    throw err;
   }
 }
 
@@ -238,7 +248,7 @@ app.get('/api/entries', (req, res) => {
   res.json(entries);
 });
 
-// Create new entry
+// Create or update entry
 app.post('/api/entries', (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -246,17 +256,48 @@ app.post('/api/entries', (req, res) => {
     const newEntry = {
       ...req.body,
       id: req.body.id || `PWR-${Date.now().toString().slice(-6)}`,
-      createdAt: req.body.date || new Date().toISOString(),
-      status: req.body.status || 'Pending'
+      date: req.body.date || req.body.createdAt || new Date().toISOString(),
+      createdAt: req.body.createdAt || req.body.date || new Date().toISOString(),
+      status: req.body.status || 'Completed'
     };
 
-    entries.unshift(newEntry);
+    const existingIndex = entries.findIndex((e: any) => e.id === newEntry.id);
+    if (existingIndex !== -1) {
+      entries[existingIndex] = { ...entries[existingIndex], ...newEntry };
+    } else {
+      entries.unshift(newEntry);
+    }
     writeEntries(entries);
 
     res.status(201).json({ success: true, entry: newEntry });
   } catch (error: any) {
     console.error('Error saving entry:', error);
     res.status(500).json({ error: error.message || 'Failed to save entry' });
+  }
+});
+
+// Bulk sync endpoint for offline submissions
+app.post('/api/entries/bulk', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const { entries: incomingList } = req.body;
+    if (!Array.isArray(incomingList)) {
+      return res.status(400).json({ error: 'Array of entries is required' });
+    }
+    const currentEntries = readEntries();
+    for (const item of incomingList) {
+      const idx = currentEntries.findIndex((e: any) => e.id === item.id);
+      if (idx !== -1) {
+        currentEntries[idx] = { ...currentEntries[idx], ...item };
+      } else {
+        currentEntries.unshift(item);
+      }
+    }
+    writeEntries(currentEntries);
+    res.json({ success: true, count: incomingList.length });
+  } catch (error: any) {
+    console.error('Bulk sync error:', error);
+    res.status(500).json({ error: 'Failed to bulk sync entries' });
   }
 });
 

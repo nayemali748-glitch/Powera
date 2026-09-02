@@ -49,6 +49,13 @@ import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
 import { Language, translations } from '../utils/translations';
+import { googleSignIn, getAccessToken, googleLogout } from '../services/googleAuth';
+import { 
+  syncAllEntriesToGoogleSheet, 
+  getSavedSpreadsheetUrl, 
+  getSavedSpreadsheetId, 
+  createPowerSpreadsheet 
+} from '../services/googleSheets';
 
 interface AdminDashboardProps {
   entries: PowerEntry[];
@@ -78,6 +85,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [userModalTab, setUserModalTab] = useState<'create' | 'list' | 'change-password'>('create');
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
   const [showWorkOrdersManager, setShowWorkOrdersManager] = useState<boolean>(false);
+  const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
+  const [sheetsSyncMessage, setSheetsSyncMessage] = useState<string | null>(null);
+  const [currentSheetUrl, setCurrentSheetUrl] = useState<string | null>(() => getSavedSpreadsheetUrl());
+
+  const handleSyncToGoogleSheets = async () => {
+    setIsSyncingSheets(true);
+    setSheetsSyncMessage(null);
+    try {
+      let token = await getAccessToken();
+      if (!token) {
+        // Trigger Google OAuth sign-in popup
+        const authRes = await googleSignIn();
+        token = authRes?.accessToken || null;
+      }
+
+      if (!token) {
+        alert(lang === 'bn' ? 'Google একাউন্টে সাইন ইন করা যায়নি।' : 'Google Sign-in failed or was cancelled.');
+        setIsSyncingSheets(false);
+        return;
+      }
+
+      const result = await syncAllEntriesToGoogleSheet(entries, undefined, token);
+      setCurrentSheetUrl(result.sheetUrl);
+      setSheetsSyncMessage(
+        lang === 'bn'
+          ? `সফলভাবে ${result.syncedCount} টি এন্ট্রি Google Sheets-এ লাইভ ব্যাকআপ ও সেভ হয়েছে!`
+          : `Successfully synced ${result.syncedCount} records to Google Sheets!`
+      );
+    } catch (err: any) {
+      console.error('Failed to sync to Google Sheets:', err);
+      alert(
+        lang === 'bn'
+          ? `Google Sheets সিঙ্ক ব্যর্থ হয়েছে: ${err.message || 'Error'}`
+          : `Google Sheets sync error: ${err.message || 'Error'}`
+      );
+    } finally {
+      setIsSyncingSheets(false);
+    }
+  };
 
   // Category-specific Excel/CSV Export handler
   const handleExportCategoryExcel = (targetCategory: string = selectedCategory) => {
@@ -685,6 +731,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span>Change Password (পাসওয়ার্ড পরিবর্তন)</span>
             </button>
 
+            {/* Google Sheets Live Backend Integration Button */}
+            <button
+              id="admin-sync-google-sheets-btn"
+              onClick={handleSyncToGoogleSheets}
+              disabled={isSyncingSheets}
+              className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+              title="Google Sheets-এ সম্পূর্ণ ডাটাবেস লাইভ ব্যাকআপ ও সেভ করুন"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+              </svg>
+              <span>{isSyncingSheets ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...') : (lang === 'bn' ? 'Google Sheets Sync' : 'Google Sheets Sync')}</span>
+            </button>
+
+            {currentSheetUrl && (
+              <a
+                href={currentSheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                title="Open Live Google Sheet Spreadsheet"
+              >
+                <ExternalLink className="w-4 h-4 text-emerald-600" />
+                <span className="hidden sm:inline">{lang === 'bn' ? 'শীট দেখুন' : 'View Sheet'}</span>
+              </a>
+            )}
+
             {/* Category-Specific Excel / CSV Export Button & Dropdown */}
             <div className="relative">
               <div className="inline-flex rounded-lg shadow-xs">
@@ -822,6 +895,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
         </div>
+
+        {/* Google Sheets Sync Success Alert */}
+        {sheetsSyncMessage && (
+          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-xs text-emerald-800 font-bold">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{sheetsSyncMessage}</span>
+            </div>
+            {currentSheetUrl && (
+              <a
+                href={currentSheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline text-emerald-700 hover:text-emerald-900 flex items-center gap-1"
+              >
+                <span>{lang === 'bn' ? 'Google Sheet ওপেন করুন' : 'Open in Google Sheets'}</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+        )}
 
         {/* 5 Requested Category Metric Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 mt-4">

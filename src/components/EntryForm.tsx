@@ -21,13 +21,16 @@ import {
   ArrowLeft,
   ShieldCheck,
   Building,
-  CheckCircle2
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types';
 import { createEntry } from '../services/api';
+import { appendEntryToGoogleSheet } from '../services/googleSheets';
 import { Language, translations } from '../utils/translations';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface EntryFormProps {
   category: CategoryType;
@@ -36,6 +39,7 @@ interface EntryFormProps {
   onBack?: () => void;
   lang?: Language;
   currentUser?: UserSession | null;
+  initialNotice?: WorkOrderNotice | null;
 }
 
 export const EntryForm: React.FC<EntryFormProps> = ({
@@ -45,6 +49,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   onBack,
   lang = 'bn',
   currentUser,
+  initialNotice,
 }) => {
   const t = translations[lang] || translations.bn;
 
@@ -52,6 +57,19 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submissionModalEntry, setSubmissionModalEntry] = useState<PowerEntry | null>(null);
   const [fetchingGps, setFetchingGps] = useState(false);
+
+  // Validation State & Tracking
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState<boolean>(false);
+
+  const clearError = (field: string) => {
+    setValidationErrors((prev) => {
+      if (!prev[field]) return prev;
+      const copy = { ...prev };
+      delete copy[field];
+      return copy;
+    });
+  };
 
   // Common Form Fields
   const [worker, setWorker] = useState(workerName || 'WBSEDCL Lineman-01');
@@ -63,6 +81,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [notes, setNotes] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isVideo, setIsVideo] = useState<boolean>(false);
+  const [isCompressing, setIsCompressing] = useState<boolean>(false);
 
   // Category-specific states
   // 1. NSC (New Service Connection)
@@ -111,7 +130,16 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [ptwShutdownRef, setPtwShutdownRef] = useState('');
 
   // Selected Work Order Notice for NSC Entry
-  const [selectedWorkOrderNotice, setSelectedWorkOrderNotice] = useState<WorkOrderNotice | null>(null);
+  const [selectedWorkOrderNotice, setSelectedWorkOrderNotice] = useState<WorkOrderNotice | null>(initialNotice || null);
+
+  useEffect(() => {
+    if (initialNotice) {
+      setSelectedWorkOrderNotice(initialNotice);
+      if (initialNotice.title && !workOrderNo) {
+        setWorkOrderNo(initialNotice.title);
+      }
+    }
+  }, [initialNotice]);
 
   // 4. METER REPLACEMENT
   const [oldMeterNo, setOldMeterNo] = useState('');
@@ -165,10 +193,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     );
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // 50 MB max limit check
       const maxSizeBytes = 50 * 1024 * 1024;
       if (file.size > maxSizeBytes) {
         alert('ফাইল সাইজ ৫০ MB এর বেশি হতে পারবে না (File size must be under 50 MB)');
@@ -177,11 +204,38 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       const isVid = file.type.startsWith('video/');
       setIsVideo(isVid);
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      if (isVid) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setPhotoPreview(reader.result as string);
+          clearError('photo');
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      setIsCompressing(true);
+      try {
+        const compressed = await compressImageFile(file, {
+          maxDimension: 1280,
+          quality: 0.80,
+          watermarkText: `WBSEDCL [${category}]`,
+          subText: `${new Date().toLocaleDateString('en-GB')} • Lineman: ${worker || 'Staff'}`,
+        });
+        setPhotoPreview(compressed);
+        clearError('photo');
+      } catch (err) {
+        console.error('Photo compression error:', err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setPhotoPreview(reader.result as string);
+          clearError('photo');
+        };
+        reader.readAsDataURL(file);
+      } finally {
+        setIsCompressing(false);
+        e.target.value = '';
+      }
     }
   };
 
@@ -206,11 +260,160 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       ctx.fillText(`✓ WBSEDCL Field Evidence Verified`, 20, 200);
       setIsVideo(false);
       setPhotoPreview(canvas.toDataURL());
+      clearError('photo');
     }
+  };
+
+  const validateForm = (): { isValid: boolean; errors: Record<string, string>; firstElementId?: string } => {
+    const errs: Record<string, string> = {};
+    let firstId: string | undefined = undefined;
+
+    const recordError = (fieldKey: string, elementId: string, msgBn: string, msgEn: string) => {
+      errs[fieldKey] = lang === 'bn' ? msgBn : msgEn;
+      if (!firstId) {
+        firstId = elementId;
+      }
+    };
+
+    // 1. Worker Name Validation
+    const effectiveWorker = (category === 'NSC' ? nscWorkerName : worker).trim();
+    if (!effectiveWorker) {
+      recordError(
+        'workerName',
+        category === 'NSC' ? 'input-nsc-worker-name' : 'input-worker-name',
+        'লাইনম্যান বা কর্মীর নাম প্রদান করুন',
+        'Lineman/Worker Name is required'
+      );
+    }
+
+    // 2. Critical Field: Photos / Evidence MUST be present
+    if (!photoPreview) {
+      recordError(
+        'photo',
+        'photo-evidence-section',
+        'মাঠের কাজের ছবি (Photo Evidence) সংযুক্ত করা বাধ্যতামূলক',
+        'Field work photo evidence is mandatory before submission'
+      );
+    }
+
+    // 3. Category-Specific Critical Validations
+    if (category === 'NSC') {
+      if (!workOrderNo.trim()) {
+        recordError('workOrderNo', 'input-work-order-no', 'ওয়ার্ক অর্ডার নম্বর (Work Order No) প্রদান করুন', 'Work Order Number is required');
+      }
+      if (!applicationNo.trim()) {
+        recordError('applicationNo', 'input-application-no', 'আবেদন নম্বর (Application No) প্রদান করুন', 'Application Number is required');
+      }
+      if (!consumerId.trim()) {
+        recordError('consumerId', 'input-consumer-id', 'কনজিউমার আইডি (Consumer ID) প্রদান করা বাধ্যতামূলক', 'Consumer ID is required');
+      } else if (consumerId.trim().length < 4) {
+        recordError('consumerId', 'input-consumer-id', 'সঠিক কনজিউমার আইডি লিখুন (কমপক্ষে ৪ সংখ্যা)', 'Enter valid Consumer ID (at least 4 characters)');
+      }
+      if (!meterNo.trim()) {
+        recordError('meterNo', 'input-meter-no', 'নতুন মিটার নম্বর (Meter No) প্রদান করা বাধ্যতামূলক', 'Meter Number is required');
+      }
+      if (!sealNo.trim()) {
+        recordError('sealNo', 'input-seal-no', 'মিটারের সিল নম্বর (Seal No) প্রদান করুন', 'Meter Seal Number is required');
+      }
+      if (!consumerName.trim()) {
+        recordError('consumerName', 'input-consumer-name', 'গ্রাহকের পুরো নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
+      }
+    } else if (category === 'DISCONNECTION') {
+      if (!substation.trim()) {
+        recordError('substation', 'input-substation', 'সাবস্টেশনের নাম প্রদান করুন', 'Substation name is required');
+      }
+      if (!feederName.trim()) {
+        recordError('feederName', 'input-feeder', 'ফিডারের নাম প্রদান করুন', 'Feeder name is required');
+      }
+      if (!consumerId.trim()) {
+        recordError('consumerId', 'input-consumer-id', 'বিচ্ছিন্নকরণ গ্রাহকের কনজিউমার আইডি (Consumer ID) বাধ্যতামূলক', 'Consumer ID is required');
+      } else if (consumerId.trim().length < 4) {
+        recordError('consumerId', 'input-consumer-id', 'সঠিক কনজিউমার আইডি লিখুন', 'Enter valid Consumer ID');
+      }
+      if (!meterNo.trim()) {
+        recordError('meterNo', 'input-meter-no', 'বিচ্ছিন্নকৃত মিটার নম্বর (Meter No) প্রদান করা বাধ্যতামূলক', 'Meter Number is required');
+      }
+      if (!consumerName.trim()) {
+        recordError('consumerName', 'input-consumer-name', 'গ্রাহকের নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
+      }
+      if (!arrearAmount.trim()) {
+        recordError('arrearAmount', 'input-arrear-amount', 'বকেয়া টাকার পরিমাণ (Arrear Amount) প্রদান করুন', 'Arrear Amount is required');
+      }
+      if (!finalReading.trim()) {
+        recordError('finalReading', 'input-final-reading', 'মিটারের ফাইনাল রিডিং (Final Reading) লিখুন', 'Final Meter Reading is required');
+      }
+      if (!address.trim()) {
+        recordError('address', 'input-address', 'গ্রাহকের ঠিকানা / স্থান প্রদান করুন', 'Premises/Address is required');
+      }
+    } else if (category === 'METER REPLESMENT') {
+      if (!consumerId.trim()) {
+        recordError('consumerId', 'input-consumer-id', 'গ্রাহকের কনজিউমার আইডি (Consumer ID) প্রদান করা বাধ্যতামূলক', 'Consumer ID is required');
+      } else if (consumerId.trim().length < 4) {
+        recordError('consumerId', 'input-consumer-id', 'সঠিক কনজিউমার আইডি লিখুন', 'Enter valid Consumer ID');
+      }
+      if (!consumerName.trim()) {
+        recordError('consumerName', 'input-consumer-name', 'গ্রাহকের নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
+      }
+      if (!oldMeterNo.trim()) {
+        recordError('oldMeterNo', 'input-old-meter-no', 'পুরানো মিটার নম্বর (Old Meter No) প্রদান করা বাধ্যতামূলক', 'Old Meter Number is required');
+      }
+      if (!oldMeterReading.trim()) {
+        recordError('oldMeterReading', 'input-old-meter-reading', 'পুরানো মিটারের ফাইনাল রিডিং লিখুন', 'Old Meter Reading is required');
+      }
+      if (!newMeterNo.trim()) {
+        recordError('newMeterNo', 'input-new-meter-no', 'নতুন প্রতিস্থাপিত মিটার নম্বর (New Meter No) প্রদান করা বাধ্যতামূলক', 'New Meter Number is required');
+      }
+      if (!address.trim()) {
+        recordError('address', 'input-address', 'গ্রাহকের ঠিকানা প্রদান করুন', 'Address is required');
+      }
+    } else if (category === 'POLE CASE') {
+      if (!poleNo.trim()) {
+        recordError('poleNo', 'input-pole-no', 'পোল নম্বর (Pole No) প্রদান করা বাধ্যতামূলক', 'Pole Number is required');
+      }
+      if (!address.trim()) {
+        recordError('address', 'input-address', 'কাজের স্থান / লাইন রুটের ঠিকানা প্রদান করুন', 'Location / Line route address is required');
+      }
+    } else if (category === 'DTR REPLESMENT') {
+      if (!dtrName.trim()) {
+        recordError('dtrName', 'input-dtr-name', 'DTR নাম / ট্রান্সফরমার আইডি প্রদান করা বাধ্যতামূলক', 'DTR Name / Transformer ID is required');
+      }
+      if (!newDtrSerial.trim()) {
+        recordError('newDtrSerial', 'input-new-dtr-serial', 'নতুন DTR সিরিয়াল নম্বর (New DTR Serial) প্রদান করুন', 'New DTR Serial Number is required');
+      }
+      if (!address.trim()) {
+        recordError('address', 'input-address', 'DTR লোকেশন / ইয়ার্ডের ঠিকানা প্রদান করুন', 'Location / Sub-station Yard address is required');
+      }
+    }
+
+    return {
+      isValid: Object.keys(errs).length === 0,
+      errors: errs,
+      firstElementId: firstId,
+    };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setHasAttemptedSubmit(true);
+
+    const validation = validateForm();
+    if (!validation.isValid) {
+      setValidationErrors(validation.errors);
+      if (validation.firstElementId) {
+        setTimeout(() => {
+          const el = document.getElementById(validation.firstElementId!);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if ('focus' in el) {
+              (el as HTMLElement).focus();
+            }
+          }
+        }, 60);
+      }
+      return;
+    }
+
+    setValidationErrors({});
     setLoading(true);
     setSuccessMessage(null);
 
@@ -220,18 +423,18 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const entryPayload: Partial<PowerEntry> = {
       id: generatedId,
       category,
-      workerName: worker || 'WBSEDCL Staff',
-      workerPhone,
+      workerName: (category === 'NSC' ? nscWorkerName : worker).trim(),
+      workerPhone: workerPhone.trim(),
       date: nowIso,
       status: 'Completed',
       locationGps,
       photoUrl: photoPreview || undefined,
-      notes,
+      notes: notes.trim(),
     };
 
     // Category specifics
     if (category === 'NSC') {
-      entryPayload.workOrderNo = workOrderNo || `WO-${Date.now().toString().slice(-6)}`;
+      entryPayload.workOrderNo = workOrderNo.trim();
       entryPayload.workOrderDate = workOrderDate;
       // Attach Official Work Order & Khata Photo uploaded by Admin
       if (selectedWorkOrderNotice) {
@@ -240,83 +443,86 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         entryPayload.workOrderNoticeTitle = selectedWorkOrderNotice.title;
         entryPayload.workOrderNoticeDate = `${selectedWorkOrderNotice.uploadDate} ${selectedWorkOrderNotice.uploadTime}`;
       }
-      entryPayload.consumerName = consumerName || 'WBSEDCL Consumer';
-      entryPayload.fatherName = fatherName;
-      entryPayload.applicationNo = applicationNo;
-      entryPayload.workerName = nscWorkerName || worker || 'Lineman';
-      entryPayload.agencyName = agencyName;
-      entryPayload.cccName = cccName;
-      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
-      entryPayload.meterNo = meterNo || `WB-${Math.floor(100000 + Math.random() * 900000)}`;
-      entryPayload.sealNo = sealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
-      entryPayload.initialReading = initialReading || '000000';
-      entryPayload.mobile = mobile;
-      entryPayload.appliedLoad = appliedLoad;
+      entryPayload.consumerName = consumerName.trim();
+      entryPayload.fatherName = fatherName.trim();
+      entryPayload.applicationNo = applicationNo.trim();
+      entryPayload.workerName = nscWorkerName.trim() || worker.trim();
+      entryPayload.agencyName = agencyName.trim();
+      entryPayload.cccName = cccName.trim();
+      entryPayload.consumerId = consumerId.trim();
+      entryPayload.meterNo = meterNo.trim();
+      entryPayload.sealNo = sealNo.trim();
+      entryPayload.initialReading = initialReading.trim() || '000000';
+      entryPayload.mobile = mobile.trim();
+      entryPayload.appliedLoad = appliedLoad.trim();
       entryPayload.phase = phase;
       entryPayload.tariffCategory = tariffCategory;
-      entryPayload.serviceCableLength = serviceCableLength;
-      entryPayload.address = address || 'West Bengal, India';
+      entryPayload.serviceCableLength = serviceCableLength.trim();
+      entryPayload.address = address.trim() || 'West Bengal, India';
       entryPayload.meterInstallDate = meterInstallDate;
-      entryPayload.inspectionAgencyName = inspectionAgencyName;
+      entryPayload.inspectionAgencyName = inspectionAgencyName.trim();
+      entryPayload.poleNo = poleNo.trim();
+      entryPayload.meterMake = meterMake.trim();
+      entryPayload.earthResistance = earthResistance.trim();
     } else if (category === 'DISCONNECTION') {
-      entryPayload.feederName = feederName;
-      entryPayload.substation = substation;
-      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
-      entryPayload.consumerName = consumerName || 'Consumer (Defaulter)';
-      entryPayload.mobile = mobile;
-      entryPayload.address = address || 'Field Site';
-      entryPayload.poleNo = poleNo;
-      entryPayload.meterNo = meterNo;
-      entryPayload.arrearAmount = arrearAmount || '4,500';
+      entryPayload.feederName = feederName.trim();
+      entryPayload.substation = substation.trim();
+      entryPayload.consumerId = consumerId.trim();
+      entryPayload.consumerName = consumerName.trim();
+      entryPayload.mobile = mobile.trim();
+      entryPayload.address = address.trim();
+      entryPayload.poleNo = poleNo.trim();
+      entryPayload.meterNo = meterNo.trim();
+      entryPayload.arrearAmount = arrearAmount.trim();
       entryPayload.reason = disconnectionReason;
-      entryPayload.finalReading = finalReading || '12450';
+      entryPayload.finalReading = finalReading.trim();
       entryPayload.disconnectionType = disconnectionType;
       entryPayload.cutoutSealed = cutoutSealed;
-      entryPayload.sealNo = cutoutSealNo || `SL-CUT-${Math.floor(1000 + Math.random() * 9000)}`;
+      entryPayload.sealNo = cutoutSealNo.trim();
       entryPayload.actionTaken = disconnectionActionTaken;
     } else if (category === 'POLE CASE') {
-      entryPayload.feederName = feederName;
-      entryPayload.substation = substation;
-      entryPayload.poleNo = poleNo || `P-${Math.floor(10 + Math.random() * 90)}`;
-      entryPayload.address = address || 'Overhead Line Route';
+      entryPayload.feederName = feederName.trim();
+      entryPayload.substation = substation.trim();
+      entryPayload.poleNo = poleNo.trim();
+      entryPayload.address = address.trim();
       entryPayload.issueType = issueType;
       entryPayload.priority = priority;
       entryPayload.poleType = poleType;
       entryPayload.lineVoltage = lineVoltage;
       entryPayload.conductorType = conductorType;
-      entryPayload.actionTaken = actionTaken || 'পোল মেরামত ও ওভারহেড লাইন নিরাপদ করা হয়েছে';
-      entryPayload.materialUsed = materialUsed || 'PSC Pole 9M, V-Cross Arm, Stay Set';
-      entryPayload.ptwShutdownRef = ptwShutdownRef;
+      entryPayload.actionTaken = actionTaken.trim() || 'পোল মেরামত ও ওভারহেড লাইন নিরাপদ করা হয়েছে';
+      entryPayload.materialUsed = materialUsed.trim();
+      entryPayload.ptwShutdownRef = ptwShutdownRef.trim();
     } else if (category === 'METER REPLESMENT') {
-      entryPayload.feederName = feederName;
-      entryPayload.substation = substation;
-      entryPayload.consumerId = consumerId || `CON-${Math.floor(100000000 + Math.random() * 900000000)}`;
-      entryPayload.consumerName = consumerName || 'Consumer';
-      entryPayload.address = address;
-      entryPayload.poleNo = poleNo;
-      entryPayload.oldMeterNo = oldMeterNo || `OLD-MTR-${Math.floor(10000 + Math.random() * 90000)}`;
-      entryPayload.finalReading = oldMeterReading || '09840';
+      entryPayload.feederName = feederName.trim();
+      entryPayload.substation = substation.trim();
+      entryPayload.consumerId = consumerId.trim();
+      entryPayload.consumerName = consumerName.trim();
+      entryPayload.address = address.trim();
+      entryPayload.poleNo = poleNo.trim();
+      entryPayload.oldMeterNo = oldMeterNo.trim();
+      entryPayload.finalReading = oldMeterReading.trim();
       entryPayload.replacementReason = replacementReason;
-      entryPayload.newMeterNo = newMeterNo || `WB-GEN-${Math.floor(100000 + Math.random() * 900000)}`;
-      entryPayload.initialReading = newMeterInitialReading || '000000';
-      entryPayload.sealNo = newMeterSealNo || `WB-SL-${Math.floor(10000 + Math.random() * 90000)}`;
+      entryPayload.newMeterNo = newMeterNo.trim();
+      entryPayload.initialReading = newMeterInitialReading.trim() || '000000';
+      entryPayload.sealNo = newMeterSealNo.trim();
       entryPayload.meterType = meterType;
       entryPayload.phase = phase;
     } else if (category === 'DTR REPLESMENT') {
-      entryPayload.feederName = feederName;
-      entryPayload.substation = substation;
-      entryPayload.dtrName = dtrName || `DTR-${Math.floor(10 + Math.random() * 90)}`;
-      entryPayload.address = address || 'DTR Sub-station Yard';
+      entryPayload.feederName = feederName.trim();
+      entryPayload.substation = substation.trim();
+      entryPayload.dtrName = dtrName.trim();
+      entryPayload.address = address.trim();
       entryPayload.existingCapacity = existingCapacity;
       entryPayload.newCapacity = newCapacity;
-      entryPayload.oldDtrSerial = oldDtrSerial || `DTR-OLD-${Math.floor(1000 + Math.random() * 9000)}`;
-      entryPayload.newDtrSerial = newDtrSerial || `DTR-NEW-${Math.floor(1000 + Math.random() * 9000)}`;
+      entryPayload.oldDtrSerial = oldDtrSerial.trim();
+      entryPayload.newDtrSerial = newDtrSerial.trim();
       entryPayload.failureReason = dtrFailureReason;
       entryPayload.oilLevelChecked = oilLevelChecked;
-      entryPayload.earthResistance = earthPitResistance;
-      entryPayload.hgFuseRating = hgFuseRating;
-      entryPayload.ltMccbAmpere = ltMccbAmpere;
-      entryPayload.lightningArrester = lightningArrester;
+      entryPayload.earthResistance = earthResistance.trim() || earthPitResistance.trim();
+      entryPayload.hgFuseRating = hgFuseRating.trim();
+      entryPayload.ltMccbAmpere = ltMccbAmpere.trim();
+      entryPayload.lightningArrester = lightningArrester.trim();
     }
 
     try {
@@ -326,6 +532,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       } catch (e) {
         // ignore
       }
+      // Asynchronously append to Google Sheet if Google Auth is active
+      appendEntryToGoogleSheet(created).catch((sheetErr) => {
+        console.warn('Google Sheet auto-sync notice:', sheetErr);
+      });
+
       setSuccessMessage(t.entryCreatedSuccess);
       setSubmissionModalEntry(created);
       onSuccess(created);
@@ -406,7 +617,45 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       )}
 
       {/* Main Form Fields */}
-      <form onSubmit={handleSubmit} className="p-5 sm:p-7 space-y-6">
+      <form onSubmit={handleSubmit} noValidate className="p-5 sm:p-7 space-y-6">
+        {/* Top Validation Error Alert Banner */}
+        {hasAttemptedSubmit && Object.keys(validationErrors).length > 0 && (
+          <div 
+            id="validation-summary-banner"
+            className="p-4 sm:p-5 bg-red-50 border-2 border-red-500 rounded-2xl text-red-950 space-y-3 shadow-md animate-in fade-in slide-in-from-top-3"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h4 className="text-sm sm:text-base font-black text-red-900 leading-tight">
+                  {lang === 'bn' 
+                    ? `⚠️ ফর্ম সাবমিট অসম্পূর্ণ: ${Object.keys(validationErrors).length}টি প্রয়োজনীয় তথ্য বাদ পড়েছে!`
+                    : `⚠️ Form Submission Blocked: ${Object.keys(validationErrors).length} required field(s) missing!`}
+                </h4>
+                <p className="text-xs text-red-700 mt-1 font-medium">
+                  {lang === 'bn'
+                    ? 'তথ্য সেভ না হওয়া প্রতিরোধ করতে লাল চিহ্নিত প্রয়োজনীয় ঘরগুলো (বিশেষ করে কনজিউমার আইডি, মিটার নম্বর ও কাজের ছবি) পূরণ করুন।'
+                    : 'To prevent records from failing to save, please complete the red-flagged critical fields (Consumer ID, Meter Number, and Photo Evidence).'}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {Object.entries(validationErrors).map(([key, msg]) => (
+                <div 
+                  key={key} 
+                  className="flex items-center gap-2 bg-white/90 px-3 py-1.5 rounded-lg border border-red-200 text-xs font-bold text-red-800 shadow-2xs"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                  <span>{msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Section 1: Common Station & Grid Infrastructure Details (Hidden for NSC as requested) */}
         {category !== 'NSC' && (
           <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 space-y-4">
@@ -417,19 +666,29 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </h3>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.substation} *
                 </label>
                 <input
+                  id="input-substation"
                   type="text"
                   required
                   value={substation}
-                  onChange={(e) => setSubstation(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setSubstation(e.target.value);
+                    clearError('substation');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.substation ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 33/11kV Main Substation"
                 />
+                {validationErrors.substation && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.substation}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -437,13 +696,47 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.feeder} *
                 </label>
                 <input
+                  id="input-feeder"
                   type="text"
                   required
                   value={feederName}
-                  onChange={(e) => setFeederName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setFeederName(e.target.value);
+                    clearError('feederName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.feederName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 11kV Town Feeder-01"
                 />
+                {validationErrors.feederName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.feederName}</span>
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {t.workerName} (Lineman) *
+                </label>
+                <input
+                  id="input-worker-name"
+                  type="text"
+                  required
+                  value={worker}
+                  onChange={(e) => {
+                    setWorker(e.target.value);
+                    clearError('workerName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-semibold focus:ring-2 focus:outline-none ${validationErrors.workerName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
+                  placeholder="Lineman / Worker Name"
+                />
+                {validationErrors.workerName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.workerName}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -497,19 +790,29 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
               {/* 1. Lineman / Staff Name (Worker Name - Above Work Order No) -> VIBRANT BLUE CARD */}
-              <div className="bg-blue-50/80 border-2 border-blue-300 rounded-xl p-3.5 shadow-xs hover:border-blue-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workerName ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-blue-50/80 border-2 border-blue-300 hover:border-blue-400'}`}>
                 <label className="block font-black text-blue-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.workerName} (Worker Name / Lineman) *</span>
                   <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-bold">Staff</span>
                 </label>
                 <input
+                  id="input-nsc-worker-name"
                   type="text"
                   required
                   value={nscWorkerName}
-                  onChange={(e) => setNscWorkerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-blue-300 rounded-lg text-blue-900 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setNscWorkerName(e.target.value);
+                    clearError('workerName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-bold focus:ring-2 focus:outline-none ${validationErrors.workerName ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-blue-300 text-blue-900 focus:ring-blue-500'}`}
                   placeholder="Lineman / Worker Name"
                 />
+                {validationErrors.workerName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.workerName}</span>
+                  </p>
+                )}
               </div>
 
               {/* 2. Agency Name (Above Work Order No) -> VIBRANT AMBER / ORANGE CARD */}
@@ -543,19 +846,29 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               {/* 4. Work Order No -> TEAL CARD */}
-              <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workOrderNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-teal-50/80 border-2 border-teal-300 hover:border-teal-400'}`}>
                 <label className="block font-black text-teal-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.workOrderNo} *</span>
                   <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO</span>
                 </label>
                 <input
+                  id="input-work-order-no"
                   type="text"
                   required
                   value={workOrderNo}
-                  onChange={(e) => setWorkOrderNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 focus:ring-2 focus:ring-teal-500 focus:outline-none font-mono font-black"
+                  onChange={(e) => {
+                    setWorkOrderNo(e.target.value);
+                    clearError('workOrderNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.workOrderNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-teal-300 text-teal-900 focus:ring-teal-500'}`}
                   placeholder="e.g. WO-2026-98102"
                 />
+                {validationErrors.workOrderNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.workOrderNo}</span>
+                  </p>
+                )}
               </div>
 
               {/* 5. Work Order Date -> TEAL CARD */}
@@ -573,82 +886,132 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               {/* 6. Application No (Above Consumer Name) -> ROSE / PINK CARD */}
-              <div className="bg-rose-50/80 border-2 border-rose-300 rounded-xl p-3.5 shadow-xs hover:border-rose-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.applicationNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-rose-50/80 border-2 border-rose-300 hover:border-rose-400'}`}>
                 <label className="block font-black text-rose-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.applicationNo} *</span>
                   <span className="text-[9px] bg-rose-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">App No</span>
                 </label>
                 <input
+                  id="input-application-no"
                   type="text"
                   required
                   value={applicationNo}
-                  onChange={(e) => setApplicationNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-rose-300 rounded-lg text-rose-900 focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono font-black text-xs"
+                  onChange={(e) => {
+                    setApplicationNo(e.target.value);
+                    clearError('applicationNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black text-xs focus:ring-2 focus:outline-none ${validationErrors.applicationNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-rose-300 text-rose-900 focus:ring-rose-500'}`}
                   placeholder="e.g. CA / Quota / Application No"
                 />
+                {validationErrors.applicationNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.applicationNo}</span>
+                  </p>
+                )}
               </div>
 
               {/* 7. Consumer ID (Above Consumer Name) -> SKY BLUE CARD */}
-              <div className="bg-sky-50/80 border-2 border-sky-300 rounded-xl p-3.5 shadow-xs hover:border-sky-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.consumerId ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-sky-50/80 border-2 border-sky-300 hover:border-sky-400'}`}>
                 <label className="block font-black text-sky-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.consumerId} *</span>
-                  <span className="text-[9px] bg-sky-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">ID</span>
+                  <span>{t.consumerId} * (বাধ্যতামূলক)</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono text-white ${validationErrors.consumerId ? 'bg-red-600' : 'bg-sky-600'}`}>ID</span>
                 </label>
                 <input
+                  id="input-consumer-id"
                   type="text"
                   required
                   value={consumerId}
-                  onChange={(e) => setConsumerId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-sky-300 rounded-lg text-sky-900 focus:ring-2 focus:ring-sky-500 focus:outline-none font-mono font-black"
+                  onChange={(e) => {
+                    setConsumerId(e.target.value);
+                    clearError('consumerId');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.consumerId ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-sky-300 text-sky-900 focus:ring-sky-500'}`}
                   placeholder="e.g. 100293847 (9 Digits)"
                 />
+                {validationErrors.consumerId && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerId}</span>
+                  </p>
+                )}
               </div>
 
               {/* 8. Meter No (Above Consumer Name) -> EMERALD GREEN CARD */}
-              <div className="bg-emerald-50/80 border-2 border-emerald-300 rounded-xl p-3.5 shadow-xs hover:border-emerald-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.meterNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-emerald-50/80 border-2 border-emerald-300 hover:border-emerald-400'}`}>
                 <label className="block font-black text-emerald-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.meterNo} *</span>
-                  <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Meter</span>
+                  <span>{t.meterNo} * (বাধ্যতামূলক)</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono text-white ${validationErrors.meterNo ? 'bg-red-600' : 'bg-emerald-600'}`}>Meter</span>
                 </label>
                 <input
+                  id="input-meter-no"
                   type="text"
                   required
                   value={meterNo}
-                  onChange={(e) => setMeterNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-emerald-300 rounded-lg text-emerald-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono font-black"
+                  onChange={(e) => {
+                    setMeterNo(e.target.value);
+                    clearError('meterNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.meterNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-emerald-300 text-emerald-900 focus:ring-emerald-500'}`}
                   placeholder="e.g. WB26-987654"
                 />
+                {validationErrors.meterNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.meterNo}</span>
+                  </p>
+                )}
               </div>
 
               {/* 9. Meter Seal No (Above Consumer Name) -> VIOLET CARD */}
-              <div className="bg-violet-50/80 border-2 border-violet-300 rounded-xl p-3.5 shadow-xs hover:border-violet-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.sealNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-violet-50/80 border-2 border-violet-300 hover:border-violet-400'}`}>
                 <label className="block font-black text-violet-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.meterSealNo} *</span>
-                  <span className="text-[9px] bg-violet-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Seal</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono text-white ${validationErrors.sealNo ? 'bg-red-600' : 'bg-violet-600'}`}>Seal</span>
                 </label>
                 <input
+                  id="input-seal-no"
                   type="text"
                   required
                   value={sealNo}
-                  onChange={(e) => setSealNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-violet-300 rounded-lg text-violet-900 focus:ring-2 focus:ring-violet-500 focus:outline-none font-mono font-black"
+                  onChange={(e) => {
+                    setSealNo(e.target.value);
+                    clearError('sealNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.sealNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-violet-300 text-violet-900 focus:ring-violet-500'}`}
                   placeholder="e.g. WB-SL-98214"
                 />
+                {validationErrors.sealNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.sealNo}</span>
+                  </p>
+                )}
               </div>
 
               {/* 10. Consumer Name -> INDIGO CARD */}
-              <div className="bg-indigo-50/80 border-2 border-indigo-300 rounded-xl p-3.5 shadow-xs hover:border-indigo-400 transition-colors">
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.consumerName ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-indigo-50/80 border-2 border-indigo-300 hover:border-indigo-400'}`}>
                 <label className="block font-black text-indigo-950 mb-1.5 text-xs">
                   {t.consumerName} *
                 </label>
                 <input
+                  id="input-consumer-name"
                   type="text"
                   required
                   value={consumerName}
-                  onChange={(e) => setConsumerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-indigo-300 rounded-lg text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold"
+                  onChange={(e) => {
+                    setConsumerName(e.target.value);
+                    clearError('consumerName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-bold focus:ring-2 focus:outline-none ${validationErrors.consumerName ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-indigo-300 text-indigo-900 focus:ring-indigo-500'}`}
                   placeholder="Enter Full Consumer Name"
                 />
+                {validationErrors.consumerName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerName}</span>
+                  </p>
+                )}
               </div>
 
               {/* 11. Father's / Husband's Name -> INDIGO CARD */}
@@ -798,17 +1161,53 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {category === 'DISCONNECTION' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.consumerId} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.consumerId} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-consumer-id"
                   type="text"
                   required
                   value={consumerId}
-                  onChange={(e) => setConsumerId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  onChange={(e) => {
+                    setConsumerId(e.target.value);
+                    clearError('consumerId');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.consumerId ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 100234567"
                 />
+                {validationErrors.consumerId && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerId}</span>
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.meterNo} (বিচ্ছিন্নকৃত মিটার) *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
+                </label>
+                <input
+                  id="input-meter-no"
+                  type="text"
+                  required
+                  value={meterNo}
+                  onChange={(e) => {
+                    setMeterNo(e.target.value);
+                    clearError('meterNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.meterNo ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
+                  placeholder="e.g. WB26-981240"
+                />
+                {validationErrors.meterNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.meterNo}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -816,13 +1215,23 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.consumerName} *
                 </label>
                 <input
+                  id="input-consumer-name"
                   type="text"
                   required
                   value={consumerName}
-                  onChange={(e) => setConsumerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setConsumerName(e.target.value);
+                    clearError('consumerName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-semibold focus:ring-2 focus:outline-none ${validationErrors.consumerName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="Consumer Full Name"
                 />
+                {validationErrors.consumerName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerName}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -830,13 +1239,23 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.arrearAmount} *
                 </label>
                 <input
+                  id="input-arrear-amount"
                   type="text"
                   required
                   value={arrearAmount}
-                  onChange={(e) => setArrearAmount(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-red-600"
+                  onChange={(e) => {
+                    setArrearAmount(e.target.value);
+                    clearError('arrearAmount');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg font-mono font-bold text-red-600 focus:ring-2 focus:outline-none ${validationErrors.arrearAmount ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. ₹ 7,850"
                 />
+                {validationErrors.arrearAmount && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.arrearAmount}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -844,13 +1263,23 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {t.finalReading} (kWh) *
                 </label>
                 <input
+                  id="input-final-reading"
                   type="text"
                   required
                   value={finalReading}
-                  onChange={(e) => setFinalReading(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  onChange={(e) => {
+                    setFinalReading(e.target.value);
+                    clearError('finalReading');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.finalReading ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 14230"
                 />
+                {validationErrors.finalReading && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.finalReading}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -915,29 +1344,39 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.poleNo} / Meter No
+                  {t.poleNo}
                 </label>
                 <input
                   type="text"
                   value={poleNo}
                   onChange={(e) => setPoleNo(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. Pole P-18 / Meter WB-394"
+                  placeholder="e.g. Pole P-18 / Sub-Span"
                 />
               </div>
 
-              <div className="sm:col-span-3">
+              <div className="sm:col-span-2 lg:col-span-3">
                 <label className="block font-bold text-slate-700 mb-1">
                   {t.addressLocation} *
                 </label>
                 <input
+                  id="input-address"
                   type="text"
                   required
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    clearError('address');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="Premises / Shop / Residence Address"
                 />
+                {validationErrors.address && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.address}</span>
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -946,17 +1385,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {category === 'POLE CASE' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.poleNo} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.poleNo} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-pole-no"
                   type="text"
                   required
                   value={poleNo}
-                  onChange={(e) => setPoleNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
+                  onChange={(e) => {
+                    setPoleNo(e.target.value);
+                    clearError('poleNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.poleNo ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. Pole No P-84 / Span 04"
                 />
+                {validationErrors.poleNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.poleNo}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1039,17 +1489,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div className="sm:col-span-2">
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.actionTaken} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.actionTaken} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-action-taken"
                   type="text"
                   required
                   value={actionTaken}
-                  onChange={(e) => setActionTaken(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setActionTaken(e.target.value);
+                    clearError('actionTaken');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.actionTaken ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. নতুন পোল স্থাপন, কংক্রিটিং ও কন্ডাক্টর টানা সম্পন্ন"
                 />
+                {validationErrors.actionTaken && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.actionTaken}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1079,17 +1540,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.addressLocation} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.addressLocation} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-address"
                   type="text"
                   required
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    clearError('address');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="Location landmark / Village / Road point"
                 />
+                {validationErrors.address && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.address}</span>
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -1098,59 +1570,103 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {category === 'METER REPLESMENT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.consumerId} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.consumerId} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-consumer-id"
                   type="text"
                   required
                   value={consumerId}
-                  onChange={(e) => setConsumerId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  onChange={(e) => {
+                    setConsumerId(e.target.value);
+                    clearError('consumerId');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.consumerId ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 100289123"
                 />
+                {validationErrors.consumerId && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerId}</span>
+                  </p>
+                )}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.consumerName} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.consumerName} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-consumer-name"
                   type="text"
                   required
                   value={consumerName}
-                  onChange={(e) => setConsumerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setConsumerName(e.target.value);
+                    clearError('consumerName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-semibold focus:ring-2 focus:outline-none ${validationErrors.consumerName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="Consumer Name"
                 />
+                {validationErrors.consumerName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.consumerName}</span>
+                  </p>
+                )}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.oldMeterNo} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.oldMeterNo} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-old-meter-no"
                   type="text"
                   required
                   value={oldMeterNo}
-                  onChange={(e) => setOldMeterNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  onChange={(e) => {
+                    setOldMeterNo(e.target.value);
+                    clearError('oldMeterNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.oldMeterNo ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. OLD-WB-9821"
                 />
+                {validationErrors.oldMeterNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.oldMeterNo}</span>
+                  </p>
+                )}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.oldMeterReading} (kWh) *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.oldMeterReading} (kWh) *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-old-meter-reading"
                   type="text"
                   required
                   value={oldMeterReading}
-                  onChange={(e) => setOldMeterReading(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
+                  onChange={(e) => {
+                    setOldMeterReading(e.target.value);
+                    clearError('oldMeterReading');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.oldMeterReading ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. 08945"
                 />
+                {validationErrors.oldMeterReading && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.oldMeterReading}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1170,17 +1686,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.newMeterNo} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.newMeterNo} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-new-meter-no"
                   type="text"
                   required
                   value={newMeterNo}
-                  onChange={(e) => setNewMeterNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-emerald-700"
+                  onChange={(e) => {
+                    setNewMeterNo(e.target.value);
+                    clearError('newMeterNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold text-emerald-700 focus:ring-2 focus:outline-none ${validationErrors.newMeterNo ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. WB26-GEN-88319"
                 />
+                {validationErrors.newMeterNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.newMeterNo}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1198,11 +1725,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  {t.newMeterSealNo} *
+                  {t.newMeterSealNo}
                 </label>
                 <input
                   type="text"
-                  required
                   value={newMeterSealNo}
                   onChange={(e) => setNewMeterSealNo(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-blue-700 font-bold"
@@ -1226,17 +1752,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.addressLocation} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.addressLocation} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-address"
                   type="text"
                   required
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    clearError('address');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="Consumer Premises Address"
                 />
+                {validationErrors.address && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.address}</span>
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -1245,17 +1782,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {category === 'DTR REPLESMENT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.dtrName} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.dtrName} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-dtr-name"
                   type="text"
                   required
                   value={dtrName}
-                  onChange={(e) => setDtrName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"
+                  onChange={(e) => {
+                    setDtrName(e.target.value);
+                    clearError('dtrName');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.dtrName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. DTR-VILLAGE-04"
                 />
+                {validationErrors.dtrName && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.dtrName}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1307,17 +1855,28 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.newDtrSerial} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.newDtrSerial} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-new-dtr-serial"
                   type="text"
                   required
                   value={newDtrSerial}
-                  onChange={(e) => setNewDtrSerial(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-blue-700"
+                  onChange={(e) => {
+                    setNewDtrSerial(e.target.value);
+                    clearError('newDtrSerial');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold text-blue-700 focus:ring-2 focus:outline-none ${validationErrors.newDtrSerial ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="e.g. WB-DTR-2026-081"
                 />
+                {validationErrors.newDtrSerial && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.newDtrSerial}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1380,30 +1939,56 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.addressLocation} *
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>{t.addressLocation} *</span>
+                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
                 </label>
                 <input
+                  id="input-address"
                   type="text"
                   required
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    clearError('address');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
                   placeholder="DTR Sub-station Yard Location / Village / Pole Structure"
                 />
+                {validationErrors.address && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.address}</span>
+                  </p>
+                )}
               </div>
             </div>
           )}
         </div>
 
         {/* Section 3: GPS & Photo Evidence Section */}
-        <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-            <Camera className="w-4 h-4 text-emerald-600" />
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              {category === 'NSC' ? '2. ' : '3. '}{t.gpsLocation} & {t.photoEvidence}
-            </h3>
+        <div 
+          id="photo-evidence-section"
+          className={`p-4 sm:p-5 rounded-xl border space-y-4 transition-colors ${validationErrors.photo ? 'bg-red-50/70 border-red-400 ring-2 ring-red-400' : 'bg-slate-50 border-slate-200'}`}
+        >
+          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-emerald-600" />
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                {category === 'NSC' ? '2. ' : '3. '}{t.gpsLocation} & {t.photoEvidence}
+              </h3>
+            </div>
+            <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
+              ছবি তোলা বাধ্যতামূলক *
+            </span>
           </div>
+
+          {validationErrors.photo && (
+            <div className="p-3 bg-red-100/90 border border-red-400 rounded-lg text-red-900 text-xs font-bold flex items-center gap-2 animate-bounce">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{validationErrors.photo}</span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
             {/* GPS capture */}
@@ -1431,28 +2016,54 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               </div>
             </div>
 
-            {/* Photo / Video upload / sample (Max 50MB) */}
+            {/* Photo / Video upload / camera / sample */}
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                {t.photoEvidence} <span className="text-[10px] text-slate-500 font-normal">({t.maxFileSize})</span>
+              <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                <span>{t.photoEvidence}</span>
+                {isCompressing ? (
+                  <span className="text-[10px] text-amber-600 font-bold flex items-center gap-1 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    <span>ছবি প্রস্তুত হচ্ছে...</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-emerald-600 font-medium">✓ অটো হাই-স্পিড অপটিমাইজেশন</span>
+                )}
               </label>
-              <div className="flex gap-2">
-                <label className="flex-1 px-3 py-2 bg-white border border-slate-300 hover:border-slate-400 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+              <div className="flex flex-wrap gap-2">
+                {/* Direct Camera Button */}
+                <label className="flex-1 min-w-[120px] px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors">
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>ক্যামেরা (Photo)</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePhotoUpload}
+                    className="hidden"
+                    disabled={isCompressing}
+                  />
+                </label>
+
+                {/* File / Gallery Upload */}
+                <label className="flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-300 hover:border-slate-400 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>{t.uploadPhoto}</span>
+                  <span>গ্যালারি / ফাইল</span>
                   <input
                     type="file"
                     accept="image/*,video/*"
                     onChange={handlePhotoUpload}
                     className="hidden"
+                    disabled={isCompressing}
                   />
                 </label>
 
+                {/* Sample Stamp */}
                 <button
                   type="button"
                   onClick={setSamplePhoto}
-                  className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer border border-slate-200"
                   title="Generate sample verified photo stamp"
+                  disabled={isCompressing}
                 >
                   {t.takeSamplePhoto}
                 </button>

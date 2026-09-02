@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import appLogo from './assets/images/power_round_logo_1787860440979.jpg';
 import { Header } from './components/Header';
 import { CategorySelector } from './components/CategorySelector';
@@ -11,9 +11,10 @@ import { LoginScreen } from './components/LoginScreen';
 import { InstallAppModal } from './components/InstallAppModal';
 import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
-import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession } from './types';
+import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice } from './types';
 import { fetchEntries, fetchStats } from './services/api';
 import { Language, translations } from './utils/translations';
+import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
 import { 
   Zap, 
   ShieldCheck, 
@@ -42,6 +43,26 @@ import {
   HelpCircle
 } from 'lucide-react';
 
+/**
+ * Computes a fast 32-bit FNV-1a hash from serialized JSON data.
+ * Used for change-tracking in loadData to verify if server data has actually updated
+ * before triggering a React state update, preventing unnecessary component re-renders and UI lag.
+ */
+function computeJsonChangeHash(data: unknown): string {
+  if (!data) return '0_empty';
+  try {
+    const json = JSON.stringify(data);
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < json.length; i++) {
+      hash ^= json.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `${json.length}_${(hash >>> 0).toString(16)}`;
+  } catch {
+    return String(Date.now());
+  }
+}
+
 export default function App() {
   const [currentLanguage, setCurrentLanguage] = useState<Language>(() => {
     return (localStorage.getItem('power_app_lang') as Language) || 'bn';
@@ -66,8 +87,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('entry');
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>('NSC');
   const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
+  const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const lastDataHashRef = useRef<string>('');
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return localStorage.getItem('power_is_admin') === 'true';
   });
@@ -132,15 +155,23 @@ export default function App() {
     }
   }, []);
 
-  const loadData = async (silent = false) => {
+  const loadData = async (silent: boolean | unknown = false) => {
+    const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
-      if (!silent) setLoading(true);
+      if (!isSilent) setLoading(true);
       const data = await fetchEntries();
-      setEntries(data || []);
+      const currentData = data || [];
+      const newHash = computeJsonChangeHash(currentData);
+
+      // JSON-based change-tracking: verify if server data has actually updated before triggering state update
+      if (newHash !== lastDataHashRef.current) {
+        lastDataHashRef.current = newHash;
+        setEntries(currentData);
+      }
     } catch (err) {
       console.error('Failed to load power entries:', err);
     } finally {
-      if (!silent) setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
@@ -176,7 +207,11 @@ export default function App() {
   }, [activeTab, isAdmin]);
 
   const handleEntrySuccess = (newEntry: PowerEntry) => {
-    setEntries((prev) => [newEntry, ...prev.filter(e => e.id !== newEntry.id)]);
+    setEntries((prev) => {
+      const updated = [newEntry, ...prev.filter(e => e.id !== newEntry.id)];
+      lastDataHashRef.current = computeJsonChangeHash(updated);
+      return updated;
+    });
     setActiveFormCategory(null);
     loadData(true);
   };
@@ -373,6 +408,22 @@ export default function App() {
               <span>{t.mySubmissions}</span>
             </div>
             <span className="text-[10px] bg-slate-800 text-slate-400 font-bold px-1.5 py-0.5 rounded">{entries.length}</span>
+          </button>
+
+          <button
+            id="sidebar-nav-work-orders-btn"
+            onClick={() => { setActiveTab('work-orders'); setSidebarOpen(false); }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'work-orders'
+                ? 'bg-amber-600 text-white shadow-xs font-bold'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <FileSpreadsheet className="w-4 h-4 text-amber-400" />
+              <span>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
+            </div>
+            <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded">Live</span>
           </button>
 
           <button
@@ -690,7 +741,16 @@ export default function App() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={() => {
+                            setActiveTab('work-orders');
+                          }}
+                          className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা' : 'Work Orders & Khata'}</span>
+                        </button>
                         <button
                           onClick={() => {
                             setSelectedCategory('NSC');
@@ -773,10 +833,15 @@ export default function App() {
                     category={activeFormCategory}
                     workerName={workerName}
                     currentUser={currentUser}
+                    initialNotice={selectedWorkOrderForEntry}
                     onSuccess={(newEntry) => {
                       handleEntrySuccess(newEntry);
+                      setSelectedWorkOrderForEntry(null);
                     }}
-                    onBack={() => setActiveFormCategory(null)}
+                    onBack={() => {
+                      setActiveFormCategory(null);
+                      setSelectedWorkOrderForEntry(null);
+                    }}
                     lang={currentLanguage}
                   />
                 </div>
@@ -899,6 +964,26 @@ export default function App() {
                 onSelectEntry={(entry) => setPreviewEntry(entry)}
                 onNewEntry={() => setActiveTab('entry')}
                 lang={currentLanguage}
+              />
+            </div>
+          )}
+
+          {/* VIEW 4: OFFICIAL WORK ORDER & KHATA NOTICE BOARD */}
+          {activeTab === 'work-orders' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              <WorkOrderNoticeSection
+                category="ALL"
+                currentUser={currentUser}
+                isAdmin={isAdmin}
+                lang={currentLanguage}
+                standalonePage={true}
+                onStartWorkWithNotice={(notice) => {
+                  setSelectedWorkOrderForEntry(notice);
+                  const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
+                  setSelectedCategory(targetCat);
+                  setActiveFormCategory(targetCat);
+                  setActiveTab('entry');
+                }}
               />
             </div>
           )}

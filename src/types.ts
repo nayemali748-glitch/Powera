@@ -49,6 +49,7 @@ export interface PowerEntry {
   serviceCableLength?: string;
   meterInstallDate?: string;
   inspectionAgencyName?: string;
+  meterMake?: string;
 
   // DISCONNECTION specific
   arrearAmount?: string;

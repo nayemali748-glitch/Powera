@@ -18,36 +18,47 @@ import {
   AlertCircle,
   Lock,
   Unlock,
-  CheckCircle2
+  CheckCircle2,
+  SlidersHorizontal,
+  ExternalLink
 } from 'lucide-react';
 import { CategoryType, WorkOrderNotice, UserSession } from '../types';
 import { fetchWorkOrders, uploadWorkOrder, deleteWorkOrder, toggleWorkOrderVisibility } from '../services/api';
 import { Language } from '../utils/translations';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface WorkOrderNoticeSectionProps {
-  category: CategoryType;
+  category?: CategoryType | 'ALL';
   currentUser: UserSession | null;
   lang?: Language;
   selectedNoticeId?: string;
   onSelectNotice?: (notice: WorkOrderNotice | null) => void;
+  onStartWorkWithNotice?: (notice: WorkOrderNotice) => void;
   isAdmin?: boolean;
+  standalonePage?: boolean;
 }
 
 export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
-  category,
+  category = 'ALL',
   currentUser,
   lang = 'bn',
   selectedNoticeId,
   onSelectNotice,
+  onStartWorkWithNotice,
   isAdmin: propIsAdmin,
+  standalonePage = false,
 }) => {
   const [notices, setNotices] = useState<WorkOrderNotice[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
   const [previewNotice, setPreviewNotice] = useState<WorkOrderNotice | null>(null);
 
+  // Active Category Filter for viewing
+  const [selectedCategoryTab, setSelectedCategoryTab] = useState<string>(category || 'ALL');
+
   // Upload Form State
-  const [uploadTitle, setUploadTitle] = useState<string>('NSC Daily Work Order & Khata Slip');
+  const [uploadCategory, setUploadCategory] = useState<string>(category && category !== 'ALL' ? category : 'ALL');
+  const [uploadTitle, setUploadTitle] = useState<string>('WBSEDCL Daily Work Order & Khata Slip');
   const [uploadDescription, setUploadDescription] = useState<string>('');
   const [uploadIsHidden, setUploadIsHidden] = useState<boolean>(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -89,7 +100,9 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   const loadNotices = async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const data = await fetchWorkOrders(category);
+      // If ALL is selected, fetch all notices; otherwise fetch by category
+      const filter = selectedCategoryTab === 'ALL' ? undefined : (selectedCategoryTab as CategoryType);
+      const data = await fetchWorkOrders(filter);
       setNotices(data);
       // Auto select latest visible notice if not yet selected and onSelectNotice provided
       const currentVisible = isAdmin ? data : data.filter(n => !n.isHidden);
@@ -123,72 +136,31 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [category, isAdmin]);
-
-  // Compress high-res camera photos into lightweight, crystal-clear Web-ready images
-  const compressImageFile = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (readerEvent) => {
-        const img = new Image();
-        img.onload = () => {
-          const maxDim = 1600;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height && width > maxDim) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else if (height > maxDim) {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            // High quality JPEG maintaining sharp handwriting and numbers
-            const compressed = canvas.toDataURL('image/jpeg', 0.82);
-            resolve(compressed);
-          } else {
-            resolve(readerEvent.target?.result as string);
-          }
-        };
-        img.onerror = () => {
-          resolve(readerEvent.target?.result as string);
-        };
-        img.src = readerEvent.target?.result as string;
-      };
-      reader.onerror = () => {
-        resolve('');
-      };
-      reader.readAsDataURL(file);
-    });
-  };
+  }, [selectedCategoryTab, isAdmin]);
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 30 * 1024 * 1024) {
-        alert(lang === 'bn' ? 'ফাইল সাইজ ৩০ MB এর কম হতে হবে' : 'File size must be under 30 MB');
+      if (file.size > 50 * 1024 * 1024) {
+        showToast(lang === 'bn' ? 'ফাইল সাইজ ৫০ MB এর কম হতে হবে' : 'File size must be under 50 MB', 'error');
         return;
       }
       try {
         setIsCompressing(true);
-        const compressedBase64 = await compressImageFile(file);
+        const compressedBase64 = await compressImageFile(file, {
+          maxDimension: 1600,
+          quality: 0.82,
+          watermarkText: 'WBSEDCL OFFICIAL NOTICE',
+        });
         if (compressedBase64) {
           setPhotoPreview(compressedBase64);
         } else {
-          alert(lang === 'bn' ? 'ছবি পড়তে সমস্যা হয়েছে, অনুগ্রহ করে আবার চেষ্টা করুন' : 'Failed to read image, please try again');
+          showToast(lang === 'bn' ? 'ছবি পড়তে সমস্যা হয়েছে, অনুগ্রহ করে আবার চেষ্টা করুন' : 'Failed to read image, please try again', 'error');
         }
       } catch (err) {
         console.error('Photo compression error:', err);
       } finally {
         setIsCompressing(false);
-        // Reset file input value so user can re-select same file if needed
         e.target.value = '';
       }
     }
@@ -257,7 +229,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     try {
       setIsUploading(true);
       const savedNotice = await uploadWorkOrder({
-        category,
+        category: (uploadCategory === 'ALL' ? 'NSC' : uploadCategory) as CategoryType,
         title: uploadTitle.trim() || 'WBSEDCL Work Order / Khata Notice',
         photoUrl: photoPreview,
         description: uploadDescription.trim(),
@@ -429,6 +401,35 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
         </div>
       </div>
 
+      {/* Category Filter Navigation Tabs */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-0.5 no-scrollbar">
+        <span className="text-[11px] font-black text-amber-900 flex items-center gap-1 mr-1 shrink-0">
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          <span>{lang === 'bn' ? 'ক্যাটাগরি ফিল্টার:' : 'Category Filter:'}</span>
+        </span>
+        {[
+          { id: 'ALL', label: lang === 'bn' ? 'সব ক্যাটাগরি (All)' : 'All Notices' },
+          { id: 'NSC', label: 'NSC' },
+          { id: 'DISCONNECTION', label: 'DISCONNECTION' },
+          { id: 'POLE CASE', label: 'POLE CASE' },
+          { id: 'METER REPLESMENT', label: 'METER REPLESMENT' },
+          { id: 'DTR REPLESMENT', label: 'DTR REPLESMENT' }
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setSelectedCategoryTab(tab.id)}
+            className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+              selectedCategoryTab === tab.id
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-white/90 hover:bg-white text-slate-700 border border-amber-200'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* Notice Photos Carousel / Grid */}
       {displayedNotices.length === 0 ? (
         <div className="bg-white/80 border border-dashed border-amber-300 rounded-xl p-5 text-center space-y-2">
@@ -577,33 +578,50 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                 </div>
 
                 {/* Footer Info & Attach Button */}
-                <div className="p-2.5 bg-white flex items-center justify-between gap-2 text-[11px] border-t border-slate-100">
+                <div className="p-2.5 bg-white flex items-center justify-between gap-2 text-[11px] border-t border-slate-100 flex-wrap">
                   <span className="text-slate-500 font-medium truncate text-[10px]">
                     Admin: <strong className="text-slate-800">{notice.adminName}</strong>
                   </span>
                   
-                  {onSelectNotice ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectNotice(notice);
-                      }}
-                      className={`px-2.5 py-1 rounded text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
-                        isSelected 
-                          ? 'bg-emerald-600 text-white shadow-xs' 
-                          : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
-                      }`}
-                    >
-                      <Sparkles className="w-3 h-3" />
-                      <span>{isSelected ? (lang === 'bn' ? '✓ ফর্মের সাথে যুক্ত' : '✓ Linked to Form') : (lang === 'bn' ? 'ফর্মের সাথে লিংক করুন' : 'Link to Entry')}</span>
-                    </button>
-                  ) : (
-                    <span className="text-amber-700 font-bold flex items-center gap-1 text-[10px]">
-                      <Eye className="w-3 h-3" />
-                      {lang === 'bn' ? 'ক্লিক করে দেখুন' : 'Click to View'}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {onStartWorkWithNotice && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStartWorkWithNotice(notice);
+                        }}
+                        className="px-2.5 py-1 rounded text-[10px] font-black bg-amber-600 hover:bg-amber-700 text-white shadow-xs flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                        title="এই ওয়ার্ক অর্ডার নিয়ে ফর্ম পূরণ শুরু করুন"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>{lang === 'bn' ? 'কাজ শুরু করুন' : 'Start Work'}</span>
+                      </button>
+                    )}
+
+                    {onSelectNotice ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectNotice(notice);
+                        }}
+                        className={`px-2.5 py-1 rounded text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                          isSelected 
+                            ? 'bg-emerald-600 text-white shadow-xs' 
+                            : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
+                        }`}
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>{isSelected ? (lang === 'bn' ? '✓ ফর্মের সাথে যুক্ত' : '✓ Linked') : (lang === 'bn' ? 'লিংক করুন' : 'Link')}</span>
+                      </button>
+                    ) : !onStartWorkWithNotice ? (
+                      <span className="text-amber-700 font-bold flex items-center gap-1 text-[10px]">
+                        <Eye className="w-3 h-3" />
+                        {lang === 'bn' ? 'ক্লিক করে দেখুন' : 'Click to View'}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             );
@@ -676,6 +694,20 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>{lang === 'bn' ? 'ডিলিট' : 'Delete'}</span>
+                  </button>
+                )}
+
+                {onStartWorkWithNotice && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onStartWorkWithNotice(previewNotice);
+                      setPreviewNotice(null);
+                    }}
+                    className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>{lang === 'bn' ? '⚡ এই কাজ শুরু করুন' : '⚡ Start Work'}</span>
                   </button>
                 )}
 
@@ -793,6 +825,27 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   placeholder="e.g. NSC Daily Work Order / Khata Slip - Feeder 1"
                   className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-300 focus:border-amber-500 rounded-lg text-xs font-bold text-slate-900 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  {lang === 'bn' ? 'ক্যাটাগরি নির্ধারণ করুন (Work Category)' : 'Select Category'} *
+                </label>
+                <select
+                  value={uploadCategory}
+                  onChange={(e) => setUploadCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-300 focus:border-amber-500 rounded-lg text-xs font-bold text-slate-900 focus:outline-none"
+                >
+                  <option value="ALL">{lang === 'bn' ? 'সব ক্যাটাগরি / সাধারণ নোটিশ (সকল ফিল্ড কর্মী দেখতে পাবেন)' : 'ALL (Visible to All Field Workers)'}</option>
+                  <option value="NSC">NSC (নতুন বিদ্যুৎ সংযোগ)</option>
+                  <option value="DISCONNECTION">DISCONNECTION (লাইন বিচ্ছিন্নকরণ)</option>
+                  <option value="POLE CASE">POLE CASE (খুঁটি সংক্রান্ত কাজ)</option>
+                  <option value="METER REPLESMENT">METER REPLESMENT (মিটার পরিবর্তন)</option>
+                  <option value="DTR REPLESMENT">DTR REPLESMENT (ট্রান্সফরমার কাজ)</option>
+                </select>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  {lang === 'bn' ? 'যে ক্যাটাগরি নির্বাচন করবেন, সেই ক্যাটাগরির কর্মীরা এটি দ্রুত দেখতে পাবেন।' : 'Field workers in this category will see this order notice.'}
+                </p>
               </div>
 
               <div>

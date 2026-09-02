@@ -37,11 +37,52 @@ export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
   }
 ];
 
+export async function syncPendingEntries(): Promise<number> {
+  let syncedCount = 0;
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!cached) return 0;
+    const list: (PowerEntry & { _isPendingSync?: boolean })[] = JSON.parse(cached);
+    const pending = list.filter(e => e._isPendingSync);
+    if (pending.length === 0) return 0;
+
+    for (const item of pending) {
+      try {
+        const { _isPendingSync, ...cleanItem } = item;
+        const res = await fetch(`${API_BASE}/entries`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          },
+          body: JSON.stringify(cleanItem)
+        });
+        if (res.ok) {
+          item._isPendingSync = false;
+          syncedCount++;
+        }
+      } catch (e) {
+        console.warn('Sync pending item failed:', e);
+      }
+    }
+
+    if (syncedCount > 0) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
+    }
+  } catch (err) {
+    console.warn('Error during syncPendingEntries:', err);
+  }
+  return syncedCount;
+}
+
 export async function fetchEntries(filters?: {
   category?: string;
   status?: string;
   search?: string;
 }): Promise<PowerEntry[]> {
+  // Attempt background sync of any previously unsynced local entries
+  syncPendingEntries().catch(() => {});
+
   try {
     const params = new URLSearchParams();
     if (filters?.category && filters.category !== 'ALL') params.append('category', filters.category);
@@ -59,9 +100,9 @@ export async function fetchEntries(filters?: {
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: PowerEntry[] = await res.json();
     
-    // Update local cache
+    // Update local cache safely (limit to newest 60 records to avoid quota issues)
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data.slice(0, 60)));
     } catch {
       // LocalStorage quota or unavailable
     }
@@ -97,36 +138,47 @@ export async function createEntry(entryData: Partial<PowerEntry>): Promise<Power
       },
       body: JSON.stringify(entryData),
     });
-    if (!res.ok) throw new Error('Failed to submit entry');
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${errText || 'Failed to submit entry'}`);
+    }
     const result = await res.json();
     const savedEntry: PowerEntry = result.entry;
 
-    // Update local cache with new saved entry
+    // Update local cache with newly saved entry
     try {
       const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
       const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
       const updatedList = [savedEntry, ...list.filter(e => e.id !== savedEntry.id)];
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 100)));
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 60)));
     } catch {}
 
     return savedEntry;
-  } catch (error) {
-    console.warn('API submit error, saving locally as fallback:', error);
-    const fallbackEntry: PowerEntry = {
+  } catch (error: any) {
+    console.warn('API submit error, saving locally with sync flag:', error);
+    const fallbackEntry: PowerEntry & { _isPendingSync?: boolean } = {
       ...entryData as any,
       id: entryData.id || `PWR-${Date.now().toString().slice(-6)}`,
-      createdAt: entryData.date || new Date().toISOString(),
-      status: entryData.status || 'Pending',
+      date: entryData.date || new Date().toISOString(),
+      createdAt: entryData.createdAt || entryData.date || new Date().toISOString(),
+      status: entryData.status || 'Completed',
+      _isPendingSync: true,
     };
     
-    // Save to local cache
+    // Save to local cache with pending sync flag
     try {
       const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
+      const list: any[] = cached ? JSON.parse(cached) : [];
       list.unshift(fallbackEntry);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list.slice(0, 100)));
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list.slice(0, 60)));
     } catch {}
-    return fallbackEntry;
+
+    // Schedule quick retry
+    setTimeout(() => {
+      syncPendingEntries().catch(() => {});
+    }, 2000);
+
+    return fallbackEntry as PowerEntry;
   }
 }
 
