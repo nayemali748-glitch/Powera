@@ -1,830 +1,134 @@
-import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice } from '../types';
-import { normalizeUniversalText, normalizeId, normalizePassword, isUserMatch } from '../utils/textNormalizer';
+import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage } from '../types';
+import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_GOOGLE_SHEET_API_URL || 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec').replace(/\/$/, '');
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
 const USERS_STORAGE_KEY = 'power_registered_users';
 const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
+const CHAT_LOCAL_KEY = 'power_chat_history';
 
 export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
-  {
-    id: 'worker_default_0000',
-    idNo: 'worker',
-    password: '0000',
-    name: 'Field Worker (WBSEDCL)',
-    phone: '',
-    role: 'worker',
-    status: 'active',
-    designation: 'লাইনম্যান / Worker (WBSEDCL)',
-    badgeNo: 'WRK-0000',
-    securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_8695716192',
-    idNo: '8695716192',
-    password: '6293',
-    name: 'Engr. N. Ali (Admin Controller)',
-    phone: '8695716192',
-    role: 'admin',
-    status: 'active',
-    designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-    badgeNo: 'ADM-8695',
-    securityQuestion: 'Your Primary Power Substation?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  }
+  { id: 'worker_default_0000', idNo: 'worker', password: '0000', name: 'Field Worker (WBSEDCL)', phone: '', role: 'worker', status: 'active', designation: 'লাইনম্যান / Worker (WBSEDCL)', badgeNo: 'WRK-0000', securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?', securityAnswer: 'Vidyut Bhavan', createdAt: new Date().toISOString() },
+  { id: 'adm_8695716192', idNo: '8695716192', password: '6293', name: 'Engr. N. Ali (Admin Controller)', phone: '8695716192', role: 'admin', status: 'active', designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)', badgeNo: 'ADM-8695', securityQuestion: 'Your Primary Power Substation?', securityAnswer: 'Vidyut Bhavan', createdAt: new Date().toISOString() }
 ];
 
-export async function syncPendingEntries(): Promise<number> {
-  let syncedCount = 0;
-  try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!cached) return 0;
-    const list: (PowerEntry & { _isPendingSync?: boolean })[] = JSON.parse(cached);
-    const pending = list.filter(e => e._isPendingSync);
-    if (pending.length === 0) return 0;
-
-    for (const item of pending) {
-      try {
-        const { _isPendingSync, ...cleanItem } = item;
-        const res = await fetch(`${API_BASE}/entries`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate'
-          },
-          body: JSON.stringify(cleanItem)
-        });
-        if (res.ok) {
-          item._isPendingSync = false;
-          syncedCount++;
-        }
-      } catch (e) {
-        console.warn('Sync pending item failed:', e);
-      }
-    }
-
-    if (syncedCount > 0) {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
-    }
-  } catch (err) {
-    console.warn('Error during syncPendingEntries:', err);
-  }
-  return syncedCount;
+async function get(action: string, params: Record<string, string | undefined> = {}) {
+  const q = new URLSearchParams({ action, _t: Date.now().toString() });
+  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '') q.set(k, v); });
+  const res = await fetch(`${API_BASE}?${q.toString()}`, { cache: 'no-store' });
+  const text = await res.text();
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('Invalid backend response'); }
+  if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
-export async function fetchEntries(filters?: {
-  category?: string;
-  status?: string;
-  search?: string;
-}): Promise<PowerEntry[]> {
-  // Attempt background sync of any previously unsynced local entries
+async function post(action: string, data: any = {}) {
+  const res = await fetch(API_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, ...data })
+  });
+  const text = await res.text();
+  let result: any = {};
+  try { result = text ? JSON.parse(text) : {}; } catch { throw new Error('Invalid backend response'); }
+  if (!res.ok || result.success === false) throw new Error(result.error || `HTTP ${res.status}`);
+  return result;
+}
+
+function cache<T>(key: string, value: T) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+function readCache<T>(key: string, fallback: T): T { try { const x = localStorage.getItem(key); return x ? JSON.parse(x) : fallback; } catch { return fallback; } }
+
+export async function syncPendingEntries(): Promise<number> {
+  const list: any[] = readCache(LOCAL_STORAGE_KEY, []);
+  const pending = list.filter(e => e._isPendingSync);
+  let count = 0;
+  for (const item of pending) {
+    try { const { _isPendingSync, ...clean } = item; await post('createEntry', { data: clean }); item._isPendingSync = false; count++; } catch {}
+  }
+  if (count) cache(LOCAL_STORAGE_KEY, list);
+  return count;
+}
+
+export async function fetchEntries(filters?: { category?: string; status?: string; search?: string }): Promise<PowerEntry[]> {
   syncPendingEntries().catch(() => {});
-
   try {
-    const params = new URLSearchParams();
-    if (filters?.category && filters.category !== 'ALL') params.append('category', filters.category);
-    if (filters?.status && filters.status !== 'ALL') params.append('status', filters.status);
-    if (filters?.search) params.append('search', filters.search);
-    params.append('_t', Date.now().toString());
-
-    const res = await fetch(`${API_BASE}/entries?${params.toString()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
-      }
-    });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const data: PowerEntry[] = await res.json();
-    
-    // Update local cache safely (limit to newest 60 records to avoid quota issues)
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data.slice(0, 60)));
-    } catch {
-      // LocalStorage quota or unavailable
-    }
-    return data;
+    const data = await get('entries', filters || {});
+    const entries: PowerEntry[] = data.entries || [];
+    cache(LOCAL_STORAGE_KEY, entries.slice(0, 100));
+    return entries;
   } catch (error) {
-    console.warn('Backend fetch failed, using local storage cache:', error);
-    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (cached) {
-      let list: PowerEntry[] = JSON.parse(cached);
-      if (filters?.category && filters.category !== 'ALL') {
-        list = list.filter(item => item.category === filters.category);
-      }
-      if (filters?.status && filters.status !== 'ALL') {
-        list = list.filter(item => item.status === filters.status);
-      }
-      if (filters?.search) {
-        const q = filters.search.toLowerCase();
-        list = list.filter(item => JSON.stringify(item).toLowerCase().includes(q));
-      }
-      return list;
-    }
-    return [];
+    console.warn('Google Sheet fetch failed:', error);
+    let list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    if (filters?.category && filters.category !== 'ALL') list = list.filter(e => e.category === filters.category);
+    if (filters?.status && filters.status !== 'ALL') list = list.filter(e => e.status === filters.status);
+    if (filters?.search) { const q = filters.search.toLowerCase(); list = list.filter(e => JSON.stringify(e).toLowerCase().includes(q)); }
+    return list;
   }
 }
 
 export async function createEntry(entryData: Partial<PowerEntry>): Promise<PowerEntry> {
   try {
-    const res = await fetch(`${API_BASE}/entries`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify(entryData),
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${errText || 'Failed to submit entry'}`);
-    }
-    const result = await res.json();
-    const savedEntry: PowerEntry = result.entry;
-
-    // Update local cache with newly saved entry
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const list: PowerEntry[] = cached ? JSON.parse(cached) : [];
-      const updatedList = [savedEntry, ...list.filter(e => e.id !== savedEntry.id)];
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 60)));
-    } catch {}
-
-    return savedEntry;
-  } catch (error: any) {
-    console.warn('API submit error, saving locally with sync flag:', error);
-    const fallbackEntry: PowerEntry & { _isPendingSync?: boolean } = {
-      ...entryData as any,
-      id: entryData.id || `PWR-${Date.now().toString().slice(-6)}`,
-      date: entryData.date || new Date().toISOString(),
-      createdAt: entryData.createdAt || entryData.date || new Date().toISOString(),
-      status: entryData.status || 'Completed',
-      _isPendingSync: true,
-    };
-    
-    // Save to local cache with pending sync flag
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const list: any[] = cached ? JSON.parse(cached) : [];
-      list.unshift(fallbackEntry);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list.slice(0, 60)));
-    } catch {}
-
-    // Schedule quick retry
-    setTimeout(() => {
-      syncPendingEntries().catch(() => {});
-    }, 2000);
-
-    return fallbackEntry as PowerEntry;
+    const result = await post('createEntry', { data: entryData });
+    const saved = result.entry as PowerEntry;
+    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    cache(LOCAL_STORAGE_KEY, [saved, ...list.filter(e => e.id !== saved.id)].slice(0, 100));
+    return saved;
+  } catch (error) {
+    const fallback: any = { ...entryData, id: entryData.id || `PWR-${Date.now()}`, date: entryData.date || new Date().toISOString(), createdAt: entryData.createdAt || new Date().toISOString(), status: entryData.status || 'Completed', _isPendingSync: true };
+    cache(LOCAL_STORAGE_KEY, [fallback, ...readCache<any[]>(LOCAL_STORAGE_KEY, [])].slice(0, 100));
+    return fallback;
   }
 }
 
 export async function updateEntry(id: string, updates: Partial<PowerEntry>): Promise<PowerEntry> {
-  try {
-    const res = await fetch(`${API_BASE}/entries/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!res.ok) throw new Error('Failed to update entry');
-    const result = await res.json();
-    return result.entry;
-  } catch (error) {
-    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (cached) {
-      const list: PowerEntry[] = JSON.parse(cached);
-      const idx = list.findIndex(e => e.id === id);
-      if (idx !== -1) {
-        list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
-        return list[idx];
-      }
-    }
-    throw error;
-  }
+  try { const r = await post('updateEntry', { id, data: updates }); return r.entry; }
+  catch (error) { const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []); const i = list.findIndex(e => e.id === id); if (i >= 0) { list[i] = { ...list[i], ...updates, updatedAt: new Date().toISOString() }; cache(LOCAL_STORAGE_KEY, list); return list[i]; } throw error; }
 }
-
-export async function deleteEntry(id: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/entries/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete');
-    return true;
-  } catch (error) {
-    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (cached) {
-      let list: PowerEntry[] = JSON.parse(cached);
-      list = list.filter(e => e.id !== id);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
-      return true;
-    }
-    return false;
-  }
-}
-
-export async function clearAllEntries(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/entries`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to clear all');
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-    return true;
-  } catch (error) {
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-    return true;
-  }
-}
+export async function deleteEntry(id: string): Promise<boolean> { try { await post('deleteEntry', { id }); } catch {} const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []); cache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== id)); return true; }
+export async function clearAllEntries(): Promise<boolean> { try { await post('clearEntries'); } catch {} localStorage.removeItem(LOCAL_STORAGE_KEY); return true; }
 
 export async function fetchStats(): Promise<StatsResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/stats`);
-    if (!res.ok) throw new Error('Failed to fetch stats');
-    return await res.json();
-  } catch (error) {
-    const entries = await fetchEntries();
-    return {
-      total: entries.length,
-      categories: {
-        NSC: entries.filter(e => e.category === 'NSC').length,
-        DISCONNECTION: entries.filter(e => e.category === 'DISCONNECTION').length,
-        POLE_CASE: entries.filter(e => e.category === 'POLE CASE').length,
-        METER_REPLESMENT: entries.filter(e => e.category === 'METER REPLESMENT').length,
-        DTR_REPLESMENT: entries.filter(e => e.category === 'DTR REPLESMENT').length,
-      },
-      status: {
-        pending: entries.filter(e => e.status === 'Pending').length,
-        completed: entries.filter(e => e.status === 'Completed').length,
-        approved: entries.filter(e => e.status === 'Approved').length,
-      }
-    };
-  }
+  try { const r = await get('stats'); return r.stats; }
+  catch { const e = await fetchEntries(); return { total: e.length, categories: { NSC: e.filter(x=>x.category==='NSC').length, DISCONNECTION: e.filter(x=>x.category==='DISCONNECTION').length, POLE_CASE: e.filter(x=>x.category==='POLE CASE').length, METER_REPLESMENT: e.filter(x=>x.category==='METER REPLESMENT').length, DTR_REPLESMENT: e.filter(x=>x.category==='DTR REPLESMENT').length }, status: { pending: e.filter(x=>x.status==='Pending').length, completed: e.filter(x=>x.status==='Completed').length, approved: e.filter(x=>x.status==='Approved').length } }; }
 }
 
-// User accounts management APIs
 export async function fetchUsers(): Promise<UserAccount[]> {
-  try {
-    const res = await fetch(`${API_BASE}/users?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-    });
-    if (!res.ok) throw new Error('Failed to fetch users');
-    const users: UserAccount[] = await res.json();
-    try {
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-    } catch {}
-    return users;
-  } catch (err) {
-    console.warn('Backend fetch users failed, fallback to local storage:', err);
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch {}
-    }
-    return DEFAULT_WBSEDCL_ACCOUNTS;
-  }
+  const r = await get('users');
+  const users = r.users || [];
+  cache(USERS_STORAGE_KEY, users);
+  return users;
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
-  const cleanId = normalizeUniversalText(userData.idNo);
-  const cleanPass = normalizePassword(userData.password);
-  const cleanName = (userData.name ? String(userData.name).trim() : cleanId) || 'কর্মী';
-  const cleanPhone = normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '');
-
-  let createdOrUpdatedUser: UserAccount | null = null;
-
-  try {
-    const res = await fetch(`${API_BASE}/users`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify({
-        ...userData,
-        idNo: cleanId,
-        password: cleanPass,
-        name: cleanName,
-        phone: cleanPhone
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      createdOrUpdatedUser = data.user;
-    } else {
-      const errJson = await res.json().catch(() => ({}));
-      console.warn('Server create user failed, trying fallback:', errJson);
-      // If server returned specific validation error
-      if (errJson.error && !errJson.error.includes('Failed to create')) {
-        throw new Error(errJson.error);
-      }
-    }
-  } catch (err: any) {
-    if (err.message && (err.message.includes('required') || err.message.includes('already exists'))) {
-      throw err;
-    }
-    console.warn('Backend create user error, using local fallback:', err);
-  }
-
-  // If server didn't return user, create or update in local cache
-  if (!createdOrUpdatedUser) {
-    const newUser: UserAccount = {
-      id: `${userData.role || 'user'}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
-      idNo: cleanId || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
-      password: cleanPass || '1234',
-      name: cleanName,
-      phone: cleanPhone || '',
-      role: userData.role || 'worker',
-      designation: userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-      badgeNo: userData.badgeNo ? normalizeUniversalText(userData.badgeNo) : cleanId,
-      status: userData.status || 'active',
-      securityQuestion: userData.securityQuestion || 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-      securityAnswer: userData.securityAnswer ? normalizeUniversalText(userData.securityAnswer) : 'Vidyut Bhavan',
-      createdAt: new Date().toISOString()
-    };
-    createdOrUpdatedUser = newUser;
-  }
-
-  // Update local storage cache
-  try {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    let list: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
-    const existingIndex = list.findIndex(u => u && (u.id === createdOrUpdatedUser!.id || isUserMatch(cleanId, u)));
-    if (existingIndex !== -1) {
-      list[existingIndex] = { ...list[existingIndex], ...createdOrUpdatedUser };
-    } else {
-      list.unshift(createdOrUpdatedUser);
-    }
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-  } catch {}
-
-  return createdOrUpdatedUser;
+  const cleanId = normalizeUniversalText(userData.idNo); const cleanPass = normalizePassword(userData.password); const cleanName = String(userData.name || cleanId || 'কর্মী').trim(); const cleanPhone = normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '');
+  const r = await post('createUser', { data: { ...userData, idNo: cleanId, password: cleanPass, name: cleanName, phone: cleanPhone } });
+  const user = r.user as UserAccount; const users = await fetchUsers().catch(()=>[]); cache(USERS_STORAGE_KEY, [user, ...users.filter(u=>u.id!==user.id && u.idNo!==user.idNo)]); return user;
 }
-
-export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
-  try {
-    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to update user');
-    }
-    const data = await res.json();
-    // Update local cache
-    try {
-      const all = await fetchUsers();
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(all));
-    } catch {}
-    return data.user;
-  } catch (err: any) {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      let list: UserAccount[] = JSON.parse(cached);
-      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-      if (idx !== -1) {
-        list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
-        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-        return list[idx];
-      }
-    }
-    throw err;
-  }
-}
-
-export async function deleteUserAccount(id: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to delete user');
-    }
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      let list: UserAccount[] = JSON.parse(cached);
-      list = list.filter(u => u && u.id !== id && u.idNo !== id);
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-    }
-    return true;
-  } catch (err: any) {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      let list: UserAccount[] = JSON.parse(cached);
-      list = list.filter(u => u && u.id !== id && u.idNo !== id);
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-      return true;
-    }
-    throw err;
-  }
-}
-
-export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
-  try {
-    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to update user status');
-    }
-    const data = await res.json();
-    
-    // Update local cache
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      let list: UserAccount[] = JSON.parse(cached);
-      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-      if (idx !== -1) {
-        list[idx].status = status;
-        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-      }
-    }
-    return data.user;
-  } catch (err: any) {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    if (cached) {
-      let list: UserAccount[] = JSON.parse(cached);
-      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-      if (idx !== -1) {
-        list[idx].status = status;
-        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
-        return list[idx];
-      }
-    }
-    throw err;
-  }
-}
+export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> { const r = await post('updateUser', { id, data: updates }); await fetchUsers(); return r.user; }
+export async function deleteUserAccount(id: string): Promise<boolean> { await post('deleteUser', { id }); cache(USERS_STORAGE_KEY, readCache<UserAccount[]>(USERS_STORAGE_KEY, []).filter(u=>u.id!==id && u.idNo!==id)); return true; }
+export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> { const r = await post('updateUserStatus', { id, status }); await fetchUsers(); return r.user; }
 
 export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
-  try {
-    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`);
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      return { valid: false, error: errJson.error || 'Session invalid' };
-    }
-    const data = await res.json();
-    return data;
-  } catch {
-    return { valid: true, status: 'active' };
-  }
+  try { return (await get('verify', { idNo })).result; } catch { return { valid: false, error: 'Session verification failed' }; }
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
   const cleanId = normalizeUniversalText(loginId);
   const cleanPass = normalizePassword(password);
-
-  try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'ভুল আইডি বা পাসওয়ার্ড!');
-    }
-    const data = await res.json();
-    return data.session;
-  } catch (err: any) {
-    // Master admin 8695716192 or admin
-    if ((cleanId === '8695716192' || cleanId.toLowerCase() === 'admin' || cleanId.toLowerCase() === 'adm') && cleanPass === '6293') {
-      return {
-        id: 'adm_8695716192',
-        idNo: '8695716192',
-        name: 'Engr. N. Ali (Admin Controller)',
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-        badgeNo: 'ADM-8695',
-        loggedInAt: new Date().toISOString()
-      };
-    }
-
-    // Default worker
-    if ((cleanId.toLowerCase() === 'worker' || cleanId.toLowerCase() === 'workar') && cleanPass === '0000') {
-      return {
-        id: 'worker_default_0000',
-        idNo: 'worker',
-        name: 'Field Worker (WBSEDCL)',
-        phone: '',
-        role: 'worker',
-        status: 'active',
-        designation: 'লাইনম্যান / Worker (WBSEDCL)',
-        badgeNo: 'WRK-0000',
-        loggedInAt: new Date().toISOString()
-      };
-    }
-
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    const users: UserAccount[] = cached ? JSON.parse(cached) : DEFAULT_WBSEDCL_ACCOUNTS;
-    const found = users.find(u => u && isUserMatch(cleanId, u));
-
-    if (found) {
-      if (found.status === 'hold') {
-        throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin! Only active IDs can log in.`);
-      }
-      const uPass = normalizePassword(found.password);
-      if (uPass === cleanPass) {
-        return {
-          id: found.id,
-          idNo: found.idNo,
-          name: found.name,
-          phone: found.phone,
-          role: found.role,
-          status: found.status || 'active',
-          designation: found.designation,
-          badgeNo: found.badgeNo || found.idNo,
-          loggedInAt: new Date().toISOString()
-        };
-      }
-    }
-    throw new Error(err.message || 'Invalid ID or Password! Account not found or deactivated.');
-  }
+  const r = await post('login', { idNo: cleanId, password: cleanPass });
+  if (!r.session) throw new Error('Login failed');
+  return r.session as UserSession;
 }
 
-export async function changeUserPassword(idNo: string, currentPassword: string, newPassword: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/auth/change-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idNo, currentPassword, newPassword }),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'পাসওয়ার্ড পরিবর্তন ব্যর্থ হয়েছে!');
-    }
-  } catch (err: any) {
-    // Local fallback update
-    console.warn('Backend change-password failed, fallback to localStorage update:', err);
-  }
+export async function changeUserPassword(idNo: string, currentPassword: string, newPassword: string): Promise<boolean> { await post('changePassword', { idNo, currentPassword, newPassword }); return true; }
+export async function resetUserPassword(idNo: string, newPassword: string, phone?: string): Promise<boolean> { await post('resetPassword', { idNo, newPassword, phone }); return true; }
 
-  // Always update local storage cache too
-  try {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    const users: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
-    const index = users.findIndex(u => u.idNo.toLowerCase() === idNo.toLowerCase() || u.id === idNo);
-    if (index !== -1) {
-      users[index].password = newPassword;
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-    }
-  } catch {}
+export async function fetchChatMessages(workerId?: string): Promise<ChatMessage[]> { try { const r = await get('chat', { workerId }); const data = r.messages || []; cache(CHAT_LOCAL_KEY, data); return data; } catch { return readCache(CHAT_LOCAL_KEY, []); } }
+export async function sendChatMessage(payload: { senderId: string; senderName: string; senderRole: 'admin'|'worker'|'supervisor'; recipientId?: string; message: string }) { const r = await post('sendChat', { data: payload }); const msg = r.message; const list = readCache<ChatMessage[]>(CHAT_LOCAL_KEY, []); cache(CHAT_LOCAL_KEY, [...list, msg]); return msg; }
+export async function clearChatMessages(): Promise<boolean> { try { await post('clearChat'); } catch {} localStorage.removeItem(CHAT_LOCAL_KEY); return true; }
 
-  return true;
-}
-
-export async function resetUserPassword(idNo: string, newPassword: string, phone?: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/auth/reset-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idNo, phone, newPassword }),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে!');
-    }
-  } catch (err: any) {
-    console.warn('Backend reset-password failed, fallback to localStorage update:', err);
-  }
-
-  // Update local storage cache
-  try {
-    const cached = localStorage.getItem(USERS_STORAGE_KEY);
-    const users: UserAccount[] = cached ? JSON.parse(cached) : [...DEFAULT_WBSEDCL_ACCOUNTS];
-    const index = users.findIndex(u => u.idNo.toLowerCase() === idNo.toLowerCase() || (phone && u.phone.replace(/[^0-9]/g, '') === phone.replace(/[^0-9]/g, '')));
-    if (index !== -1) {
-      users[index].password = newPassword;
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-    }
-  } catch {}
-
-  return true;
-}
-
-// Live Chat Support API
-const CHAT_LOCAL_KEY = 'power_chat_history';
-
-export async function fetchChatMessages(workerId?: string) {
-  try {
-    const params = workerId ? `?workerId=${encodeURIComponent(workerId)}` : '';
-    const res = await fetch(`${API_BASE}/chat${params}`);
-    if (!res.ok) throw new Error('Failed to fetch chat');
-    const data = await res.json();
-    try {
-      localStorage.setItem(CHAT_LOCAL_KEY, JSON.stringify(data));
-    } catch {}
-    return data;
-  } catch (err) {
-    const cached = localStorage.getItem(CHAT_LOCAL_KEY);
-    if (cached) {
-      try {
-        const list = JSON.parse(cached);
-        if (Array.isArray(list)) return list;
-      } catch {}
-    }
-    return [];
-  }
-}
-
-export async function sendChatMessage(payload: {
-  senderId: string;
-  senderName: string;
-  senderRole: 'admin' | 'worker' | 'supervisor';
-  recipientId?: string;
-  message: string;
-}) {
-  try {
-    const res = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to send chat message');
-    }
-    const data = await res.json();
-    return data.message;
-  } catch (err: any) {
-    const fallbackMsg = {
-      id: `msg_${Date.now()}`,
-      ...payload,
-      timestamp: new Date().toISOString(),
-      status: 'sent'
-    };
-    const cached = localStorage.getItem(CHAT_LOCAL_KEY);
-    const list = cached ? JSON.parse(cached) : [];
-    list.push(fallbackMsg);
-    localStorage.setItem(CHAT_LOCAL_KEY, JSON.stringify(list));
-    return fallbackMsg;
-  }
-}
-
-export async function clearChatMessages(): Promise<boolean> {
-  try {
-    await fetch(`${API_BASE}/chat`, { method: 'DELETE' });
-    localStorage.removeItem(CHAT_LOCAL_KEY);
-    return true;
-  } catch {
-    localStorage.removeItem(CHAT_LOCAL_KEY);
-    return true;
-  }
-}
-
-// Work Order / Khata Notice API services
-export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotice[]> {
-  try {
-    const params = new URLSearchParams();
-    if (category && category !== 'ALL') params.append('category', category);
-    params.append('_t', Date.now().toString());
-
-    const res = await fetch(`${API_BASE}/work-orders?${params.toString()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
-      }
-    });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const data: WorkOrderNotice[] = await res.json();
-    try {
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(data.slice(0, 20)));
-    } catch {}
-    return data;
-  } catch (error) {
-    console.warn('Backend work-orders fetch failed, using local cache:', error);
-    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-    if (cached) {
-      let list: WorkOrderNotice[] = JSON.parse(cached);
-      if (category && category !== 'ALL') {
-        list = list.filter(item => item.category === category || item.category === ('ALL' as any));
-      }
-      return list;
-    }
-    return [];
-  }
-}
-
-export async function uploadWorkOrder(payload: {
-  category: CategoryType;
-  title: string;
-  photoUrl: string;
-  description?: string;
-  uploadedBy: string;
-  adminName: string;
-  adminPhone?: string;
-  isHidden?: boolean;
-}): Promise<WorkOrderNotice> {
-  try {
-    const res = await fetch(`${API_BASE}/work-orders`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to upload work order photo');
-    }
-    const data = await res.json();
-    const savedOrder: WorkOrderNotice = data.workOrder;
-    try {
-      const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-      const list: WorkOrderNotice[] = cached ? JSON.parse(cached) : [];
-      const updatedList = [savedOrder, ...list.filter(w => w.id !== savedOrder.id)];
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updatedList.slice(0, 20)));
-    } catch {}
-    return savedOrder;
-  } catch (error: any) {
-    console.warn('Backend work-order upload failed, creating fallback:', error);
-    const now = new Date();
-    const fallbackOrder: WorkOrderNotice = {
-      id: `wo_${Date.now()}`,
-      category: payload.category,
-      title: payload.title || 'Work Order / Khata Notice',
-      photoUrl: payload.photoUrl,
-      description: payload.description || '',
-      uploadedBy: payload.uploadedBy || 'admin',
-      adminName: payload.adminName || 'Admin Controller',
-      adminPhone: payload.adminPhone || '8695716192',
-      uploadDate: now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-      uploadTime: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-      createdAt: now.toISOString(),
-      isHidden: Boolean(payload.isHidden)
-    };
-    try {
-      const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-      const list: WorkOrderNotice[] = cached ? JSON.parse(cached) : [];
-      list.unshift(fallbackOrder);
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(list.slice(0, 15)));
-    } catch (cacheErr) {
-      console.warn('LocalStorage save failed for work order (quota or disabled):', cacheErr);
-    }
-    return fallbackOrder;
-  }
-}
-
-export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): Promise<boolean> {
-  try {
-    let res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/visibility`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isHidden }),
-    });
-    if (!res.ok) {
-      // Try POST fallback
-      res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/visibility`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isHidden }),
-      });
-    }
-  } catch (err) {
-    console.warn('Network toggle error, applying locally:', err);
-  }
-
-  // Update client cache
-  try {
-    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-    if (cached) {
-      const list: WorkOrderNotice[] = JSON.parse(cached);
-      const updated = list.map(item => String(item.id) === String(id) ? { ...item, isHidden } : item);
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updated));
-    }
-  } catch {}
-  return true;
-}
-
-export async function deleteWorkOrder(id: string): Promise<boolean> {
-  try {
-    let res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) {
-      // Try POST /delete fallback
-      res = await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/delete`, { method: 'POST' });
-    }
-  } catch (err) {
-    console.warn('Network delete error, applying locally:', err);
-  }
-
-  // Update client cache
-  try {
-    const cached = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-    if (cached) {
-      const list: WorkOrderNotice[] = JSON.parse(cached);
-      const updated = list.filter(item => String(item.id) !== String(id));
-      localStorage.setItem(WORK_ORDERS_STORAGE_KEY, JSON.stringify(updated));
-    }
-  } catch {}
-  return true;
-}
-
+export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotice[]> { try { const r = await get('workorders', { category }); const data = r.workOrders || []; cache(WORK_ORDERS_STORAGE_KEY, data); return data; } catch { return readCache(WORK_ORDERS_STORAGE_KEY, []); } }
+export async function uploadWorkOrder(payload: { category: CategoryType; title: string; photoUrl: string; description?: string; uploadedBy: string; adminName: string; adminPhone?: string; isHidden?: boolean }): Promise<WorkOrderNotice> { const r = await post('createWorkOrder', { data: payload }); const order = r.workOrder; const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []); cache(WORK_ORDERS_STORAGE_KEY, [order, ...list.filter(x=>x.id!==order.id)].slice(0,50)); return order; }
+export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): Promise<boolean> { await post('toggleWorkOrder', { id, isHidden }); const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []); cache(WORK_ORDERS_STORAGE_KEY, list.map(x=>x.id===id?{...x,isHidden}:x)); return true; }
+export async function deleteWorkOrder(id: string): Promise<boolean> { await post('deleteWorkOrder', { id }); cache(WORK_ORDERS_STORAGE_KEY, readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []).filter(x=>x.id!==id)); return true; }

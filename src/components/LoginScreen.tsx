@@ -120,40 +120,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
 
     // 1. Direct Hardcoded Admin authentication for immediate testing and usability
-    if ((cleanIdLower === 'admin' || cleanId === '8695716192') && cleanPass === '6293') {
-      const adminSession: UserSession = {
-        id: 'adm_8695716192',
-        idNo: '8695716192',
-        name: 'Engr. N. Ali (Admin Controller)',
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-        badgeNo: 'ADM-8695',
-        loggedInAt: new Date().toISOString()
-      };
-      loginUser(cleanId, cleanPass).catch(() => {});
-      handleSuccess(adminSession);
-      return;
-    }
 
     // 2. Direct Hardcoded Worker authentication for immediate testing and usability
-    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar') && cleanPass === '0000') {
-      const workerSession: UserSession = {
-        id: 'worker_default_0000',
-        idNo: 'worker',
-        name: 'Field Worker (WBSEDCL)',
-        phone: '',
-        role: 'worker',
-        status: 'active',
-        designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
-        badgeNo: 'WRK-0000',
-        loggedInAt: new Date().toISOString()
-      };
-      loginUser(cleanId, cleanPass).catch(() => {});
-      handleSuccess(workerSession);
-      return;
-    }
 
     setLoading(true);
 
@@ -179,41 +147,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanIdLower = cleanId.toLowerCase();
 
     // Instant hardcoded bypass for admin & worker
-    if ((cleanIdLower === 'admin' || cleanId === '8695716192') && cleanPass === '6293') {
-      const adminSession: UserSession = {
-        id: 'adm_8695716192',
-        idNo: '8695716192',
-        name: 'Engr. N. Ali (Admin Controller)',
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-        badgeNo: 'ADM-8695',
-        loggedInAt: new Date().toISOString()
-      };
-      loginUser(cleanId, cleanPass).catch(() => {});
-      handleSuccess(adminSession);
-      setLoading(false);
-      return;
-    }
-
-    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar') && cleanPass === '0000') {
-      const workerSession: UserSession = {
-        id: 'worker_default_0000',
-        idNo: 'worker',
-        name: 'Field Worker (WBSEDCL)',
-        phone: '',
-        role: 'worker',
-        status: 'active',
-        designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
-        badgeNo: 'WRK-0000',
-        loggedInAt: new Date().toISOString()
-      };
-      loginUser(cleanId, cleanPass).catch(() => {});
-      handleSuccess(workerSession);
-      setLoading(false);
-      return;
-    }
 
     try {
       const session = await loginUser(cleanId, cleanPass);
