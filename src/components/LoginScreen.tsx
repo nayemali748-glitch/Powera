@@ -142,15 +142,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     ) && cleanPass === '6293';
 
     if (isAdminDirect) {
+      const isCtrl = cleanIdLower === 'controller';
+      const isAdminOffice = cleanIdLower === 'administration';
+      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
+      const name = isCtrl 
+        ? 'Admin Controller (WBSEDCL)' 
+        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
+
       const adminSession: UserSession = {
-        id: 'adm_8695716192',
-        idNo: cleanIdLower === 'controller' ? 'controller' : (cleanIdLower === 'administration' ? 'administration' : '8695716192'),
-        name: 'Engr. N. Ali (Admin Controller)',
+        id: `adm_${idNo}`,
+        idNo,
+        name,
         phone: '8695716192',
         role: 'admin',
         status: 'active',
-        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-        badgeNo: 'ADM-8695',
+        designation: isCtrl 
+          ? 'Sub-Divisional Controller (WBSEDCL)' 
+          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
+        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
         loggedInAt: new Date().toISOString()
       };
       handleSuccess(adminSession);
@@ -213,15 +222,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     ) && cleanPass === '6293';
 
     if (isAdminDirect) {
+      const isCtrl = cleanIdLower === 'controller';
+      const isAdminOffice = cleanIdLower === 'administration';
+      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
+      const name = isCtrl 
+        ? 'Admin Controller (WBSEDCL)' 
+        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
+
       const adminSession: UserSession = {
-        id: 'adm_8695716192',
-        idNo: cleanIdLower === 'controller' ? 'controller' : (cleanIdLower === 'administration' ? 'administration' : '8695716192'),
-        name: 'Engr. N. Ali (Admin Controller)',
+        id: `adm_${idNo}`,
+        idNo,
+        name,
         phone: '8695716192',
         role: 'admin',
         status: 'active',
-        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-        badgeNo: 'ADM-8695',
+        designation: isCtrl 
+          ? 'Sub-Divisional Controller (WBSEDCL)' 
+          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
+        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
         loggedInAt: new Date().toISOString()
       };
       handleSuccess(adminSession);

@@ -35,8 +35,48 @@ export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
     securityQuestion: 'Your Primary Power Substation?',
     securityAnswer: 'Vidyut Bhavan',
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 'adm_controller',
+    idNo: 'controller',
+    password: '6293',
+    name: 'Admin Controller (WBSEDCL)',
+    phone: '8695716192',
+    role: 'admin',
+    status: 'active',
+    designation: 'Sub-Divisional Controller (WBSEDCL)',
+    badgeNo: 'CTRL-6293',
+    securityQuestion: 'Your Primary Power Substation?',
+    securityAnswer: 'Vidyut Bhavan',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'adm_administration',
+    idNo: 'administration',
+    password: '6293',
+    name: 'Administration Office (WBSEDCL)',
+    phone: '8695716192',
+    role: 'admin',
+    status: 'active',
+    designation: 'Divisional Administration (WBSEDCL)',
+    badgeNo: 'ADMIN-6293',
+    securityQuestion: 'Your Primary Power Substation?',
+    securityAnswer: 'Vidyut Bhavan',
+    createdAt: new Date().toISOString()
   }
 ];
+
+// Clean legacy bloated localStorage on module initialization to immediately resolve lag/hang
+try {
+  const oldEntries = localStorage.getItem(LOCAL_STORAGE_KEY);
+  if (oldEntries && oldEntries.length > 50000) {
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+  }
+  const oldOrders = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
+  if (oldOrders && oldOrders.length > 50000) {
+    localStorage.removeItem(WORK_ORDERS_STORAGE_KEY);
+  }
+} catch {}
 
 function readCache<T>(key: string, fallback: T): T {
   try {
@@ -51,6 +91,22 @@ function writeCache<T>(key: string, value: T) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
+}
+
+// Strip heavy base64 images when writing to localStorage cache to prevent UI thread freezing
+function sanitizeEntriesForCache(entries: PowerEntry[]): PowerEntry[] {
+  return entries.slice(0, 50).map(e => ({
+    ...e,
+    photoUrl: e.photoUrl && e.photoUrl.length > 3000 ? '' : e.photoUrl,
+    workOrderPhoto: e.workOrderPhoto && e.workOrderPhoto.length > 3000 ? '' : e.workOrderPhoto,
+  }));
+}
+
+function sanitizeWorkOrdersForCache(orders: WorkOrderNotice[]): WorkOrderNotice[] {
+  return orders.slice(0, 30).map(w => ({
+    ...w,
+    photoUrl: w.photoUrl && w.photoUrl.length > 3000 ? '' : w.photoUrl,
+  }));
 }
 
 export async function syncPendingEntries(): Promise<number> {
@@ -117,8 +173,8 @@ export async function fetchEntries(filters?: {
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: PowerEntry[] = await res.json();
     
-    // Update local cache safely (keep latest 100 entries for instant load)
-    writeCache(LOCAL_STORAGE_KEY, data.slice(0, 100));
+    // Update local cache safely with stripped images to avoid freezing the UI thread
+    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(data));
     return data;
   } catch (error) {
     console.warn('Local server fetch failed, using local cache:', error);
@@ -151,7 +207,7 @@ export async function createEntry(entryData: Partial<PowerEntry>): Promise<Power
   // Immediate local cache update for instant UI feedback (0ms delay)
   try {
     const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    writeCache(LOCAL_STORAGE_KEY, [cleanEntry, ...list.filter(e => e.id !== cleanEntry.id)].slice(0, 100));
+    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([cleanEntry, ...list.filter(e => e.id !== cleanEntry.id)]));
   } catch {}
 
   try {
@@ -396,23 +452,39 @@ export async function loginUser(loginId: string, password: string): Promise<User
   const cleanPass = normalizePassword(password);
   const cleanIdLower = cleanId.toLowerCase();
 
-  // Instant zero-lag bypass for Master Admin
-  if ((cleanId === '8695716192' || cleanIdLower === 'admin' || cleanIdLower === 'adm') && cleanPass === '6293') {
+  // Instant zero-lag bypass for Master Admin, Controller, and Administration
+  const isAdminLoginId = cleanId === '8695716192' || 
+    cleanId.replace(/[^0-9]/g, '') === '8695716192' || 
+    cleanIdLower === 'admin' || 
+    cleanIdLower === 'adm' || 
+    cleanIdLower === 'controller' || 
+    cleanIdLower === 'administration';
+
+  if (isAdminLoginId && cleanPass === '6293') {
+    const isCtrl = cleanIdLower === 'controller';
+    const isAdminOffice = cleanIdLower === 'administration';
+    const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
+    const name = isCtrl 
+      ? 'Admin Controller (WBSEDCL)' 
+      : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
+
     return {
-      id: 'adm_8695716192',
-      idNo: '8695716192',
-      name: 'Engr. N. Ali (Admin Controller)',
+      id: `adm_${idNo}`,
+      idNo,
+      name,
       phone: '8695716192',
       role: 'admin',
       status: 'active',
-      designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-      badgeNo: 'ADM-8695',
+      designation: isCtrl 
+        ? 'Sub-Divisional Controller (WBSEDCL)' 
+        : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
+      badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
       loggedInAt: new Date().toISOString()
     };
   }
 
-  // Instant zero-lag bypass for Default Worker
-  if ((cleanIdLower === 'worker' || cleanIdLower === 'workar') && cleanPass === '0000') {
+  // Instant zero-lag bypass for Default Worker (supports 'worker', 'workar', 'lineman', 'wrk')
+  if ((cleanIdLower === 'worker' || cleanIdLower === 'workar' || cleanIdLower === 'lineman' || cleanIdLower === 'wrk') && cleanPass === '0000') {
     return {
       id: 'worker_default_0000',
       idNo: 'worker',
@@ -575,7 +647,7 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
     });
     if (res.ok) {
       const data: WorkOrderNotice[] = await res.json();
-      writeCache(WORK_ORDERS_STORAGE_KEY, data.slice(0, 50));
+      writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache(data));
       return data;
     }
   } catch {}
@@ -605,7 +677,7 @@ export async function uploadWorkOrder(payload: {
       const data = await res.json();
       const savedOrder: WorkOrderNotice = data.workOrder;
       const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
-      writeCache(WORK_ORDERS_STORAGE_KEY, [savedOrder, ...list.filter(w => w.id !== savedOrder.id)].slice(0, 50));
+      writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache([savedOrder, ...list.filter(w => w.id !== savedOrder.id)]));
       return savedOrder;
     }
   } catch {}

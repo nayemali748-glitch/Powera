@@ -50,18 +50,18 @@ import {
  * before triggering a React state update, preventing unnecessary component re-renders and UI lag.
  */
 function computeJsonChangeHash(data: unknown): string {
-  if (!data) return '0_empty';
-  try {
-    const json = JSON.stringify(data);
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < json.length; i++) {
-      hash ^= json.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193);
+  if (!Array.isArray(data)) return '0_empty';
+  if (data.length === 0) return '0_empty';
+  let sig = `${data.length}`;
+  // Fast signature over latest 30 entries without heavy stringification
+  const maxCheck = Math.min(data.length, 30);
+  for (let i = 0; i < maxCheck; i++) {
+    const item = data[i];
+    if (item) {
+      sig += `|${item.id || ''}:${item.status || ''}:${item.updatedAt || item.date || ''}`;
     }
-    return `${json.length}_${(hash >>> 0).toString(16)}`;
-  } catch {
-    return String(Date.now());
   }
+  return sig;
 }
 
 export default function App() {
@@ -248,11 +248,22 @@ export default function App() {
     loadData(true);
   };
 
-  const handleAdminLogin = () => {
+  const handleAdminLogin = (pin?: string): boolean => {
+    if (pin && pin.trim() !== '6293') {
+      return false;
+    }
     setIsAdmin(true);
     localStorage.setItem('power_is_admin', 'true');
     setActiveTab('admin');
+    return true;
   };
+
+  // Enforce access control: If user is not admin, never allow staying in the admin panel
+  useEffect(() => {
+    if (!isAdmin && activeTab === 'admin') {
+      setActiveTab('entry');
+    }
+  }, [isAdmin, activeTab]);
 
   const handleAdminLogout = () => {
     setIsAdmin(false);

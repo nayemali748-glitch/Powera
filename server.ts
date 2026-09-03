@@ -61,19 +61,54 @@ const ROOT_WORKER_ACCOUNT = {
   createdAt: '2026-09-01T00:00:00.000Z'
 };
 
+const ROOT_CONTROLLER_ACCOUNT = {
+  id: 'adm_controller',
+  idNo: 'controller',
+  password: '6293',
+  name: 'Admin Controller (WBSEDCL)',
+  phone: '8695716192',
+  role: 'admin',
+  status: 'active',
+  designation: 'Sub-Divisional Controller (WBSEDCL)',
+  badgeNo: 'CTRL-6293',
+  createdAt: '2026-09-01T00:00:00.000Z'
+};
+
+const ROOT_ADMINISTRATION_ACCOUNT = {
+  id: 'adm_administration',
+  idNo: 'administration',
+  password: '6293',
+  name: 'Administration Office (WBSEDCL)',
+  phone: '8695716192',
+  role: 'admin',
+  status: 'active',
+  designation: 'Divisional Administration (WBSEDCL)',
+  badgeNo: 'ADMIN-6293',
+  createdAt: '2026-09-01T00:00:00.000Z'
+};
+
+// In-memory cache variables for instant microsecond responses
+let cachedUsers: any[] | null = null;
+let cachedEntries: any[] | null = null;
+let cachedWorkOrders: any[] | null = null;
+let cachedChat: any[] | null = null;
+
 // Helper to read users (Admin created users + Master Admin & Default Worker exist)
 function readUsers() {
+  if (cachedUsers) return cachedUsers;
   try {
     if (!fs.existsSync(USERS_FILE)) {
-      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
+      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
       fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+      cachedUsers = initial;
       return initial;
     }
     const content = fs.readFileSync(USERS_FILE, 'utf-8');
     let parsed = JSON.parse(content || '[]');
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
+      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
       fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+      cachedUsers = initial;
       return initial;
     }
     // Ensure all users have status property (default 'active')
@@ -93,6 +128,16 @@ function readUsers() {
       parsed[adminIdx].status = 'active';
     }
 
+    // Ensure controller and administration exist
+    if (!parsed.some(u => u && u.idNo?.toLowerCase() === 'controller')) {
+      parsed.push(ROOT_CONTROLLER_ACCOUNT);
+      updated = true;
+    }
+    if (!parsed.some(u => u && u.idNo?.toLowerCase() === 'administration')) {
+      parsed.push(ROOT_ADMINISTRATION_ACCOUNT);
+      updated = true;
+    }
+
     // Ensure default worker exists
     const workerIdx = parsed.findIndex(u => u && (u.idNo?.toLowerCase() === 'worker' || u.idNo?.toLowerCase() === 'workar'));
     if (workerIdx === -1) {
@@ -106,15 +151,17 @@ function readUsers() {
       fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
     }
 
+    cachedUsers = parsed;
     return parsed;
   } catch (err) {
     console.error('Error reading users:', err);
-    return [ROOT_ADMIN_ACCOUNT, ROOT_WORKER_ACCOUNT];
+    return [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
   }
 }
 
 // Helper to write users
 function writeUsers(users: any[]) {
+  cachedUsers = users;
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
   } catch (err) {
@@ -124,13 +171,17 @@ function writeUsers(users: any[]) {
 
 // Helper to read live chat messages
 function readChat() {
+  if (cachedChat) return cachedChat;
   try {
     if (!fs.existsSync(CHAT_FILE)) {
       fs.writeFileSync(CHAT_FILE, JSON.stringify([], null, 2), 'utf-8');
+      cachedChat = [];
       return [];
     }
     const content = fs.readFileSync(CHAT_FILE, 'utf-8');
-    return JSON.parse(content || '[]');
+    const parsed = JSON.parse(content || '[]');
+    cachedChat = parsed;
+    return parsed;
   } catch (err) {
     console.error('Error reading chat:', err);
     return [];
@@ -139,6 +190,7 @@ function readChat() {
 
 // Helper to write live chat messages
 function writeChat(messages: any[]) {
+  cachedChat = messages;
   try {
     fs.writeFileSync(CHAT_FILE, JSON.stringify(messages, null, 2), 'utf-8');
   } catch (err) {
@@ -148,13 +200,17 @@ function writeChat(messages: any[]) {
 
 // Helper to read work order / khata notices
 function readWorkOrders() {
+  if (cachedWorkOrders) return cachedWorkOrders;
   try {
     if (!fs.existsSync(WORK_ORDERS_FILE)) {
       fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      cachedWorkOrders = [];
       return [];
     }
     const content = fs.readFileSync(WORK_ORDERS_FILE, 'utf-8');
-    return JSON.parse(content || '[]');
+    const parsed = JSON.parse(content || '[]');
+    cachedWorkOrders = parsed;
+    return parsed;
   } catch (err) {
     console.error('Error reading work orders:', err);
     return [];
@@ -163,6 +219,7 @@ function readWorkOrders() {
 
 // Helper to write work order / khata notices
 function writeWorkOrders(orders: any[]) {
+  cachedWorkOrders = orders;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -179,16 +236,20 @@ const INITIAL_ENTRIES: any[] = [];
 
 // Helper to read entries
 function readEntries() {
+  if (cachedEntries) return cachedEntries;
   try {
     if (!fs.existsSync(DATA_FILE)) {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
       }
       fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), 'utf-8');
+      cachedEntries = [];
       return [];
     }
     const content = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(content || '[]');
+    const parsed = JSON.parse(content || '[]');
+    cachedEntries = parsed;
+    return parsed;
   } catch (err) {
     console.error('Error reading entries:', err);
     return [];
@@ -197,6 +258,7 @@ function readEntries() {
 
 // Helper to write entries
 function writeEntries(entries: any[]) {
+  cachedEntries = entries;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -546,24 +608,49 @@ app.post('/api/auth/login', (req, res) => {
     const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
     const users = readUsers();
 
-    // 1. Direct Master Admin check (8695716192 / admin with 6293)
-    if ((cleanId === '8695716192' || cleanIdAlphaNum === '8695716192' || cleanIdLower === 'admin' || cleanIdLower === 'adm') && cleanPass === '6293') {
+    // 1. Direct Master Admin check (8695716192 / admin / controller / administration with 6293)
+    const isDirectAdmin = (
+      cleanId === '8695716192' || 
+      cleanIdAlphaNum === '8695716192' || 
+      cleanIdLower === 'admin' || 
+      cleanIdLower === 'adm' ||
+      cleanIdLower === 'controller' ||
+      cleanIdLower === 'administration'
+    );
+    if (isDirectAdmin && cleanPass === '6293') {
+      const isCtrl = cleanIdLower === 'controller';
+      const isAdminOffice = cleanIdLower === 'administration';
+      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
+      const name = isCtrl 
+        ? 'Admin Controller (WBSEDCL)' 
+        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
+
       const session = {
-        id: ROOT_ADMIN_ACCOUNT.id,
-        idNo: ROOT_ADMIN_ACCOUNT.idNo,
-        name: ROOT_ADMIN_ACCOUNT.name,
-        phone: ROOT_ADMIN_ACCOUNT.phone,
-        role: ROOT_ADMIN_ACCOUNT.role,
+        id: `adm_${idNo}`,
+        idNo,
+        name,
+        phone: '8695716192',
+        role: 'admin',
         status: 'active',
-        designation: ROOT_ADMIN_ACCOUNT.designation,
-        badgeNo: ROOT_ADMIN_ACCOUNT.badgeNo,
+        designation: isCtrl 
+          ? 'Sub-Divisional Controller (WBSEDCL)' 
+          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
+        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
         loggedInAt: new Date().toISOString()
       };
       return res.json({ success: true, session });
     }
 
-    // 2. Direct Worker default check (worker / workar with 0000)
-    if ((cleanIdLower === 'worker' || cleanIdLower === 'workar' || cleanIdAlphaNum === 'worker' || cleanIdAlphaNum === 'workar') && cleanPass === '0000') {
+    // 2. Direct Worker default check (worker / workar / lineman / wrk with 0000)
+    const isDirectWorker = (
+      cleanIdLower === 'worker' || 
+      cleanIdLower === 'workar' || 
+      cleanIdAlphaNum === 'worker' || 
+      cleanIdAlphaNum === 'workar' ||
+      cleanIdLower === 'lineman' ||
+      cleanIdLower === 'wrk'
+    );
+    if (isDirectWorker && cleanPass === '0000') {
       const session = {
         id: ROOT_WORKER_ACCOUNT.id,
         idNo: ROOT_WORKER_ACCOUNT.idNo,

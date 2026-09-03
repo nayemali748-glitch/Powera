@@ -111,12 +111,16 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
   useEffect(() => {
     loadNotices(false);
-    // Real-time synchronization every 3 seconds so workers immediately see newly uploaded photos
+    // Background polling every 12 seconds when tab is visible
     const interval = setInterval(() => {
-      loadNotices(true);
-    }, 3000);
+      if (!document.hidden) {
+        loadNotices(true);
+      }
+    }, 12000);
 
-    const onFocus = () => loadNotices(true);
+    const onFocus = () => {
+      if (!document.hidden) loadNotices(true);
+    };
     const onVisibilityChange = () => {
       if (!document.hidden) loadNotices(true);
     };
