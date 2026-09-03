@@ -116,6 +116,16 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
           </button>
         </div>
 
+        {/* Sync Reassurance Banner for Worker */}
+        <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+          <span>
+            {lang === 'bn' 
+              ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
+              : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
+          </span>
+        </div>
+
       {displayEntries.length === 0 ? (
         <div className="text-center py-10 text-slate-500 space-y-2">
           <FileText className="w-8 h-8 mx-auto text-slate-400" />
@@ -193,6 +203,10 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
                   <div className="flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-slate-400" />
                     <span>{item.workerName}</span>
+                    <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded font-bold ml-1 flex items-center gap-1">
+                      <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
+                      এডমিনে সিঙ্কড
+                    </span>
                   </div>
                   <div className="flex items-center gap-1 text-slate-900 font-semibold group-hover:text-blue-700 transition-colors">
                     <span>{t.printReceipt}</span>

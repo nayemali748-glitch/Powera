@@ -42,7 +42,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   lang = 'bn',
   onOpenLanguageModal 
 }) => {
-  const handleSuccess = onLoginSuccess || onLogin || (() => {});
+  const onProceedSession = onLoginSuccess || onLogin || (() => {});
+  const handleSuccess = (session: UserSession) => {
+    localStorage.setItem('power_user_session', JSON.stringify(session));
+    const isAdminUser = Boolean(
+      session.role !== 'worker' &&
+      (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
+    );
+    if (isAdminUser) {
+      localStorage.setItem('power_is_admin', 'true');
+    } else {
+      localStorage.removeItem('power_is_admin');
+    }
+    onProceedSession(session);
+  };
   const t = translations[lang] || translations.bn;
   // Screen mode: 'login' | 'register' | 'forgot'
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
@@ -119,9 +132,54 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // 1. Direct Hardcoded Admin authentication for immediate testing and usability
+    // 1. Direct Admin / Controller / Administration authentication
+    const isAdminDirect = (
+      cleanId === '8695716192' || 
+      cleanIdLower === 'admin' || 
+      cleanIdLower === 'adm' || 
+      cleanIdLower === 'controller' || 
+      cleanIdLower === 'administration'
+    ) && cleanPass === '6293';
 
-    // 2. Direct Hardcoded Worker authentication for immediate testing and usability
+    if (isAdminDirect) {
+      const adminSession: UserSession = {
+        id: 'adm_8695716192',
+        idNo: cleanIdLower === 'controller' ? 'controller' : (cleanIdLower === 'administration' ? 'administration' : '8695716192'),
+        name: 'Engr. N. Ali (Admin Controller)',
+        phone: '8695716192',
+        role: 'admin',
+        status: 'active',
+        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
+        badgeNo: 'ADM-8695',
+        loggedInAt: new Date().toISOString()
+      };
+      handleSuccess(adminSession);
+      return;
+    }
+
+    // 2. Direct Field Worker default authentication for instant zero-lag login
+    const isWorkerDirect = (
+      cleanIdLower === 'worker' || 
+      cleanIdLower === 'workar' || 
+      cleanIdLower === 'lineman' || 
+      cleanIdLower === 'wrk'
+    ) && cleanPass === '0000';
+
+    if (isWorkerDirect) {
+      const workerSession: UserSession = {
+        id: 'worker_default_0000',
+        idNo: 'worker',
+        name: 'Field Worker (WBSEDCL)',
+        phone: '',
+        role: 'worker',
+        status: 'active',
+        designation: 'লাইনম্যান / Worker (WBSEDCL)',
+        badgeNo: 'WRK-0000',
+        loggedInAt: new Date().toISOString()
+      };
+      handleSuccess(workerSession);
+      return;
+    }
 
     setLoading(true);
 
@@ -137,7 +195,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
   // Handle Quick 1-Click Login
   const handleQuickLogin = async (accIdNo: string, accPass: string) => {
-    setLoading(true);
     setError(null);
     const cleanId = normalizeUniversalText(accIdNo);
     const cleanPass = normalizePassword(accPass);
@@ -146,8 +203,55 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
     const cleanIdLower = cleanId.toLowerCase();
 
-    // Instant hardcoded bypass for admin & worker
+    // Instant hardcoded bypass for admin, controller, administration & worker
+    const isAdminDirect = (
+      cleanId === '8695716192' || 
+      cleanIdLower === 'admin' || 
+      cleanIdLower === 'adm' || 
+      cleanIdLower === 'controller' || 
+      cleanIdLower === 'administration'
+    ) && cleanPass === '6293';
 
+    if (isAdminDirect) {
+      const adminSession: UserSession = {
+        id: 'adm_8695716192',
+        idNo: cleanIdLower === 'controller' ? 'controller' : (cleanIdLower === 'administration' ? 'administration' : '8695716192'),
+        name: 'Engr. N. Ali (Admin Controller)',
+        phone: '8695716192',
+        role: 'admin',
+        status: 'active',
+        designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
+        badgeNo: 'ADM-8695',
+        loggedInAt: new Date().toISOString()
+      };
+      handleSuccess(adminSession);
+      return;
+    }
+
+    const isWorkerDirect = (
+      cleanIdLower === 'worker' || 
+      cleanIdLower === 'workar' || 
+      cleanIdLower === 'lineman' || 
+      cleanIdLower === 'wrk'
+    ) && cleanPass === '0000';
+
+    if (isWorkerDirect) {
+      const workerSession: UserSession = {
+        id: 'worker_default_0000',
+        idNo: 'worker',
+        name: 'Field Worker (WBSEDCL)',
+        phone: '',
+        role: 'worker',
+        status: 'active',
+        designation: 'লাইনম্যান / Worker (WBSEDCL)',
+        badgeNo: 'WRK-0000',
+        loggedInAt: new Date().toISOString()
+      };
+      handleSuccess(workerSession);
+      return;
+    }
+
+    setLoading(true);
     try {
       const session = await loginUser(cleanId, cleanPass);
       handleSuccess(session);

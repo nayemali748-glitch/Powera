@@ -217,8 +217,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       setIsCompressing(true);
       try {
         const compressed = await compressImageFile(file, {
-          maxDimension: 1280,
-          quality: 0.80,
+          maxDimension: 1024,
+          quality: 0.72,
           watermarkText: `WBSEDCL [${category}]`,
           subText: `${new Date().toLocaleDateString('en-GB')} • Lineman: ${worker || 'Staff'}`,
         });
@@ -2194,6 +2194,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               <div className="flex justify-between">
                 <span className="text-slate-500 font-medium">{t.workerName}:</span>
                 <span className="font-bold text-slate-800">{submissionModalEntry.workerName}</span>
+              </div>
+              <div className="pt-1.5 border-t border-slate-200">
+                <div className="p-2 bg-emerald-50 border border-emerald-200/80 rounded-lg text-[11px] text-emerald-800 font-bold flex items-center justify-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>ডাটা এডমিন প্যানেলে রিয়েল-টাইমে দৃশ্যমান (Synced to Admin Panel)</span>
+                </div>
               </div>
             </div>
 

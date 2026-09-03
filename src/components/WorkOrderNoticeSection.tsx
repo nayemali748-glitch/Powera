@@ -77,25 +77,18 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     }, 4000);
   };
 
-  // Strictly verify Admin role across session, ID 8695716192, phone, prop, and localStorage
-  const isAdmin = Boolean(
-    propIsAdmin ||
-    currentUser?.role?.toLowerCase() === 'admin' ||
-    currentUser?.idNo === '8695716192' ||
-    currentUser?.phone?.replace(/[^0-9]/g, '') === '8695716192' ||
-    localStorage.getItem('power_is_admin') === 'true' ||
-    localStorage.getItem('power_worker_name')?.toLowerCase().includes('admin') ||
-    (() => {
-      try {
-        const sess = localStorage.getItem('power_user_session');
-        if (sess) {
-          const parsed = JSON.parse(sess);
-          return parsed?.role?.toLowerCase() === 'admin' || parsed?.idNo === '8695716192';
-        }
-      } catch {}
-      return false;
-    })()
-  );
+  // Strictly verify Admin role: Workers NEVER have admin rights
+  const isAdmin = currentUser?.role === 'worker'
+    ? false
+    : Boolean(
+        propIsAdmin ||
+        currentUser?.role?.toLowerCase() === 'admin' ||
+        currentUser?.idNo === '8695716192' ||
+        currentUser?.idNo === 'controller' ||
+        currentUser?.idNo === 'administration' ||
+        currentUser?.phone?.replace(/[^0-9]/g, '') === '8695716192' ||
+        localStorage.getItem('power_is_admin') === 'true'
+      );
 
   const loadNotices = async (silent = false) => {
     try {

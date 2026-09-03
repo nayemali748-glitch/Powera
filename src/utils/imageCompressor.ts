@@ -16,8 +16,8 @@ export function compressImageFile(
   options: CompressionOptions = {}
 ): Promise<string> {
   const {
-    maxDimension = 1280,
-    quality = 0.80,
+    maxDimension = 1024,
+    quality = 0.72,
     watermarkText,
     subText,
   } = options;

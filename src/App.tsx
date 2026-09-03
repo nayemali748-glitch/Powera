@@ -12,9 +12,10 @@ import { InstallAppModal } from './components/InstallAppModal';
 import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
 import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice } from './types';
-import { fetchEntries, fetchStats } from './services/api';
+import { fetchEntries, fetchStats, fetchWorkOrders } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
+import { AdminNoticesBanner } from './components/AdminNoticesBanner';
 import { 
   Zap, 
   ShieldCheck, 
@@ -89,10 +90,19 @@ export default function App() {
   const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const lastDataHashRef = useRef<string>('');
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
-    return localStorage.getItem('power_is_admin') === 'true';
+    const saved = localStorage.getItem('power_user_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed?.role === 'worker') return false;
+        return parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration';
+      } catch (e) {}
+    }
+    return false;
   });
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
@@ -155,11 +165,18 @@ export default function App() {
     }
   }, []);
 
+  const inFlightRef = useRef(false);
+
   const loadData = async (silent: boolean | unknown = false) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent) setLoading(true);
-      const data = await fetchEntries();
+      const [data, orders] = await Promise.all([
+        fetchEntries(),
+        fetchWorkOrders().catch(() => [])
+      ]);
       const currentData = data || [];
       const newHash = computeJsonChangeHash(currentData);
 
@@ -168,19 +185,25 @@ export default function App() {
         lastDataHashRef.current = newHash;
         setEntries(currentData);
       }
+      if (Array.isArray(orders)) {
+        setWorkOrders(orders);
+      }
     } catch (err) {
       console.error('Failed to load power entries:', err);
     } finally {
+      inFlightRef.current = false;
       if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadData(false);
-    // Real-time background sync every 3.5 seconds so Admin Panel & Worker Views stay 100% in sync
+    // Real-time background sync every 8 seconds, only when tab is visible
     const interval = setInterval(() => {
-      loadData(true);
-    }, 3500);
+      if (!document.hidden) {
+        loadData(true);
+      }
+    }, 8000);
 
     const onFocus = () => loadData(true);
     const onVisibilityChange = () => {
@@ -197,14 +220,23 @@ export default function App() {
     };
   }, []);
 
+  // Strict role sync: Workers NEVER have admin privileges
   useEffect(() => {
-    if (activeTab === 'admin' && !isAdmin) {
-      setActiveTab('entry');
+    const isUserAdmin = Boolean(
+      currentUser && 
+      currentUser.role !== 'worker' && 
+      (currentUser.role === 'admin' || currentUser.idNo === '8695716192' || currentUser.idNo === 'controller' || currentUser.idNo === 'administration')
+    );
+    setIsAdmin(isUserAdmin);
+    if (isUserAdmin) {
+      localStorage.setItem('power_is_admin', 'true');
+    } else {
+      localStorage.removeItem('power_is_admin');
+      if (activeTab === 'admin') {
+        setActiveTab('entry');
+      }
     }
-    if (activeTab === 'admin' || activeTab === 'submissions') {
-      loadData(true);
-    }
-  }, [activeTab, isAdmin]);
+  }, [currentUser, activeTab]);
 
   const handleEntrySuccess = (newEntry: PowerEntry) => {
     setEntries((prev) => {
@@ -231,9 +263,19 @@ export default function App() {
   const handleUserLoginSuccess = (session: UserSession) => {
     setCurrentUser(session);
     setWorkerName(session.name);
-    if (session.role === 'admin') {
-      setIsAdmin(true);
+    localStorage.setItem('power_user_session', JSON.stringify(session));
+    localStorage.setItem('power_worker_name', session.name);
+    const isUserAdmin = Boolean(
+      session.role !== 'worker' && 
+      (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
+    );
+    setIsAdmin(isUserAdmin);
+    if (isUserAdmin) {
       localStorage.setItem('power_is_admin', 'true');
+      setActiveTab('admin');
+    } else {
+      localStorage.removeItem('power_is_admin');
+      setActiveTab('entry');
     }
   };
 
@@ -713,6 +755,19 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* ADMIN NOTICES & WORK ORDERS (What Admin gave - visible to Workers) */}
+                  <AdminNoticesBanner
+                    workOrders={workOrders}
+                    onSelectNoticeForEntry={(notice) => {
+                      setSelectedWorkOrderForEntry(notice);
+                      setSelectedCategory(notice.category);
+                      setActiveFormCategory(notice.category);
+                    }}
+                    onViewAllNotices={() => setActiveTab('work-orders')}
+                    lang={currentLanguage}
+                    isAdmin={isAdmin}
+                  />
 
                   {/* 5 Work Category Cards Selector */}
                   <CategorySelector
