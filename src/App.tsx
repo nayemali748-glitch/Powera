@@ -145,24 +145,11 @@ export default function App() {
     }
   };
 
-  // Clean stale demo items on mount
+  // Purge any legacy local user storage on mount
   useEffect(() => {
-    const savedUsers = localStorage.getItem('power_registered_users');
-    if (savedUsers) {
-      try {
-        const parsed = JSON.parse(savedUsers);
-        if (Array.isArray(parsed)) {
-          const filtered = parsed.filter(
-            (u: any) => u && u.idNo !== 'WRK-101' && u.idNo !== 'WBSEDCL-ADM-99'
-          );
-          if (filtered.length !== parsed.length) {
-            localStorage.setItem('power_registered_users', JSON.stringify(filtered));
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
+    try {
+      localStorage.removeItem('power_registered_users');
+    } catch {}
   }, []);
 
   const inFlightRef = useRef(false);

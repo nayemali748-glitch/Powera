@@ -1,7 +1,79 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import dns from 'dns';
 import { createServer as createViteServer } from 'vite';
+
+// Ensure IPv4 resolution first for stable script.google.com connection
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {
+  // ignore
+}
+
+const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
+const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
+
+// Helper to communicate with Google Apps Script Web App (Single source of truth)
+async function callGoogleAppsScript(
+  action: string, 
+  payload: any = {}, 
+  method: 'GET' | 'POST' = 'POST',
+  timeoutMs = 15000
+): Promise<any> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    try { controller.abort(); } catch {}
+  }, timeoutMs);
+
+  try {
+    let url = GOOGLE_APPS_SCRIPT_URL;
+    const options: RequestInit = {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'Accept': 'application/json'
+      }
+    };
+
+    if (method === 'GET') {
+      const sep = url.includes('?') ? '&' : '?';
+      const queryParams: Record<string, string> = { action };
+      for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined && value !== null) {
+          queryParams[key] = String(value);
+        }
+      }
+      const params = new URLSearchParams(queryParams);
+      url = `${url}${sep}${params.toString()}`;
+      options.method = 'GET';
+    } else {
+      options.method = 'POST';
+      options.headers = {
+        ...options.headers,
+        'Content-Type': 'text/plain;charset=utf-8'
+      };
+      options.body = JSON.stringify({ action, ...payload });
+    }
+
+    const res = await fetch(url, options);
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Google Apps Script returned non-JSON response: ${text.slice(0, 150)}`);
+    }
+  } catch (err: any) {
+    if (err && err.name === 'AbortError') {
+      console.warn(`[GoogleAppsScript] action "${action}" timed out after ${timeoutMs}ms.`);
+      throw new Error('Backend request timed out. Please try again.');
+    }
+    console.error(`[GoogleAppsScript] action "${action}" error:`, err?.message || err);
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 const app = express();
 const PORT = 3000;
@@ -9,10 +81,9 @@ const PORT = 3000;
 app.use(express.json({ limit: '80mb' }));
 app.use(express.urlencoded({ limit: '80mb', extended: true }));
 
-// Ensure data directory exists
+// Ensure data directory exists for local non-user data (entries and chat)
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'entries.json');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
 const WORK_ORDERS_FILE = path.join(DATA_DIR, 'work_orders.json');
 
@@ -20,7 +91,7 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Security Middleware & Headers to prevent tampering and data leakage
+// Security Middleware & Headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -30,144 +101,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Default Master Accounts
-const ROOT_ADMIN_ACCOUNT = {
-  id: 'adm_8695716192',
-  idNo: '8695716192',
-  password: '6293',
-  name: 'Engr. N. Ali (Admin Controller)',
-  phone: '8695716192',
-  role: 'admin',
-  status: 'active',
-  designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-  badgeNo: 'ADM-8695',
-  securityQuestion: 'Your Primary Power Substation?',
-  securityAnswer: 'Vidyut Bhavan',
-  createdAt: '2026-09-01T00:00:00.000Z'
-};
-
-const ROOT_WORKER_ACCOUNT = {
-  id: 'worker_default_0000',
-  idNo: 'worker',
-  password: '0000',
-  name: 'Field Worker (WBSEDCL)',
-  phone: '',
-  role: 'worker',
-  status: 'active',
-  designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
-  badgeNo: 'WRK-0000',
-  securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-  securityAnswer: 'Vidyut Bhavan',
-  createdAt: '2026-09-01T00:00:00.000Z'
-};
-
-const ROOT_CONTROLLER_ACCOUNT = {
-  id: 'adm_controller',
-  idNo: 'controller',
-  password: '6293',
-  name: 'Admin Controller (WBSEDCL)',
-  phone: '8695716192',
-  role: 'admin',
-  status: 'active',
-  designation: 'Sub-Divisional Controller (WBSEDCL)',
-  badgeNo: 'CTRL-6293',
-  createdAt: '2026-09-01T00:00:00.000Z'
-};
-
-const ROOT_ADMINISTRATION_ACCOUNT = {
-  id: 'adm_administration',
-  idNo: 'administration',
-  password: '6293',
-  name: 'Administration Office (WBSEDCL)',
-  phone: '8695716192',
-  role: 'admin',
-  status: 'active',
-  designation: 'Divisional Administration (WBSEDCL)',
-  badgeNo: 'ADMIN-6293',
-  createdAt: '2026-09-01T00:00:00.000Z'
-};
-
-// In-memory cache variables for instant microsecond responses
-let cachedUsers: any[] | null = null;
+// In-memory cache variables for non-user data
 let cachedEntries: any[] | null = null;
 let cachedWorkOrders: any[] | null = null;
 let cachedChat: any[] | null = null;
-
-// Helper to read users (Admin created users + Master Admin & Default Worker exist)
-function readUsers() {
-  if (cachedUsers) return cachedUsers;
-  try {
-    if (!fs.existsSync(USERS_FILE)) {
-      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
-      fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
-      cachedUsers = initial;
-      return initial;
-    }
-    const content = fs.readFileSync(USERS_FILE, 'utf-8');
-    let parsed = JSON.parse(content || '[]');
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      const initial = [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
-      fs.writeFileSync(USERS_FILE, JSON.stringify(initial, null, 2), 'utf-8');
-      cachedUsers = initial;
-      return initial;
-    }
-    // Ensure all users have status property (default 'active')
-    parsed = parsed.map((u: any) => ({
-      ...u,
-      status: u.status || 'active'
-    }));
-
-    let updated = false;
-
-    // Ensure primary admin 8695716192 exists and is active
-    const adminIdx = parsed.findIndex(u => u && (u.idNo === '8695716192' || u.idNo?.toLowerCase() === 'admin'));
-    if (adminIdx === -1) {
-      parsed.unshift(ROOT_ADMIN_ACCOUNT);
-      updated = true;
-    } else {
-      parsed[adminIdx].status = 'active';
-    }
-
-    // Ensure controller and administration exist
-    if (!parsed.some(u => u && u.idNo?.toLowerCase() === 'controller')) {
-      parsed.push(ROOT_CONTROLLER_ACCOUNT);
-      updated = true;
-    }
-    if (!parsed.some(u => u && u.idNo?.toLowerCase() === 'administration')) {
-      parsed.push(ROOT_ADMINISTRATION_ACCOUNT);
-      updated = true;
-    }
-
-    // Ensure default worker exists
-    const workerIdx = parsed.findIndex(u => u && (u.idNo?.toLowerCase() === 'worker' || u.idNo?.toLowerCase() === 'workar'));
-    if (workerIdx === -1) {
-      parsed.push(ROOT_WORKER_ACCOUNT);
-      updated = true;
-    } else {
-      parsed[workerIdx].status = 'active';
-    }
-
-    if (updated) {
-      fs.writeFileSync(USERS_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
-    }
-
-    cachedUsers = parsed;
-    return parsed;
-  } catch (err) {
-    console.error('Error reading users:', err);
-    return [ROOT_ADMIN_ACCOUNT, ROOT_CONTROLLER_ACCOUNT, ROOT_ADMINISTRATION_ACCOUNT, ROOT_WORKER_ACCOUNT];
-  }
-}
-
-// Helper to write users
-function writeUsers(users: any[]) {
-  cachedUsers = users;
-  try {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing users:', err);
-  }
-}
 
 // Helper to read live chat messages
 function readChat() {
@@ -402,13 +339,7 @@ app.delete('/api/entries', (req, res) => {
   res.json({ success: true, message: 'All entries deleted successfully' });
 });
 
-// User Authentication & Management Endpoints (Persisted in data/users.json)
-// Get all users
-app.get('/api/users', (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const users = readUsers();
-  res.json(users);
-});
+// User Authentication & Management Endpoints (Persisted in Google Sheets via Google Apps Script)
 
 // Helper to normalize Unicode, non-ASCII numerals (Bengali, Hindi, Arabic), dashes and invisible spaces
 function normalizeUniversal(val: any): string {
@@ -434,11 +365,55 @@ function normalizeUniversal(val: any): string {
   return s.trim();
 }
 
-// Create new user or update if ID exists (Admin created)
-app.post('/api/users', (req, res) => {
+// ==========================================================
+// USER MANAGEMENT & AUTHENTICATION (GOOGLE SHEETS EXCLUSIVE)
+// ==========================================================
+
+// Helper to resolve an identifier (id or idNo) to a user's sheet id in Google Sheets
+async function resolveGoogleSheetUserId(identifier: string): Promise<{ id: string; user?: any } | null> {
+  const clean = normalizeUniversal(identifier).toLowerCase();
   try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const users = readUsers();
+    const res = await callGoogleAppsScript('users', {}, 'GET');
+    if (res && res.success && Array.isArray(res.users)) {
+      const match = res.users.find((u: any) => 
+        String(u.id).toLowerCase() === clean || 
+        String(u.idNo).toLowerCase() === clean
+      );
+      if (match) {
+        return { id: String(match.id), user: match };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to resolve user ID from Google Sheets:', e);
+  }
+  return null;
+}
+
+// Get all users exclusively from Google Sheets
+app.get('/api/users', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('users', {}, 'GET');
+    if (result && result.success && Array.isArray(result.users)) {
+      return res.json({ success: true, users: result.users });
+    }
+    return res.status(502).json({ 
+      success: false, 
+      error: result?.error || 'Failed to fetch users from Google Sheets' 
+    });
+  } catch (err: any) {
+    console.error('Error fetching users from Google Sheets:', err);
+    return res.status(503).json({ 
+      success: false, 
+      error: err?.message || 'Google Sheets backend connection error. Please try again.' 
+    });
+  }
+});
+
+// Create new user in Google Sheets
+app.post('/api/users', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
     const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
 
     const cleanId = normalizeUniversal(idNo);
@@ -447,46 +422,15 @@ app.post('/api/users', (req, res) => {
     const cleanPhone = normalizeUniversal(phone).replace(/[^0-9]/g, '');
 
     if (!cleanId) {
-      return res.status(400).json({ error: 'User ID No is required' });
+      return res.status(400).json({ success: false, error: 'User ID No is required' });
     }
-
     if (!cleanPass) {
-      return res.status(400).json({ error: 'Password is required' });
+      return res.status(400).json({ success: false, error: 'Password is required' });
     }
 
     const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
 
-    // Check duplicate (case-insensitive & dash-tolerant)
-    const cleanIdAlphaNum = cleanId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-    const existingIndex = users.findIndex((u: any) => {
-      if (!u || !u.idNo) return false;
-      const uId = normalizeUniversal(u.idNo).toLowerCase();
-      const uIdAlphaNum = uId.replace(/[^a-zA-Z0-9]/g, '');
-      return uId === cleanId.toLowerCase() || (cleanIdAlphaNum && uIdAlphaNum === cleanIdAlphaNum);
-    });
-    
-    if (existingIndex !== -1) {
-      // If user ID already exists, update their credentials, role & details seamlessly
-      users[existingIndex] = {
-        ...users[existingIndex],
-        idNo: cleanId,
-        password: cleanPass,
-        name: cleanName,
-        phone: cleanPhone || users[existingIndex].phone || '',
-        role: assignedRole,
-        status: status === 'hold' ? 'hold' : 'active',
-        designation: designation?.trim() || users[existingIndex].designation || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-        badgeNo: badgeNo ? normalizeUniversal(badgeNo) : users[existingIndex].badgeNo || cleanId,
-        securityQuestion: securityQuestion || users[existingIndex].securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-        securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : users[existingIndex].securityAnswer || 'Vidyut Bhavan',
-        updatedAt: new Date().toISOString()
-      };
-      writeUsers(users);
-      return res.status(200).json({ success: true, user: users[existingIndex], updated: true });
-    }
-
-    const newUser = {
-      id: `${assignedRole}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+    const userData = {
       idNo: cleanId,
       password: cleanPass,
       name: cleanName,
@@ -496,346 +440,245 @@ app.post('/api/users', (req, res) => {
       designation: designation?.trim() || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
       badgeNo: badgeNo ? normalizeUniversal(badgeNo) : cleanId,
       securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-      securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : 'Vidyut Bhavan',
-      createdAt: new Date().toISOString()
+      securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : 'Vidyut Bhavan'
     };
 
-    users.unshift(newUser);
-    writeUsers(users);
+    const result = await callGoogleAppsScript('createUser', { data: userData }, 'POST');
+    if (result && result.success) {
+      return res.status(201).json({ success: true, user: result.user || userData });
+    }
 
-    res.status(201).json({ success: true, user: newUser });
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to create user in Google Sheets' 
+    });
   } catch (error: any) {
-    console.error('Error creating user:', error);
-    res.status(500).json({ error: error.message || 'Failed to create user' });
+    console.error('Error creating user in Google Sheets:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Google Sheets backend connection error' 
+    });
   }
 });
 
-// Update user status (Active / Hold) or details
-app.patch('/api/users/:id/status', (req, res) => {
+// Update user details in Google Sheets
+app.patch('/api/users/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { id } = req.params;
+  const updates = req.body || {};
+
+  try {
+    const resolved = await resolveGoogleSheetUserId(id);
+    const targetId = resolved ? resolved.id : id;
+    const targetIdNo = resolved?.user?.idNo || id;
+
+    const result = await callGoogleAppsScript('updateUser', { id: targetId, idNo: targetIdNo, data: updates }, 'POST');
+
+    if (result && result.success) {
+      return res.json({ success: true, user: result.user });
+    }
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to update user in Google Sheets' 
+    });
+  } catch (error: any) {
+    console.error('Error updating user in Google Sheets:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Google Sheets backend error' 
+    });
+  }
+});
+
+// Update user status (active / hold) in Google Sheets
+app.patch('/api/users/:id/status', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const { status } = req.body;
+  const cleanId = normalizeUniversal(id).toLowerCase();
 
   if (status !== 'active' && status !== 'hold') {
-    return res.status(400).json({ error: 'Status must be either "active" or "hold"' });
+    return res.status(400).json({ success: false, error: 'Status must be either "active" or "hold"' });
   }
 
-  const users = readUsers();
-  const index = users.findIndex((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
-
-  if (index === -1) {
-    return res.status(404).json({ error: 'User not found' });
+  if ((cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') && status === 'hold') {
+    return res.status(403).json({ success: false, error: 'Primary Admin account cannot be placed on hold' });
   }
 
-  // Prevent holding super admin
-  if ((users[index].idNo === '8695716192' || users[index].idNo === 'admin') && status === 'hold') {
-    return res.status(403).json({ error: 'Primary Admin account cannot be placed on hold' });
-  }
-
-  users[index].status = status;
-  users[index].updatedAt = new Date().toISOString();
-  writeUsers(users);
-
-  res.json({ success: true, user: users[index], message: `User status changed to ${status}` });
-});
-
-// Update user / password / role / name
-app.patch('/api/users/:id', (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  const users = readUsers();
-  const index = users.findIndex((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
-
-  if (index === -1) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  const updates = req.body || {};
-  if (updates.password) {
-    updates.password = String(updates.password).trim();
-  }
-  if (updates.name) {
-    updates.name = String(updates.name).trim();
-  }
-  if (updates.phone !== undefined) {
-    updates.phone = String(updates.phone).trim();
-  }
-  if (updates.designation) {
-    updates.designation = String(updates.designation).trim();
-  }
-
-  users[index] = { ...users[index], ...updates, updatedAt: new Date().toISOString() };
-  writeUsers(users);
-  res.json({ success: true, user: users[index] });
-});
-
-// Delete user (Admin only)
-app.delete('/api/users/:id', (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  let users = readUsers();
-  const initialLength = users.length;
-  
-  // Protect super admin 8695716192
-  const target = users.find((u: any) => u && (u.id === id || (u.idNo && u.idNo.toString().toLowerCase() === id.toLowerCase())));
-  if (target && (target.idNo === '8695716192' || target.idNo === 'admin')) {
-    return res.status(403).json({ error: 'Primary admin account cannot be deleted' });
-  }
-
-  users = users.filter((u: any) => u && u.id !== id && (u.idNo && u.idNo.toString().toLowerCase() !== id.toLowerCase()));
-
-  if (users.length === initialLength) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  writeUsers(users);
-  res.json({ success: true, message: 'User deleted successfully' });
-});
-
-// Login verification endpoint with strict Active/Hold status validation & multi-device tolerance
-app.post('/api/auth/login', (req, res) => {
   try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const resolved = await resolveGoogleSheetUserId(id);
+    const targetId = resolved ? resolved.id : id;
+    const targetIdNo = resolved?.user?.idNo || id;
+
+    const result = await callGoogleAppsScript('updateUserStatus', { id: targetId, idNo: targetIdNo, status }, 'POST');
+
+    if (result && result.success) {
+      return res.json({ success: true, user: result.user, message: `Status updated to ${status}` });
+    }
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to update user status in Google Sheets' 
+    });
+  } catch (error: any) {
+    console.error('Error updating status in Google Sheets:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Google Sheets backend error' 
+    });
+  }
+});
+
+// Delete user permanently from Google Sheets
+app.delete('/api/users/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { id } = req.params;
+  const cleanId = normalizeUniversal(id).toLowerCase();
+
+  if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') {
+    return res.status(403).json({ success: false, error: 'Primary Admin account cannot be deleted' });
+  }
+
+  try {
+    const resolved = await resolveGoogleSheetUserId(id);
+    const targetId = resolved ? resolved.id : id;
+    const targetIdNo = resolved?.user?.idNo || id;
+
+    const result = await callGoogleAppsScript('deleteUser', { id: targetId, idNo: targetIdNo }, 'POST');
+
+    if (result && result.success) {
+      return res.json({ success: true, message: 'User deleted from Google Sheets successfully' });
+    }
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to delete user in Google Sheets' 
+    });
+  } catch (error: any) {
+    console.error('Error deleting user in Google Sheets:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Google Sheets backend error' 
+    });
+  }
+});
+
+// Authenticate login with Google Sheets backend
+app.post('/api/auth/login', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
     const { loginId, password } = req.body;
     if (!loginId || !password) {
-      return res.status(400).json({ error: 'Login ID and Password are required' });
+      return res.status(400).json({ success: false, error: 'Login ID and Password are required' });
     }
 
-    const cleanId = normalizeUniversal(loginId);
-    const cleanPass = normalizeUniversal(password);
-    const cleanIdLower = cleanId.toLowerCase();
-    const cleanIdAlphaNum = cleanIdLower.replace(/[^a-z0-9]/g, '');
-    const cleanIdDigits = cleanId.replace(/[^0-9]/g, '');
-    const users = readUsers();
+    const cleanId = normalizeUniversal(loginId).trim();
+    const cleanPass = normalizeUniversal(password).trim();
 
-    // 1. Direct Master Admin check (8695716192 / admin / controller / administration with 6293)
-    const isDirectAdmin = (
-      cleanId === '8695716192' || 
-      cleanIdAlphaNum === '8695716192' || 
-      cleanIdLower === 'admin' || 
-      cleanIdLower === 'adm' ||
-      cleanIdLower === 'controller' ||
-      cleanIdLower === 'administration'
-    );
-    if (isDirectAdmin && cleanPass === '6293') {
-      const isCtrl = cleanIdLower === 'controller';
-      const isAdminOffice = cleanIdLower === 'administration';
-      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
-      const name = isCtrl 
-        ? 'Admin Controller (WBSEDCL)' 
-        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
-
-      const session = {
-        id: `adm_${idNo}`,
-        idNo,
-        name,
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: isCtrl 
-          ? 'Sub-Divisional Controller (WBSEDCL)' 
-          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
-        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
-        loggedInAt: new Date().toISOString()
-      };
-      return res.json({ success: true, session });
+    const result = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST');
+    if (result && result.success && result.session) {
+      return res.json({ success: true, session: result.session });
     }
 
-    // 2. Direct Worker default check (worker / workar / lineman / wrk with 0000)
-    const isDirectWorker = (
-      cleanIdLower === 'worker' || 
-      cleanIdLower === 'workar' || 
-      cleanIdAlphaNum === 'worker' || 
-      cleanIdAlphaNum === 'workar' ||
-      cleanIdLower === 'lineman' ||
-      cleanIdLower === 'wrk'
-    );
-    if (isDirectWorker && cleanPass === '0000') {
-      const session = {
-        id: ROOT_WORKER_ACCOUNT.id,
-        idNo: ROOT_WORKER_ACCOUNT.idNo,
-        name: ROOT_WORKER_ACCOUNT.name,
-        phone: ROOT_WORKER_ACCOUNT.phone,
-        role: ROOT_WORKER_ACCOUNT.role,
-        status: 'active',
-        designation: ROOT_WORKER_ACCOUNT.designation,
-        badgeNo: ROOT_WORKER_ACCOUNT.badgeNo,
-        loggedInAt: new Date().toISOString()
-      };
-      return res.json({ success: true, session });
-    }
-
-    // 3. Search all users matching the entered ID
-    const matchingCandidates = users.filter((u: any) => {
-      if (!u) return false;
-      const rawUId = (u.idNo || '').toString();
-      const uId = normalizeUniversal(rawUId).toLowerCase();
-      const uIdAlphaNum = uId.replace(/[^a-z0-9]/g, '');
-      const uIdDigits = uId.replace(/[^0-9]/g, '');
-      const uPhone = normalizeUniversal(u.phone || '').replace(/[^0-9]/g, '');
-      const uName = (u.name || '').toString().trim().toLowerCase();
-
-      // Direct exact match
-      if (uId === cleanIdLower || (u.id && u.id.toLowerCase() === cleanIdLower)) return true;
-      // Alphanumeric match (e.g. LM-5239 vs lm5239 vs LM 5239)
-      if (cleanIdAlphaNum && uIdAlphaNum && cleanIdAlphaNum === uIdAlphaNum) return true;
-      // Numeric part match (e.g. user typed 5239 for LM-5239)
-      if (cleanIdDigits && uIdDigits && cleanIdDigits.length >= 3 && cleanIdDigits === uIdDigits) return true;
-      // Phone match (10 digits)
-      if (cleanIdDigits && cleanIdDigits.length >= 10 && uPhone && uPhone.includes(cleanIdDigits)) return true;
-      // Name match
-      if (uName && (uName === cleanIdLower || uName.includes(cleanIdLower))) return true;
-
-      return false;
-    });
-
-    // Check if user accidentally swapped loginId and password
-    if (matchingCandidates.length === 0) {
-      const swappedCandidate = users.find((u: any) => {
-        if (!u) return false;
-        const uId = normalizeUniversal(u.idNo || '').toLowerCase();
-        const uPass = normalizeUniversal(u.password || '');
-        return (uId === cleanPass.toLowerCase()) && (uPass === cleanId);
-      });
-
-      if (swappedCandidate) {
-        if (swappedCandidate.status === 'hold') {
-          return res.status(403).json({ 
-            error: `Account ID "${swappedCandidate.idNo}" is currently ON HOLD / SUSPENDED by Admin!` 
-          });
-        }
-        const session = {
-          id: swappedCandidate.id,
-          idNo: swappedCandidate.idNo,
-          name: swappedCandidate.name,
-          phone: swappedCandidate.phone,
-          role: swappedCandidate.role,
-          status: swappedCandidate.status || 'active',
-          designation: swappedCandidate.designation,
-          badgeNo: swappedCandidate.badgeNo || swappedCandidate.idNo,
-          loggedInAt: new Date().toISOString()
-        };
-        return res.json({ success: true, session });
-      }
-
-      return res.status(401).json({ 
-        error: `User ID "${cleanId}" খুঁজে পাওয়া যায়নি! অনুগ্রহ করে সঠিক User ID দিন অথবা এডমিন প্যানেল থেকে আইডি তৈরি করুন।` 
-      });
-    }
-
-    // Check password among matched candidates (with full universal normalization)
-    const authenticatedUser = matchingCandidates.find((u: any) => {
-      const uPass = normalizeUniversal(u.password || '');
-      const isMasterAdmin = (u.idNo === '8695716192' || u.idNo === 'admin') && cleanPass === '6293';
-      const isMasterWorker = (u.idNo === 'worker' || u.idNo === 'workar') && cleanPass === '0000';
-      return uPass === cleanPass || isMasterAdmin || isMasterWorker;
-    });
-
-    if (!authenticatedUser) {
-      return res.status(401).json({ 
-        error: `ভুল পাসওয়ার্ড (Incorrect Password)! User ID "${matchingCandidates[0].idNo}" এর জন্য সঠিক পাসওয়ার্ড দিন।` 
-      });
-    }
-
-    // Check hold status
-    if (authenticatedUser.status === 'hold') {
-      return res.status(403).json({ 
-        error: `Account ID "${authenticatedUser.idNo}" is currently ON HOLD / SUSPENDED by Admin! Only active IDs are allowed to log in. Contact Admin (8695716192).` 
-      });
-    }
-
-    const session = {
-      id: authenticatedUser.id,
-      idNo: authenticatedUser.idNo,
-      name: authenticatedUser.name,
-      phone: authenticatedUser.phone,
-      role: authenticatedUser.role,
-      status: authenticatedUser.status || 'active',
-      designation: authenticatedUser.designation,
-      badgeNo: authenticatedUser.badgeNo || authenticatedUser.idNo,
-      loggedInAt: new Date().toISOString()
-    };
-
-    res.json({ success: true, session });
+    const errorMsg = result?.error || 'Invalid User ID or Password';
+    return res.status(401).json({ success: false, error: errorMsg });
   } catch (error: any) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: error.message || 'Login authentication failed' });
+    console.error('Login backend error:', error);
+    return res.status(503).json({ 
+      success: false, 
+      error: error?.message || 'Backend connection failed. Please try again.' 
+    });
   }
 });
 
-// Change password endpoint
-app.post('/api/auth/change-password', (req, res) => {
+// Change password in Google Sheets
+app.post('/api/auth/change-password', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { idNo, currentPassword, newPassword } = req.body;
-  if (!idNo || !newPassword) {
-    return res.status(400).json({ error: 'User ID and New Password are required' });
+  try {
+    const { idNo, currentPassword, newPassword } = req.body;
+    if (!idNo || !newPassword) {
+      return res.status(400).json({ success: false, error: 'User ID and New Password are required' });
+    }
+
+    const cleanId = normalizeUniversal(idNo);
+    const cleanCurrent = normalizeUniversal(currentPassword);
+    const cleanNew = normalizeUniversal(newPassword);
+
+    const result = await callGoogleAppsScript('changePassword', {
+      idNo: cleanId,
+      currentPassword: cleanCurrent,
+      newPassword: cleanNew
+    }, 'POST');
+
+    if (result && result.success) {
+      return res.json({ success: true, message: 'Password changed successfully' });
+    }
+
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to change password in Google Sheets' 
+    });
+  } catch (error: any) {
+    console.error('Change password error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Backend connection error' 
+    });
   }
-
-  const cleanId = String(idNo).trim();
-  const cleanNewPass = String(newPassword).trim();
-  const users = readUsers();
-
-  const index = users.findIndex((u: any) => u && (u.id === cleanId || (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase())));
-
-  if (index === -1) {
-    return res.status(404).json({ error: `User ID "${cleanId}" not found` });
-  }
-
-  if (currentPassword && users[index].password && users[index].password !== String(currentPassword).trim()) {
-    return res.status(401).json({ error: 'বর্তমান পাসওয়ার্ড সঠিক নয় (Incorrect current password)' });
-  }
-
-  users[index].password = cleanNewPass;
-  users[index].updatedAt = new Date().toISOString();
-  writeUsers(users);
-
-  res.json({ success: true, message: 'Password changed successfully', user: users[index] });
 });
 
-// Reset password endpoint
-app.post('/api/auth/reset-password', (req, res) => {
+// Reset password in Google Sheets
+app.post('/api/auth/reset-password', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { idNo, phone, newPassword } = req.body;
-  if (!idNo || !newPassword) {
-    return res.status(400).json({ error: 'User ID and New Password are required' });
+  try {
+    const { idNo, phone, newPassword } = req.body;
+    if (!idNo || !newPassword) {
+      return res.status(400).json({ success: false, error: 'User ID and New Password are required' });
+    }
+
+    const cleanId = normalizeUniversal(idNo);
+    const cleanPhone = normalizeUniversal(phone).replace(/[^0-9]/g, '');
+    const cleanNew = normalizeUniversal(newPassword);
+
+    const result = await callGoogleAppsScript('resetPassword', {
+      idNo: cleanId,
+      phone: cleanPhone,
+      newPassword: cleanNew
+    }, 'POST');
+
+    if (result && result.success) {
+      return res.json({ success: true, message: 'Password reset successfully' });
+    }
+
+    return res.status(400).json({ 
+      success: false, 
+      error: result?.error || 'Failed to reset password in Google Sheets' 
+    });
+  } catch (error: any) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Backend connection error' 
+    });
   }
-
-  const cleanId = String(idNo).trim();
-  const cleanNewPass = String(newPassword).trim();
-  const users = readUsers();
-
-  const index = users.findIndex((u: any) => u && (
-    u.id === cleanId || 
-    (u.idNo && u.idNo.toString().toLowerCase() === cleanId.toLowerCase()) ||
-    (phone && u.phone && u.phone.replace(/[^0-9]/g, '') === String(phone).replace(/[^0-9]/g, ''))
-  ));
-
-  if (index === -1) {
-    return res.status(404).json({ error: `User ID "${cleanId}" not found` });
-  }
-
-  users[index].password = cleanNewPass;
-  users[index].updatedAt = new Date().toISOString();
-  writeUsers(users);
-
-  res.json({ success: true, message: 'Password reset successfully', user: users[index] });
 });
 
-// Verify active session endpoint
-app.get('/api/auth/verify/:idNo', (req, res) => {
+// Verify active session with Google Sheets
+app.get('/api/auth/verify/:idNo', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { idNo } = req.params;
-  const users = readUsers();
-  const user = users.find((u: any) => u.idNo.toLowerCase() === idNo.toLowerCase() || u.id === idNo);
-  
-  if (!user) {
-    return res.status(404).json({ valid: false, error: 'User account has been deleted' });
-  }
+  const cleanId = normalizeUniversal(idNo).trim();
 
-  if (user.status === 'hold') {
-    return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
+  try {
+    const resolved = await resolveGoogleSheetUserId(cleanId);
+    if (resolved && resolved.user) {
+      if (resolved.user.status === 'hold') {
+        return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
+      }
+      return res.json({ valid: true, status: resolved.user.status || 'active', role: resolved.user.role });
+    }
+    return res.status(404).json({ valid: false, error: 'User not found in Google Sheets' });
+  } catch (error: any) {
+    return res.status(503).json({ valid: false, error: error?.message || 'Backend connection error' });
   }
-
-  res.json({ valid: true, status: user.status || 'active', role: user.role });
 });
 
 // Live Chat Support Endpoints between Workers & Admin
@@ -1010,79 +853,6 @@ const handleDeleteWorkOrder = (req: express.Request, res: express.Response) => {
 
 app.delete('/api/work-orders/:id', handleDeleteWorkOrder);
 app.post('/api/work-orders/:id/delete', handleDeleteWorkOrder);
-
-// Change Password Endpoint (For logged-in users / admin)
-app.post('/api/auth/change-password', (req, res) => {
-  try {
-    const { idNo, currentPassword, newPassword } = req.body;
-    if (!idNo || !newPassword) {
-      return res.status(400).json({ error: 'User ID and new password are required' });
-    }
-
-    const users = readUsers();
-    const cleanId = idNo.trim();
-    const cleanCurrent = (currentPassword || '').trim();
-    const cleanNew = newPassword.trim();
-
-    if (cleanNew.length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters/digits' });
-    }
-
-    const index = users.findIndex((u: any) => u.idNo.toLowerCase() === cleanId.toLowerCase() || u.id === cleanId);
-    if (index === -1) {
-      return res.status(404).json({ error: 'User account not found or has been removed' });
-    }
-
-    // Verify current password if provided
-    const user = users[index];
-    if (cleanCurrent && user.password !== cleanCurrent && cleanCurrent !== '6293') {
-      return res.status(400).json({ error: 'Current password is incorrect!' });
-    }
-
-    users[index].password = cleanNew;
-    users[index].updatedAt = new Date().toISOString();
-    writeUsers(users);
-
-    res.json({ success: true, message: 'Password updated successfully!', user: users[index] });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to change password' });
-  }
-});
-
-// Forgot / Reset Password Endpoint
-app.post('/api/auth/reset-password', (req, res) => {
-  try {
-    const { idNo, phone, securityAnswer, newPassword } = req.body;
-    if (!idNo || !newPassword) {
-      return res.status(400).json({ error: 'ID number and new password are required' });
-    }
-
-    const users = readUsers();
-    const cleanId = idNo.trim();
-    const cleanNew = newPassword.trim();
-
-    if (cleanNew.length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters/digits' });
-    }
-
-    const index = users.findIndex((u: any) => 
-      u.idNo.toLowerCase() === cleanId.toLowerCase() || 
-      (phone && u.phone && u.phone.replace(/[^0-9]/g, '') === cleanId.replace(/[^0-9]/g, ''))
-    );
-
-    if (index === -1) {
-      return res.status(404).json({ error: 'User ID not found or account was deactivated by Admin!' });
-    }
-
-    users[index].password = cleanNew;
-    users[index].updatedAt = new Date().toISOString();
-    writeUsers(users);
-
-    res.json({ success: true, message: 'Password reset successfully!' });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to reset password' });
-  }
-});
 
 // Stats endpoint for admin dashboard
 app.get('/api/stats', (req, res) => {

@@ -25,7 +25,7 @@ import {
   Globe
 } from 'lucide-react';
 import { UserSession, UserAccount } from '../types';
-import { fetchUsers, createUserAccount, loginUser, resetUserPassword, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { fetchUsers, createUserAccount, loginUser, resetUserPassword } from '../services/api';
 import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
 import { Language, translations } from '../utils/translations';
 
@@ -60,8 +60,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // Screen mode: 'login' | 'register' | 'forgot'
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
 
-  // Accounts list loaded from server / localStorage
-  const [accounts, setAccounts] = useState<UserAccount[]>(DEFAULT_WBSEDCL_ACCOUNTS);
+  // Accounts list loaded exclusively from Google Sheets backend
+  const [accounts, setAccounts] = useState<UserAccount[]>([]);
 
   // Load latest users from backend on mount
   useEffect(() => {
@@ -132,64 +132,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // 1. Direct Admin / Controller / Administration authentication
-    const isAdminDirect = (
-      cleanId === '8695716192' || 
-      cleanIdLower === 'admin' || 
-      cleanIdLower === 'adm' || 
-      cleanIdLower === 'controller' || 
-      cleanIdLower === 'administration'
-    ) && cleanPass === '6293';
-
-    if (isAdminDirect) {
-      const isCtrl = cleanIdLower === 'controller';
-      const isAdminOffice = cleanIdLower === 'administration';
-      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
-      const name = isCtrl 
-        ? 'Admin Controller (WBSEDCL)' 
-        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
-
-      const adminSession: UserSession = {
-        id: `adm_${idNo}`,
-        idNo,
-        name,
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: isCtrl 
-          ? 'Sub-Divisional Controller (WBSEDCL)' 
-          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
-        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
-        loggedInAt: new Date().toISOString()
-      };
-      handleSuccess(adminSession);
-      return;
-    }
-
-    // 2. Direct Field Worker default authentication for instant zero-lag login
-    const isWorkerDirect = (
-      cleanIdLower === 'worker' || 
-      cleanIdLower === 'workar' || 
-      cleanIdLower === 'lineman' || 
-      cleanIdLower === 'wrk'
-    ) && cleanPass === '0000';
-
-    if (isWorkerDirect) {
-      const workerSession: UserSession = {
-        id: 'worker_default_0000',
-        idNo: 'worker',
-        name: 'Field Worker (WBSEDCL)',
-        phone: '',
-        role: 'worker',
-        status: 'active',
-        designation: 'লাইনম্যান / Worker (WBSEDCL)',
-        badgeNo: 'WRK-0000',
-        loggedInAt: new Date().toISOString()
-      };
-      handleSuccess(workerSession);
-      return;
-    }
-
     setLoading(true);
 
     try {
@@ -209,65 +151,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanPass = normalizePassword(accPass);
     setLoginId(cleanId);
     setLoginPassword(cleanPass);
-
-    const cleanIdLower = cleanId.toLowerCase();
-
-    // Instant hardcoded bypass for admin, controller, administration & worker
-    const isAdminDirect = (
-      cleanId === '8695716192' || 
-      cleanIdLower === 'admin' || 
-      cleanIdLower === 'adm' || 
-      cleanIdLower === 'controller' || 
-      cleanIdLower === 'administration'
-    ) && cleanPass === '6293';
-
-    if (isAdminDirect) {
-      const isCtrl = cleanIdLower === 'controller';
-      const isAdminOffice = cleanIdLower === 'administration';
-      const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
-      const name = isCtrl 
-        ? 'Admin Controller (WBSEDCL)' 
-        : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
-
-      const adminSession: UserSession = {
-        id: `adm_${idNo}`,
-        idNo,
-        name,
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: isCtrl 
-          ? 'Sub-Divisional Controller (WBSEDCL)' 
-          : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
-        badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
-        loggedInAt: new Date().toISOString()
-      };
-      handleSuccess(adminSession);
-      return;
-    }
-
-    const isWorkerDirect = (
-      cleanIdLower === 'worker' || 
-      cleanIdLower === 'workar' || 
-      cleanIdLower === 'lineman' || 
-      cleanIdLower === 'wrk'
-    ) && cleanPass === '0000';
-
-    if (isWorkerDirect) {
-      const workerSession: UserSession = {
-        id: 'worker_default_0000',
-        idNo: 'worker',
-        name: 'Field Worker (WBSEDCL)',
-        phone: '',
-        role: 'worker',
-        status: 'active',
-        designation: 'লাইনম্যান / Worker (WBSEDCL)',
-        badgeNo: 'WRK-0000',
-        loggedInAt: new Date().toISOString()
-      };
-      handleSuccess(workerSession);
-      return;
-    }
 
     setLoading(true);
     try {
@@ -343,7 +226,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   // Forgot Password Step 1: Verify ID
-  const handleForgotVerify = (e: React.FormEvent) => {
+  const handleForgotVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     const cleanForgotId = normalizeUniversalText(forgotId);
@@ -353,20 +236,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // Direct check in local accounts with flexible matching
-    let found = accounts.find((a) => a && isUserMatch(cleanForgotId, a));
+    setLoading(true);
+    try {
+      const latestUsers = await fetchUsers();
+      setAccounts(latestUsers);
+      const found = latestUsers.find((a) => a && isUserMatch(cleanForgotId, a));
 
-    if (!found && (cleanForgotId.toLowerCase() === '8695716192' || cleanForgotId.toLowerCase() === 'admin')) {
-      found = DEFAULT_WBSEDCL_ACCOUNTS[1] || DEFAULT_WBSEDCL_ACCOUNTS[0];
+      if (!found) {
+        setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন।');
+        return;
+      }
+
+      setTargetAccount(found);
+      setForgotStep(2);
+    } catch (err: any) {
+      setError(err.message || 'ইউজার যাচাই করতে সমস্যা হয়েছে');
+    } finally {
+      setLoading(false);
     }
-
-    if (!found) {
-      setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন।');
-      return;
-    }
-
-    setTargetAccount(found);
-    setForgotStep(2);
   };
 
   // Forgot Password Step 2: Set New Password
@@ -394,15 +281,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     try {
       await resetUserPassword(targetAccount.idNo, cleanNewPass, targetAccount.phone);
 
-      // Create or update local account state
-      const updatedAccounts = accounts.map((acc) => {
-        if (acc.id === targetAccount.id || isUserMatch(targetAccount.idNo, acc)) {
-          return { ...acc, password: cleanNewPass };
-        }
-        return acc;
-      });
-
-      setAccounts(updatedAccounts);
       setSuccessMsg(`পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে! নতুন পাসওয়ার্ড "${cleanNewPass}" দিয়ে লগইন করুন।`);
       setLoginId(targetAccount.idNo);
       setLoginPassword(cleanNewPass);
@@ -411,8 +289,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setNewPassword('');
       setNewConfirmPassword('');
       setMode('login');
+
+      // Refresh accounts list
+      fetchUsers().then(setAccounts).catch(() => {});
     } catch (err: any) {
-      setError('পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে');
+      setError(err.message || 'পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে');
     } finally {
       setLoading(false);
     }

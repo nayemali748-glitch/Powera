@@ -30,7 +30,7 @@ import {
   Save
 } from 'lucide-react';
 import { UserAccount } from '../types';
-import { fetchUsers, createUserAccount, deleteUserAccount, updateUserStatus, updateUserAccount, DEFAULT_WBSEDCL_ACCOUNTS } from '../services/api';
+import { fetchUsers, createUserAccount, deleteUserAccount, updateUserStatus, updateUserAccount } from '../services/api';
 import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
 import { Language, translations } from '../utils/translations';
 
@@ -48,8 +48,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   initialTab = 'create'
 }) => {
   const t = translations[lang] || translations.bn;
-  // Load users from backend / localStorage
-  const [users, setUsers] = useState<UserAccount[]>(DEFAULT_WBSEDCL_ACCOUNTS);
+  // Load users exclusively from Google Sheets backend
+  const [users, setUsers] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'create' | 'list' | 'change-password'>(initialTab);
   const [search, setSearch] = useState('');
@@ -100,11 +100,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setLoading(true);
     try {
       const data = await fetchUsers();
-      if (data && data.length > 0) {
-        setUsers(data);
-      }
-    } catch (e) {
+      setUsers(Array.isArray(data) ? data : []);
+    } catch (e: any) {
       console.warn('Failed to fetch users:', e);
+      setError(e.message || 'Google Sheets থেকে ইউজার তালিকা আনতে সমস্যা হয়েছে');
     } finally {
       setLoading(false);
     }

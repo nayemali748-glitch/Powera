@@ -3,71 +3,15 @@ import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils
 
 const API_BASE = '/api';
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
-const USERS_STORAGE_KEY = 'power_registered_users';
 const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
 const CHAT_LOCAL_KEY = 'power_chat_history';
 
-export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [
-  {
-    id: 'worker_default_0000',
-    idNo: 'worker',
-    password: '0000',
-    name: 'Field Worker (WBSEDCL)',
-    phone: '',
-    role: 'worker',
-    status: 'active',
-    designation: 'লাইনম্যান / Worker (WBSEDCL)',
-    badgeNo: 'WRK-0000',
-    securityQuestion: 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_8695716192',
-    idNo: '8695716192',
-    password: '6293',
-    name: 'Engr. N. Ali (Admin Controller)',
-    phone: '8695716192',
-    role: 'admin',
-    status: 'active',
-    designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-    badgeNo: 'ADM-8695',
-    securityQuestion: 'Your Primary Power Substation?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_controller',
-    idNo: 'controller',
-    password: '6293',
-    name: 'Admin Controller (WBSEDCL)',
-    phone: '8695716192',
-    role: 'admin',
-    status: 'active',
-    designation: 'Sub-Divisional Controller (WBSEDCL)',
-    badgeNo: 'CTRL-6293',
-    securityQuestion: 'Your Primary Power Substation?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'adm_administration',
-    idNo: 'administration',
-    password: '6293',
-    name: 'Administration Office (WBSEDCL)',
-    phone: '8695716192',
-    role: 'admin',
-    status: 'active',
-    designation: 'Divisional Administration (WBSEDCL)',
-    badgeNo: 'ADMIN-6293',
-    securityQuestion: 'Your Primary Power Substation?',
-    securityAnswer: 'Vidyut Bhavan',
-    createdAt: new Date().toISOString()
-  }
-];
+// Empty default accounts - Google Sheets is the ONLY source of truth
+export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [];
 
-// Clean legacy bloated localStorage on module initialization to immediately resolve lag/hang
+// Clean legacy user storage and bloated cache on initialization
 try {
+  localStorage.removeItem('power_registered_users');
   const oldEntries = localStorage.getItem(LOCAL_STORAGE_KEY);
   if (oldEntries && oldEntries.length > 50000) {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
@@ -297,22 +241,26 @@ export async function fetchStats(): Promise<StatsResponse> {
   };
 }
 
-// User accounts management APIs
+// User accounts management APIs (GOOGLE SHEETS IS THE SINGLE SOURCE OF TRUTH)
 export async function fetchUsers(): Promise<UserAccount[]> {
-  try {
-    const res = await fetch(`${API_BASE}/users?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-    });
-    if (res.ok) {
-      const users: UserAccount[] = await res.json();
-      writeCache(USERS_STORAGE_KEY, users);
-      return users;
-    }
-  } catch (err) {
-    console.warn('Fetch users failed, using cache:', err);
+  const res = await fetch(`${API_BASE}/users?_t=${Date.now()}`, {
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+  });
+
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.error || `Failed to fetch users: HTTP ${res.status}`);
   }
-  return readCache(USERS_STORAGE_KEY, DEFAULT_WBSEDCL_ACCOUNTS);
+
+  const data = await res.json();
+  if (data && data.success && Array.isArray(data.users)) {
+    return data.users;
+  }
+  if (Array.isArray(data)) {
+    return data;
+  }
+  throw new Error(data?.error || 'Invalid response from Google Sheets user backend');
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
@@ -321,264 +269,157 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   const cleanName = (userData.name ? String(userData.name).trim() : cleanId) || 'কর্মী';
   const cleanPhone = normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '');
 
-  let createdOrUpdatedUser: UserAccount | null = null;
-
-  try {
-    const res = await fetch(`${API_BASE}/users`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify({
-        ...userData,
-        idNo: cleanId,
-        password: cleanPass,
-        name: cleanName,
-        phone: cleanPhone
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      createdOrUpdatedUser = data.user;
-    }
-  } catch (err: any) {
-    console.warn('Backend create user error, using local fallback:', err);
-  }
-
-  if (!createdOrUpdatedUser) {
-    createdOrUpdatedUser = {
-      id: `${userData.role || 'user'}_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
-      idNo: cleanId || `LM-${Math.floor(1000 + Math.random() * 9000)}`,
-      password: cleanPass || '1234',
+  const res = await fetch(`${API_BASE}/users`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify({
+      ...userData,
+      idNo: cleanId,
+      password: cleanPass,
       name: cleanName,
-      phone: cleanPhone || '',
-      role: userData.role || 'worker',
-      designation: userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-      badgeNo: userData.badgeNo ? normalizeUniversalText(userData.badgeNo) : cleanId,
-      status: userData.status || 'active',
-      securityQuestion: userData.securityQuestion || 'আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?',
-      securityAnswer: userData.securityAnswer ? normalizeUniversalText(userData.securityAnswer) : 'Vidyut Bhavan',
-      createdAt: new Date().toISOString()
-    };
+      phone: cleanPhone
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success && data.user) {
+    return data.user;
   }
 
-  const list = readCache<UserAccount[]>(USERS_STORAGE_KEY, [...DEFAULT_WBSEDCL_ACCOUNTS]);
-  const existingIndex = list.findIndex(u => u && (u.id === createdOrUpdatedUser!.id || isUserMatch(cleanId, u)));
-  if (existingIndex !== -1) {
-    list[existingIndex] = { ...list[existingIndex], ...createdOrUpdatedUser };
-  } else {
-    list.unshift(createdOrUpdatedUser);
-  }
-  writeCache(USERS_STORAGE_KEY, list);
-
-  return createdOrUpdatedUser;
+  throw new Error(data.error || 'Failed to create user in Google Sheets');
 }
 
 export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
-  try {
-    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const all = await fetchUsers();
-      writeCache(USERS_STORAGE_KEY, all);
-      return data.user;
-    }
-  } catch {}
+  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify(updates),
+  });
 
-  const list = readCache<UserAccount[]>(USERS_STORAGE_KEY, []);
-  const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-  if (idx !== -1) {
-    list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
-    writeCache(USERS_STORAGE_KEY, list);
-    return list[idx];
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success && data.user) {
+    return data.user;
   }
-  throw new Error('User not found');
+
+  throw new Error(data.error || 'Failed to update user in Google Sheets');
 }
 
 export async function deleteUserAccount(id: string): Promise<boolean> {
-  try {
-    await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  } catch {}
-  const list = readCache<UserAccount[]>(USERS_STORAGE_KEY, []);
-  writeCache(USERS_STORAGE_KEY, list.filter(u => u && u.id !== id && u.idNo !== id));
-  return true;
+  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, { 
+    method: 'DELETE',
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success) {
+    return true;
+  }
+
+  throw new Error(data.error || 'Failed to delete user in Google Sheets');
 }
 
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
-  try {
-    const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const list = readCache<UserAccount[]>(USERS_STORAGE_KEY, []);
-      const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-      if (idx !== -1) {
-        list[idx].status = status;
-        writeCache(USERS_STORAGE_KEY, list);
-      }
-      return data.user;
-    }
-  } catch {}
+  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}/status`, {
+    method: 'PATCH',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify({ status }),
+  });
 
-  const list = readCache<UserAccount[]>(USERS_STORAGE_KEY, []);
-  const idx = list.findIndex(u => u && (u.id === id || u.idNo === id));
-  if (idx !== -1) {
-    list[idx].status = status;
-    writeCache(USERS_STORAGE_KEY, list);
-    return list[idx];
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success && data.user) {
+    return data.user;
   }
-  throw new Error('User not found');
+
+  throw new Error(data.error || 'Failed to update user status in Google Sheets');
 }
 
 export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
   try {
-    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}`);
-    if (res.ok) return await res.json();
-  } catch {}
-  return { valid: true, status: 'active' };
+    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}?_t=${Date.now()}`, {
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.valid) {
+      return data;
+    }
+    return { valid: false, error: data?.error || 'Session verification failed' };
+  } catch (err: any) {
+    return { valid: false, error: err?.message || 'Session verification connection failed' };
+  }
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
   const cleanId = normalizeUniversalText(loginId);
   const cleanPass = normalizePassword(password);
-  const cleanIdLower = cleanId.toLowerCase();
 
-  // Instant zero-lag bypass for Master Admin, Controller, and Administration
-  const isAdminLoginId = cleanId === '8695716192' || 
-    cleanId.replace(/[^0-9]/g, '') === '8695716192' || 
-    cleanIdLower === 'admin' || 
-    cleanIdLower === 'adm' || 
-    cleanIdLower === 'controller' || 
-    cleanIdLower === 'administration';
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
+  });
 
-  if (isAdminLoginId && cleanPass === '6293') {
-    const isCtrl = cleanIdLower === 'controller';
-    const isAdminOffice = cleanIdLower === 'administration';
-    const idNo = isCtrl ? 'controller' : (isAdminOffice ? 'administration' : '8695716192');
-    const name = isCtrl 
-      ? 'Admin Controller (WBSEDCL)' 
-      : (isAdminOffice ? 'Administration Office (WBSEDCL)' : 'Engr. N. Ali (Admin Controller)');
-
-    return {
-      id: `adm_${idNo}`,
-      idNo,
-      name,
-      phone: '8695716192',
-      role: 'admin',
-      status: 'active',
-      designation: isCtrl 
-        ? 'Sub-Divisional Controller (WBSEDCL)' 
-        : (isAdminOffice ? 'Divisional Administration (WBSEDCL)' : 'Assistant Engineer / Divisional Admin (WBSEDCL)'),
-      badgeNo: isCtrl ? 'CTRL-6293' : (isAdminOffice ? 'ADMIN-6293' : 'ADM-8695'),
-      loggedInAt: new Date().toISOString()
-    };
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success && data.session) {
+    return data.session;
   }
 
-  // Instant zero-lag bypass for Default Worker (supports 'worker', 'workar', 'lineman', 'wrk')
-  if ((cleanIdLower === 'worker' || cleanIdLower === 'workar' || cleanIdLower === 'lineman' || cleanIdLower === 'wrk') && cleanPass === '0000') {
-    return {
-      id: 'worker_default_0000',
-      idNo: 'worker',
-      name: 'Field Worker (WBSEDCL)',
-      phone: '',
-      role: 'worker',
-      status: 'active',
-      designation: 'লাইনম্যান / Worker (WBSEDCL)',
-      badgeNo: 'WRK-0000',
-      loggedInAt: new Date().toISOString()
-    };
-  }
-
-  // Check cached registered users first for instantaneous response (<5ms)
-  const cachedUsers = readCache<UserAccount[]>(USERS_STORAGE_KEY, DEFAULT_WBSEDCL_ACCOUNTS);
-  const found = cachedUsers.find(u => u && isUserMatch(cleanId, u));
-  if (found) {
-    if (found.status === 'hold') {
-      throw new Error(`Account ID "${found.idNo}" is currently ON HOLD by Admin!`);
-    }
-    if (normalizePassword(found.password) === cleanPass) {
-      const session: UserSession = {
-        id: found.id,
-        idNo: found.idNo,
-        name: found.name,
-        phone: found.phone,
-        role: found.role,
-        status: found.status || 'active',
-        designation: found.designation,
-        badgeNo: found.badgeNo || found.idNo,
-        loggedInAt: new Date().toISOString()
-      };
-      // Asynchronously ping server
-      fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
-      }).catch(() => {});
-      return session;
-    }
-  }
-
-  // Try server authentication
-  try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data.session;
-    }
-    const errJson = await res.json().catch(() => ({}));
-    throw new Error(errJson.error || 'ভুল আইডি বা পাসওয়ার্ড!');
-  } catch (err: any) {
-    throw new Error(err.message || 'ভুল আইডি বা পাসওয়ার্ড!');
-  }
+  throw new Error(data.error || 'ভুল আইডি বা পাসওয়ার্ড!');
 }
 
 export async function changeUserPassword(idNo: string, currentPassword: string, newPassword: string): Promise<boolean> {
-  try {
-    await fetch(`${API_BASE}/auth/change-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idNo, currentPassword, newPassword }),
-    });
-  } catch {}
+  const res = await fetch(`${API_BASE}/auth/change-password`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify({ 
+      idNo: normalizeUniversalText(idNo), 
+      currentPassword: normalizePassword(currentPassword), 
+      newPassword: normalizePassword(newPassword) 
+    }),
+  });
 
-  const users = readCache<UserAccount[]>(USERS_STORAGE_KEY, [...DEFAULT_WBSEDCL_ACCOUNTS]);
-  const index = users.findIndex(u => u.idNo.toLowerCase() === idNo.toLowerCase() || u.id === idNo);
-  if (index !== -1) {
-    users[index].password = newPassword;
-    writeCache(USERS_STORAGE_KEY, users);
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success) {
+    return true;
   }
-  return true;
+
+  throw new Error(data.error || 'Failed to change password in Google Sheets');
 }
 
 export async function resetUserPassword(idNo: string, newPassword: string, phone?: string): Promise<boolean> {
-  try {
-    await fetch(`${API_BASE}/auth/reset-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idNo, phone, newPassword }),
-    });
-  } catch {}
+  const res = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    body: JSON.stringify({ 
+      idNo: normalizeUniversalText(idNo), 
+      phone: phone ? normalizeUniversalText(phone).replace(/[^0-9]/g, '') : undefined, 
+      newPassword: normalizePassword(newPassword) 
+    }),
+  });
 
-  const users = readCache<UserAccount[]>(USERS_STORAGE_KEY, [...DEFAULT_WBSEDCL_ACCOUNTS]);
-  const index = users.findIndex(u => u.idNo.toLowerCase() === idNo.toLowerCase() || (phone && u.phone.replace(/[^0-9]/g, '') === phone.replace(/[^0-9]/g, '')));
-  if (index !== -1) {
-    users[index].password = newPassword;
-    writeCache(USERS_STORAGE_KEY, users);
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.success) {
+    return true;
   }
-  return true;
+
+  throw new Error(data.error || 'Failed to reset password in Google Sheets');
 }
 
 export async function fetchChatMessages(workerId?: string): Promise<ChatMessage[]> {
