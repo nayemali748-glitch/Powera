@@ -31,7 +31,7 @@ async function post(action: string, data: any = {}) {
   let res: Response;
   try { res = await fetch(API_BASE, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    headers: { 'Content-Type': 'application/json;charset=utf-8' },
     body: JSON.stringify({ action, ...data }),
     signal: controller.signal
   }); } catch (e: any) { throw new Error(e?.name === 'AbortError' ? 'Backend request timed out' : (e?.message || 'Backend connection failed')); } finally { clearTimeout(timer); }
@@ -112,7 +112,7 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   const user = r.user as UserAccount; const users = await fetchUsers().catch(()=>[]); cache(USERS_STORAGE_KEY, [user, ...users.filter(u=>u.id!==user.id && u.idNo!==user.idNo)]); return user;
 }
 export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> { const r = await post('updateUser', { id, data: updates }); await fetchUsers(); return r.user; }
-export async function deleteUserAccount(id: string): Promise<boolean> { await post('deleteUser', { id }); cache(USERS_STORAGE_KEY, readCache<UserAccount[]>(USERS_STORAGE_KEY, []).filter(u=>u.id!==id && u.idNo!==id)); return true; }
+export async function deleteUserAccount(id: string, idNo?: string): Promise<boolean> { await post('deleteUser', { id, idNo }); const fresh = await fetchUsers(); cache(USERS_STORAGE_KEY, fresh); return true; }
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> { const r = await post('updateUserStatus', { id, status }); await fetchUsers(); return r.user; }
 
 export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {

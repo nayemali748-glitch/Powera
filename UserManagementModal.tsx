@@ -100,9 +100,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setLoading(true);
     try {
       const data = await fetchUsers();
-      if (data && data.length > 0) {
-        setUsers(data);
-      }
+      setUsers(Array.isArray(data) ? data : []);
     } catch (e) {
       console.warn('Failed to fetch users:', e);
     } finally {
@@ -164,6 +162,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         const filtered = prev.filter(u => u && normalizeUniversalText(u.idNo)?.toLowerCase() !== cleanId.toLowerCase() && u.id !== savedUser.id);
         return [savedUser, ...filtered];
       });
+      await loadUsersList();
 
       setCreatedUserCard({
         idNo: cleanId,
@@ -305,8 +304,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     if (window.confirm(`আপনি কি নিশ্চিত যে "${userAcc.name}" (ID: ${userAcc.idNo}) এর একাউন্ট ডিলিট করতে চান? এই আইডি ও পাসওয়ার্ড দিয়ে আর কখনো লগইন করা যাবে না।`)) {
       setLoading(true);
       try {
-        await deleteUserAccount(userAcc.id || userAcc.idNo);
-        setUsers(prev => prev.filter(u => u.id !== userAcc.id && u.idNo !== userAcc.idNo));
+        await deleteUserAccount(userAcc.id || userAcc.idNo, userAcc.idNo);
+        await loadUsersList();
         
         // Invalidate active session if matching deleted user
         const currentSession = localStorage.getItem('power_user_session');
