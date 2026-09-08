@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { WorkOrderNotice, CategoryType } from '../types';
 import { Language, translations } from '../utils/translations';
+import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 
 interface AdminNoticesBannerProps {
   workOrders: WorkOrderNotice[];
@@ -135,10 +136,16 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
                           title="Click to view full photo"
                         >
                           <img
-                            src={notice.photoUrl}
+                            src={resolveWorkOrderImageUrl(notice)}
                             alt="Work Order"
                             className="w-full h-full object-cover group-hover/img:scale-110 transition-transform"
                             referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              if (notice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                                target.src = `/api/drive-proxy/${notice.fileId}`;
+                              }
+                            }}
                           />
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-opacity text-white">
                             <Eye className="w-4 h-4" />
@@ -204,10 +211,16 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
 
             <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-950 max-h-[65vh] flex items-center justify-center">
               <img
-                src={selectedPreviewNotice.photoUrl}
+                src={resolveWorkOrderImageUrl(selectedPreviewNotice)}
                 alt="Work Order Large"
                 className="max-h-[65vh] w-auto object-contain mx-auto"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (selectedPreviewNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                    target.src = `/api/drive-proxy/${selectedPreviewNotice.fileId}`;
+                  }
+                }}
               />
             </div>
 

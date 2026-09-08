@@ -27,6 +27,25 @@ import { fetchWorkOrders, uploadWorkOrder, deleteWorkOrder, toggleWorkOrderVisib
 import { Language } from '../utils/translations';
 import { compressImageFile } from '../utils/imageCompressor';
 
+// Helper to resolve Google Drive / image URLs cleanly for both workers and admins
+export function resolveWorkOrderImageUrl(notice?: Partial<WorkOrderNotice> | null): string {
+  if (!notice) return '';
+  let url = notice.photoUrl || notice.directImageUrl || '';
+  if (!url && notice.fileId) {
+    return `https://drive.google.com/thumbnail?id=${notice.fileId}&sz=w2000`;
+  }
+  if (!url && notice.description && (notice.description.startsWith('http') || notice.description.startsWith('data:'))) {
+    url = notice.description;
+  }
+  if (url && url.includes('drive.google.com') && !url.includes('thumbnail')) {
+    const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+    if (idMatch && idMatch[1]) {
+      return `https://drive.google.com/thumbnail?id=${idMatch[1]}&sz=w2000`;
+    }
+  }
+  return url;
+}
+
 interface WorkOrderNoticeSectionProps {
   category?: CategoryType | 'ALL';
   currentUser: UserSession | null;
@@ -62,6 +81,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   const [uploadDescription, setUploadDescription] = useState<string>('');
   const [uploadIsHidden, setUploadIsHidden] = useState<boolean>(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [uploadFileName, setUploadFileName] = useState<string>('');
+  const [uploadFileType, setUploadFileType] = useState<string>('image/jpeg');
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isCompressing, setIsCompressing] = useState<boolean>(false);
 
@@ -138,6 +159,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setUploadFileName(file.name);
+      setUploadFileType(file.type || 'image/jpeg');
       if (file.size > 50 * 1024 * 1024) {
         showToast(lang === 'bn' ? 'ফাইল সাইজ ৫০ MB এর কম হতে হবে' : 'File size must be under 50 MB', 'error');
         return;
@@ -205,6 +228,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
       ctx.font = 'bold 13px sans-serif';
       ctx.fillText('✓ Approved by WBSEDCL Sub-Division Office', 30, 320);
 
+      setUploadFileName(`WBSEDCL_Sample_Khata_${Date.now()}.jpg`);
+      setUploadFileType('image/jpeg');
       setPhotoPreview(canvas.toDataURL('image/jpeg', 0.85));
     }
   };
@@ -229,6 +254,9 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
         category: (uploadCategory === 'ALL' ? 'NSC' : uploadCategory) as CategoryType,
         title: uploadTitle.trim() || 'WBSEDCL Work Order / Khata Notice',
         photoUrl: photoPreview,
+        fileData: photoPreview,
+        fileName: uploadFileName || `WorkOrder_${Date.now()}.jpg`,
+        fileType: uploadFileType || 'image/jpeg',
         description: uploadDescription.trim(),
         uploadedBy: currentUser?.idNo || '8695716192',
         adminName: currentUser?.name || 'Engr. N. Ali (Admin Controller)',
@@ -238,6 +266,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
       setShowUploadModal(false);
       setPhotoPreview(null);
+      setUploadFileName('');
+      setUploadFileType('image/jpeg');
       setUploadDescription('');
       setUploadIsHidden(false);
       
@@ -320,10 +350,28 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     }
   };
 
-  const handleDownload = (photoUrl: string, title: string) => {
+  const handleDownload = (noticeOrUrl: WorkOrderNotice | string, title?: string) => {
+    let photoUrl = '';
+    let docTitle = title || 'Work_Order_Notice';
+    if (typeof noticeOrUrl === 'string') {
+      photoUrl = noticeOrUrl;
+    } else if (noticeOrUrl && typeof noticeOrUrl === 'object') {
+      photoUrl = resolveWorkOrderImageUrl(noticeOrUrl);
+      docTitle = noticeOrUrl.title || docTitle;
+      if (noticeOrUrl.driveDownloadUrl) {
+        window.open(noticeOrUrl.driveDownloadUrl, '_blank');
+        return;
+      }
+      if (noticeOrUrl.fileId) {
+        window.open(`https://drive.google.com/uc?export=download&id=${noticeOrUrl.fileId}`, '_blank');
+        return;
+      }
+    }
+
+    if (!photoUrl) return;
     const link = document.createElement('a');
     link.href = photoUrl;
-    link.download = `${title.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`;
+    link.download = `${docTitle.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -545,12 +593,18 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                 {/* Photo Thumbnail */}
                 <div className="relative h-44 bg-slate-900 overflow-hidden flex items-center justify-center">
                   <img
-                    src={notice.photoUrl}
+                    src={resolveWorkOrderImageUrl(notice)}
                     alt={notice.title}
                     className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${
                       isNoticeHidden ? 'opacity-70 filter grayscale-[30%]' : ''
                     }`}
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      if (notice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                        target.src = `/api/drive-proxy/${notice.fileId}`;
+                      }
+                    }}
                   />
                   
                   {/* Status Banner when Hidden */}
@@ -732,7 +786,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => handleDownload(previewNotice.photoUrl, previewNotice.title)}
+                  onClick={() => handleDownload(previewNotice, previewNotice.title)}
                   className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-700"
                   title="Download Photo"
                 >
@@ -753,10 +807,16 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
             {/* Modal Zoomable Image View */}
             <div className="flex-1 overflow-auto p-4 bg-slate-950 flex items-center justify-center">
               <img
-                src={previewNotice.photoUrl}
+                src={resolveWorkOrderImageUrl(previewNotice)}
                 alt={previewNotice.title}
                 className="max-w-full max-h-[68vh] object-contain rounded-lg border border-slate-800 shadow-lg"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (previewNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                    target.src = `/api/drive-proxy/${previewNotice.fileId}`;
+                  }
+                }}
               />
             </div>
 
@@ -1052,10 +1112,16 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
               <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
                 <img
-                  src={confirmDeleteNotice.photoUrl}
+                  src={resolveWorkOrderImageUrl(confirmDeleteNotice)}
                   alt={confirmDeleteNotice.title}
                   className="w-14 h-14 object-cover rounded-lg border border-slate-300 shrink-0"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (confirmDeleteNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                      target.src = `/api/drive-proxy/${confirmDeleteNotice.fileId}`;
+                    }
+                  }}
                 />
                 <div className="overflow-hidden flex-1 text-xs">
                   <h4 className="font-bold text-slate-900 truncate">{confirmDeleteNotice.title}</h4>

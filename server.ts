@@ -804,15 +804,45 @@ app.delete('/api/chat', (req, res) => {
 });
 
 // Work Order & Khata Photo Notice Endpoints (Uploaded by Admin, viewable by all field workers)
-app.get('/api/work-orders', (req, res) => {
+// Integrated with Google Apps Script + Google Drive + Google Sheets
+app.get('/api/work-orders', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { category } = req.query;
+
+    // First attempt to fetch live from Google Sheets via Google Apps Script
+    try {
+      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 15000);
+      if (result && result.success && Array.isArray(result.workOrders)) {
+        let orders = result.workOrders.map((o: any) => {
+          let photo = o.photoUrl || o.directImageUrl || '';
+          if (!photo && o.description && (String(o.description).startsWith('http') || String(o.description).startsWith('data:'))) {
+            photo = String(o.description);
+          }
+          if (!photo && o.fileId) {
+            photo = `https://drive.google.com/thumbnail?id=${o.fileId}&sz=w2000`;
+          }
+          return {
+            ...o,
+            photoUrl: photo,
+            directImageUrl: o.directImageUrl || photo
+          };
+        });
+
+        if (category && category !== 'ALL') {
+          orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
+        }
+        writeWorkOrders(orders);
+        return res.json(orders);
+      }
+    } catch (gasErr) {
+      console.warn('[server.ts] GAS workorders fetch fallback:', gasErr);
+    }
+
     let orders = readWorkOrders();
     if (category && category !== 'ALL') {
       orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
     }
-    // Return newest first
     orders.sort((a: any, b: any) => new Date(b.createdAt || b.uploadDate || 0).getTime() - new Date(a.createdAt || a.uploadDate || 0).getTime());
     res.json(orders);
   } catch (error: any) {
@@ -820,14 +850,49 @@ app.get('/api/work-orders', (req, res) => {
   }
 });
 
-app.post('/api/work-orders', (req, res) => {
+app.post('/api/work-orders', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { category, title, photoUrl, description, uploadedBy, adminName, adminPhone, isHidden } = req.body;
-    if (!photoUrl) {
+    const { category, title, photoUrl, fileData, fileName, fileType, description, uploadedBy, adminName, adminPhone, isHidden } = req.body;
+    const rawPhoto = photoUrl || fileData;
+    if (!rawPhoto) {
       return res.status(400).json({ error: 'Work order / Khata photo is required' });
     }
 
+    const payload = {
+      category: category || 'NSC',
+      title: title || 'WBSEDCL Work Order / Khata Notice',
+      photoUrl: rawPhoto,
+      fileData: rawPhoto,
+      fileName: fileName || `${title || 'WorkOrder'}_${Date.now()}.jpg`,
+      fileType: fileType || 'image/jpeg',
+      description: description || '',
+      uploadedBy: uploadedBy || 'admin',
+      adminName: adminName || 'Admin Controller',
+      adminPhone: adminPhone || '8695716192',
+      isHidden: Boolean(isHidden)
+    };
+
+    // Forward to Google Apps Script which saves file to Google Drive and row to Google Sheets
+    try {
+      const result = await callGoogleAppsScript('createWorkOrder', { data: payload }, 'POST', 60000);
+      if (result && result.success && result.workOrder) {
+        const savedOrder = result.workOrder;
+        if (!savedOrder.photoUrl && savedOrder.directImageUrl) {
+          savedOrder.photoUrl = savedOrder.directImageUrl;
+        }
+        if (!savedOrder.photoUrl && savedOrder.fileId) {
+          savedOrder.photoUrl = `https://drive.google.com/thumbnail?id=${savedOrder.fileId}&sz=w2000`;
+        }
+        const currentOrders = readWorkOrders();
+        writeWorkOrders([savedOrder, ...currentOrders.filter((o: any) => o.id !== savedOrder.id)]);
+        return res.status(201).json({ success: true, workOrder: savedOrder });
+      }
+    } catch (gasErr) {
+      console.warn('[server.ts] GAS createWorkOrder fallback:', gasErr);
+    }
+
+    // Local fallback
     const orders = readWorkOrders();
     const now = new Date();
     const uploadDate = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -837,7 +902,7 @@ app.post('/api/work-orders', (req, res) => {
       id: `wo_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       category: category || 'NSC',
       title: title || 'WBSEDCL Work Order / Khata Notice',
-      photoUrl,
+      photoUrl: rawPhoto,
       description: description || '',
       uploadedBy: uploadedBy || 'admin',
       adminName: adminName || 'Admin Controller',
@@ -858,16 +923,60 @@ app.post('/api/work-orders', (req, res) => {
   }
 });
 
+// Google Drive Image Proxy Route
+// Guarantees reliable image loading in iframes or environments with strict cross-origin cookie rules
+app.get('/api/drive-proxy/:fileId', async (req, res) => {
+  const { fileId } = req.params;
+  if (!fileId || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
+    return res.status(400).send('Invalid file ID');
+  }
+
+  const driveUrls = [
+    `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`,
+    `https://lh3.googleusercontent.com/d/${fileId}`,
+    `https://drive.google.com/uc?export=view&id=${fileId}`
+  ];
+
+  for (const driveUrl of driveUrls) {
+    try {
+      const response = await fetch(driveUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        }
+      });
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || 'image/jpeg';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+        const arrayBuffer = await response.arrayBuffer();
+        return res.send(Buffer.from(arrayBuffer));
+      }
+    } catch (e) {
+      // Continue to next URL
+    }
+  }
+
+  return res.status(404).send('Image could not be retrieved from Google Drive');
+});
+
 // Helper for visibility toggle
-const handleVisibilityToggle = (req: express.Request, res: express.Response) => {
+const handleVisibilityToggle = async (req: express.Request, res: express.Response) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { id } = req.params;
     const { isHidden } = req.body;
+
+    try {
+      await callGoogleAppsScript('toggleWorkOrder', { id, isHidden: Boolean(isHidden) }, 'POST');
+    } catch (e) {
+      console.warn('Failed to sync toggle to GAS:', e);
+    }
+
     let orders = readWorkOrders();
     const index = orders.findIndex((o: any) => String(o.id) === String(id));
     if (index === -1) {
-      return res.json({ success: true, message: 'Work order not found in database, updated locally' });
+      return res.json({ success: true, message: 'Work order updated' });
     }
 
     orders[index].isHidden = Boolean(isHidden);
@@ -885,10 +994,17 @@ app.post('/api/work-orders/:id/visibility', handleVisibilityToggle);
 app.put('/api/work-orders/:id/visibility', handleVisibilityToggle);
 
 // Helper for deletion
-const handleDeleteWorkOrder = (req: express.Request, res: express.Response) => {
+const handleDeleteWorkOrder = async (req: express.Request, res: express.Response) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { id } = req.params;
+
+    try {
+      await callGoogleAppsScript('deleteWorkOrder', { id }, 'POST');
+    } catch (e) {
+      console.warn('Failed to delete work order from GAS:', e);
+    }
+
     let orders = readWorkOrders();
     orders = orders.filter((o: any) => String(o.id) !== String(id));
     writeWorkOrders(orders);

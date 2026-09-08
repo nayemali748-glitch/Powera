@@ -29,7 +29,7 @@ import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types
 import { createEntry } from '../services/api';
 import { appendEntryToGoogleSheet } from '../services/googleSheets';
 import { Language, translations } from '../utils/translations';
-import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
+import { WorkOrderNoticeSection, resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 import { compressImageFile } from '../utils/imageCompressor';
 
 interface EntryFormProps {
@@ -438,7 +438,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.workOrderDate = workOrderDate;
       // Attach Official Work Order & Khata Photo uploaded by Admin
       if (selectedWorkOrderNotice) {
-        entryPayload.workOrderPhoto = selectedWorkOrderNotice.photoUrl;
+        entryPayload.workOrderPhoto = resolveWorkOrderImageUrl(selectedWorkOrderNotice);
         entryPayload.workOrderNoticeId = selectedWorkOrderNotice.id;
         entryPayload.workOrderNoticeTitle = selectedWorkOrderNotice.title;
         entryPayload.workOrderNoticeDate = `${selectedWorkOrderNotice.uploadDate} ${selectedWorkOrderNotice.uploadTime}`;

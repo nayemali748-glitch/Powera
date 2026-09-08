@@ -53,10 +53,21 @@ function sanitizeEntriesForCache(entries: PowerEntry[]): PowerEntry[] {
 }
 
 function sanitizeWorkOrdersForCache(orders: WorkOrderNotice[]): WorkOrderNotice[] {
-  return orders.slice(0, 30).map(w => ({
-    ...w,
-    photoUrl: w.photoUrl && w.photoUrl.length > 3000 ? '' : w.photoUrl,
-  }));
+  return orders.slice(0, 50).map(w => {
+    let photo = w.photoUrl || w.directImageUrl || '';
+    if (!photo && w.fileId) {
+      photo = `https://drive.google.com/thumbnail?id=${w.fileId}&sz=w2000`;
+    }
+    // Only strip huge base64 data URIs to keep localStorage quota safe, never strip Drive URLs
+    if (photo && photo.startsWith('data:') && photo.length > 5000) {
+      photo = '';
+    }
+    return {
+      ...w,
+      photoUrl: photo,
+      directImageUrl: w.directImageUrl || photo,
+    };
+  });
 }
 
 // ============================================================================
@@ -578,21 +589,61 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
   try {
     const params: Record<string, string> = {};
     if (category && category !== 'ALL') params.category = category;
-    const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET');
-    if (data && Array.isArray(data.workOrders)) {
-      const validOrders = data.workOrders.filter(w => w && (w.id || w.title || w.photoUrl));
+    
+    // First try Google Apps Script (Primary Source)
+    let rawList: any[] = [];
+    try {
+      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 20000);
+      if (data && Array.isArray(data.workOrders)) {
+        rawList = data.workOrders;
+      }
+    } catch (e) {
+      console.warn('Direct GAS workorders fetch failed, trying proxy:', e);
+    }
+
+    // Proxy fallback if direct GAS fetch returned nothing
+    if (rawList.length === 0) {
+      try {
+        const pUrl = category && category !== 'ALL' ? `/api/work-orders?category=${encodeURIComponent(category)}` : '/api/work-orders';
+        const res = await fetch(pUrl);
+        if (res.ok) {
+          const pData = await res.json();
+          if (Array.isArray(pData)) rawList = pData;
+        }
+      } catch {}
+    }
+
+    if (rawList.length > 0) {
+      const validOrders = rawList.filter(w => w && (w.id || w.title || w.photoUrl || w.fileId));
       const seen = new Set<string>();
       const uniqueOrders: WorkOrderNotice[] = [];
       validOrders.forEach((w, idx) => {
         const idKey = String(w.id || `wo-${idx + 1}-${w.createdAt || Date.now()}`).trim();
-        if (!seen.has(idKey)) {
-          seen.add(idKey);
-          uniqueOrders.push({ ...w, id: idKey });
-        } else {
-          const dedupe = `${idKey}-${idx + 1}`;
-          seen.add(dedupe);
-          uniqueOrders.push({ ...w, id: dedupe });
+        let photo = w.photoUrl || w.directImageUrl || '';
+        if (!photo && w.description && (String(w.description).startsWith('http') || String(w.description).startsWith('data:'))) {
+          photo = String(w.description);
         }
+        if (!photo && w.fileId) {
+          photo = `https://drive.google.com/thumbnail?id=${w.fileId}&sz=w2000`;
+        }
+        // Normalize Google Drive viewer URLs to direct thumbnail
+        if (photo && photo.includes('drive.google.com') && !photo.includes('thumbnail')) {
+          const match = photo.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+          if (match && match[1]) {
+            photo = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w2000`;
+          }
+        }
+
+        const normalizedOrder: WorkOrderNotice = {
+          ...w,
+          id: seen.has(idKey) ? `${idKey}-${idx + 1}` : idKey,
+          photoUrl: photo,
+          directImageUrl: w.directImageUrl || photo,
+          description: (w.description && (String(w.description).startsWith('http') || String(w.description).startsWith('data:'))) ? '' : (w.description || '')
+        };
+
+        seen.add(normalizedOrder.id);
+        uniqueOrders.push(normalizedOrder);
       });
       writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache(uniqueOrders));
       return uniqueOrders;
@@ -605,22 +656,67 @@ export async function uploadWorkOrder(payload: {
   category: CategoryType;
   title: string;
   photoUrl: string;
+  fileData?: string;
+  fileName?: string;
+  fileType?: string;
   description?: string;
   uploadedBy: string;
   adminName: string;
   adminPhone?: string;
   isHidden?: boolean;
 }): Promise<WorkOrderNotice> {
+  const uploadPayload = {
+    ...payload,
+    fileData: payload.fileData || payload.photoUrl,
+    fileName: payload.fileName || `WBSEDCL_Notice_${Date.now()}.jpg`,
+    fileType: payload.fileType || 'image/jpeg',
+  };
+
+  // Attempt 1: Direct Google Apps Script upload (stores file in Google Drive, record in Google Sheets)
   try {
-    const data = await callGasApi<{ success: boolean; workOrder: WorkOrderNotice }>('createWorkOrder', { data: payload }, 'POST');
+    const data = await callGasApi<{ success: boolean; workOrder: WorkOrderNotice }>(
+      'createWorkOrder',
+      { data: uploadPayload },
+      'POST',
+      60000 // 60s timeout for Drive upload
+    );
     if (data && data.workOrder) {
       const savedOrder = data.workOrder;
+      if (!savedOrder.photoUrl && (savedOrder as any).directImageUrl) {
+        savedOrder.photoUrl = (savedOrder as any).directImageUrl;
+      }
+      if (!savedOrder.photoUrl && (savedOrder as any).fileId) {
+        savedOrder.photoUrl = `https://drive.google.com/thumbnail?id=${(savedOrder as any).fileId}&sz=w2000`;
+      }
       const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
       writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache([savedOrder, ...list.filter(w => w.id !== savedOrder.id)]));
       return savedOrder;
     }
-  } catch {}
+  } catch (gasErr) {
+    console.warn('Direct GAS createWorkOrder failed, trying server proxy endpoint:', gasErr);
+  }
 
+  // Attempt 2: Server proxy upload endpoint
+  try {
+    const sRes = await fetch('/api/work-orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(uploadPayload),
+    });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      if (sData && sData.workOrder) {
+        const savedOrder = sData.workOrder;
+        const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
+        writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache([savedOrder, ...list.filter(w => w.id !== savedOrder.id)]));
+        return savedOrder;
+      }
+    }
+  } catch (proxyErr) {
+    console.warn('Server proxy upload failed:', proxyErr);
+  }
+
+  // Local fallback
   const now = new Date();
   const fallbackOrder: WorkOrderNotice = {
     id: `wo_${Date.now()}`,
@@ -645,6 +741,13 @@ export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): 
   try {
     await callGasApi('toggleWorkOrder', { id, isHidden }, 'POST');
   } catch {}
+  try {
+    await fetch(`/api/work-orders/${encodeURIComponent(id)}/visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isHidden }),
+    });
+  } catch {}
   const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
   writeCache(WORK_ORDERS_STORAGE_KEY, list.map(item => String(item.id) === String(id) ? { ...item, isHidden } : item));
   return true;
@@ -653,6 +756,11 @@ export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): 
 export async function deleteWorkOrder(id: string): Promise<boolean> {
   try {
     await callGasApi('deleteWorkOrder', { id }, 'POST');
+  } catch {}
+  try {
+    await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   } catch {}
   const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
   writeCache(WORK_ORDERS_STORAGE_KEY, list.filter(item => String(item.id) !== String(id)));

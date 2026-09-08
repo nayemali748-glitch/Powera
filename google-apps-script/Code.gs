@@ -63,8 +63,9 @@ const SETTINGS_HEADERS = [
 ];
 
 const WORK_ORDER_HEADERS = [
-  'id', 'category', 'title', 'photoUrl', 'description', 'uploadedBy', 'adminName',
-  'adminPhone', 'uploadDate', 'uploadTime', 'createdAt', 'isHidden'
+  'id', 'category', 'title', 'photoUrl', 'fileId', 'fileName', 'fileType', 'fileSize',
+  'driveViewUrl', 'driveDownloadUrl', 'directImageUrl', 'description', 'uploadedBy',
+  'adminName', 'adminPhone', 'uploadDate', 'uploadTime', 'createdAt', 'isHidden'
 ];
 
 const CHAT_HEADERS = [
@@ -182,16 +183,59 @@ function getRows(sheetName) {
   return data.map(r => {
     const item = {};
     headers.forEach((h, i) => {
-      item[h] = r[i];
+      const col = String(h || '').trim();
+      if (col) item[col] = r[i];
     });
+
+    if (sheetName === 'WORK_ORDERS' || sheetName === 'WorkOrders') {
+      let photo = item.photoUrl || item.directImageUrl || '';
+      if (!photo && item.description && (String(item.description).indexOf('http') === 0 || String(item.description).indexOf('data:') === 0)) {
+        photo = String(item.description);
+      }
+      if (!photo && item.fileId) {
+        photo = 'https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w2000';
+      }
+      item.photoUrl = photo;
+      if (!item.directImageUrl) item.directImageUrl = photo;
+      if (!item.uploadedBy && item.createdBy) item.uploadedBy = item.createdBy;
+      if (!item.uploadDate && item.date) item.uploadDate = item.date;
+      if (item.isHidden === undefined && item.visible !== undefined && item.visible !== '') {
+        item.isHidden = !item.visible;
+      }
+      if (item.description && (String(item.description).indexOf('http') === 0 || String(item.description).indexOf('data:') === 0)) {
+        item.description = '';
+      }
+    }
+
     return item;
   });
 }
 
 function appendRow(sheetName, obj) {
-  const h = headersFor(sheetName);
   const s = getSheet(sheetName);
-  const rowValues = h.map(k => obj[k] === undefined ? '' : obj[k]);
+  ensureHeaders(s, headersFor(sheetName));
+  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0];
+
+  const rowValues = currentHeaders.map(h => {
+    const k = String(h || '').trim();
+    if (!k) return '';
+    if (obj[k] !== undefined && obj[k] !== null) return obj[k];
+
+    // Aliases for legacy sheets
+    if (k === 'photoUrl') return obj.photoUrl || obj.directImageUrl || obj.driveViewUrl || '';
+    if (k === 'description') {
+      if (currentHeaders.indexOf('photoUrl') === -1) {
+        return obj.photoUrl || obj.directImageUrl || obj.description || '';
+      }
+      return obj.description || '';
+    }
+    if (k === 'date') return obj.uploadDate || obj.date || '';
+    if (k === 'createdBy') return obj.uploadedBy || obj.adminName || obj.createdBy || '';
+    if (k === 'visible') return obj.isHidden !== undefined ? !obj.isHidden : true;
+    if (k === 'directImageUrl') return obj.directImageUrl || obj.photoUrl || '';
+    return '';
+  });
+
   s.appendRow(rowValues);
   return obj;
 }
@@ -466,15 +510,133 @@ function bulkSyncEntries(items) {
   return { success: true, syncedCount: count, total: getRows('MASTER_DATA').length };
 }
 
+// Google Drive Storage for Work Orders & Khata Files
+function getOrCreateWorkOrdersFolder() {
+  const folderName = 'WBSEDCL_Work_Orders_Khata_Files';
+  const folders = DriveApp.getFoldersByName(folderName);
+  if (folders.hasNext()) {
+    const folder = folders.next();
+    try {
+      folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
+    return folder;
+  }
+  const folder = DriveApp.createFolder(folderName);
+  try {
+    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {}
+  return folder;
+}
+
+function saveFileToDrive(fileData, fileName, mimeType) {
+  if (!fileData || typeof fileData !== 'string') {
+    return null;
+  }
+
+  // If already an http(s) URL, no need to re-upload
+  if (fileData.indexOf('http://') === 0 || fileData.indexOf('https://') === 0) {
+    return {
+      fileId: '',
+      fileName: fileName || '',
+      fileType: mimeType || 'image/jpeg',
+      fileSize: 0,
+      driveViewUrl: fileData,
+      driveDownloadUrl: fileData,
+      directImageUrl: fileData
+    };
+  }
+
+  let cleanBase64 = fileData;
+  let detectedMime = mimeType || 'image/jpeg';
+
+  if (cleanBase64.indexOf(';base64,') > -1) {
+    const parts = cleanBase64.split(';base64,');
+    const prefix = parts[0];
+    if (prefix.indexOf('data:') === 0) {
+      detectedMime = prefix.replace('data:', '').trim();
+    }
+    cleanBase64 = parts[1];
+  } else if (cleanBase64.indexOf('data:') === 0) {
+    const commaIdx = cleanBase64.indexOf(',');
+    if (commaIdx > -1) {
+      cleanBase64 = cleanBase64.substring(commaIdx + 1);
+    }
+  }
+
+  cleanBase64 = cleanBase64.trim();
+  const decodedBytes = Utilities.base64Decode(cleanBase64);
+
+  let ext = '.jpg';
+  if (detectedMime.indexOf('png') > -1) ext = '.png';
+  else if (detectedMime.indexOf('pdf') > -1) ext = '.pdf';
+  else if (detectedMime.indexOf('webp') > -1) ext = '.webp';
+
+  const baseName = (fileName || ('WBSEDCL_Notice_' + Date.now())).replace(/\.[^/.]+$/, '');
+  const safeFileName = baseName + ext;
+
+  const blob = Utilities.newBlob(decodedBytes, detectedMime, safeFileName);
+  const folder = getOrCreateWorkOrdersFolder();
+  const file = folder.createFile(blob);
+
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {
+    Logger.log('Set sharing failed: ' + e);
+  }
+
+  const fileId = file.getId();
+  const driveViewUrl = 'https://drive.google.com/file/d/' + fileId + '/view?usp=drivesdk';
+  const driveDownloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+  const directImageUrl = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w2000';
+
+  return {
+    fileId: fileId,
+    fileName: safeFileName,
+    fileType: detectedMime,
+    fileSize: file.getSize(),
+    driveViewUrl: driveViewUrl,
+    driveDownloadUrl: driveDownloadUrl,
+    directImageUrl: directImageUrl
+  };
+}
+
 // Work Orders
 function saveWorkOrder(d) {
   const id = d.id || generateId('WO');
   const nowObj = new Date();
+
+  const rawFile = d.photoUrl || d.fileData || d.photoBase64 || d.image || '';
+  let driveInfo = null;
+
+  if (rawFile && typeof rawFile === 'string' && (rawFile.indexOf('data:') === 0 || rawFile.length > 500)) {
+    try {
+      driveInfo = saveFileToDrive(rawFile, d.fileName || d.title, d.fileType || d.mimeType);
+    } catch (err) {
+      Logger.log('Drive upload error: ' + err.toString());
+    }
+  }
+
+  const finalPhotoUrl = driveInfo ? driveInfo.directImageUrl : (rawFile.length < 500 ? rawFile : '');
+  const fileId = driveInfo ? driveInfo.fileId : (d.fileId || '');
+  const fileName = driveInfo ? driveInfo.fileName : (d.fileName || '');
+  const fileType = driveInfo ? driveInfo.fileType : (d.fileType || 'image/jpeg');
+  const fileSize = driveInfo ? driveInfo.fileSize : (d.fileSize || 0);
+  const driveViewUrl = driveInfo ? driveInfo.driveViewUrl : (d.driveViewUrl || '');
+  const driveDownloadUrl = driveInfo ? driveInfo.driveDownloadUrl : (d.driveDownloadUrl || '');
+  const directImageUrl = driveInfo ? driveInfo.directImageUrl : (d.directImageUrl || finalPhotoUrl);
+
   const item = {
     id: id,
     category: d.category || 'NSC',
     title: d.title || 'WBSEDCL Work Order Notice',
-    photoUrl: d.photoUrl || '',
+    photoUrl: finalPhotoUrl,
+    fileId: fileId,
+    fileName: fileName,
+    fileType: fileType,
+    fileSize: fileSize,
+    driveViewUrl: driveViewUrl,
+    driveDownloadUrl: driveDownloadUrl,
+    directImageUrl: directImageUrl,
     description: d.description || '',
     uploadedBy: d.uploadedBy || 'admin',
     adminName: d.adminName || 'Admin Controller',

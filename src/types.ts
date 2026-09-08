@@ -156,6 +156,13 @@ export interface WorkOrderNotice {
   category: CategoryType;
   title: string;
   photoUrl: string;
+  fileId?: string;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number | string;
+  driveViewUrl?: string;
+  driveDownloadUrl?: string;
+  directImageUrl?: string;
   description?: string;
   uploadedBy: string;
   adminName: string;
