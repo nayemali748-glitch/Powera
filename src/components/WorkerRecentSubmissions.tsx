@@ -134,7 +134,7 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {displayEntries.map((item) => {
+          {displayEntries.map((item, idx) => {
             const isNsc = item.category === 'NSC';
             const isDisc = item.category === 'DISCONNECTION';
             const isPole = item.category === 'POLE CASE';
@@ -142,7 +142,7 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
 
             return (
               <div
-                key={item.id}
+                key={`${item.id || 'entry'}-${idx}`}
                 onClick={() => onSelectEntry(item)}
                 className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 hover:border-slate-300 hover:bg-white transition-all cursor-pointer space-y-2.5 group shadow-xs"
               >

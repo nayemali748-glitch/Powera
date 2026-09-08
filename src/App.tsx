@@ -862,9 +862,9 @@ export default function App() {
 
                     {/* Quick Switch Pills */}
                     <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full">
-                      {(['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'] as CategoryType[]).map((cat) => (
+                      {(['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'] as CategoryType[]).map((cat, idx) => (
                         <button
-                          key={cat}
+                          key={`${cat}-${idx}`}
                           onClick={() => {
                             setSelectedCategory(cat);
                             setActiveFormCategory(cat);

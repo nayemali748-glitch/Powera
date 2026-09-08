@@ -20,7 +20,6 @@ import {
   HardHat
 } from 'lucide-react';
 import { CornerOptionKey, PowerEntry } from '../types';
-import { googleSignIn, getAccessToken } from '../services/googleAuth';
 import { syncAllEntriesToGoogleSheet, getSavedSpreadsheetUrl } from '../services/googleSheets';
 
 interface CornerOptionsModalProps {
@@ -395,17 +394,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
                     setIsSyncingSheets(true);
                     setSheetsMessage(null);
                     try {
-                      let token = await getAccessToken();
-                      if (!token) {
-                        const authRes = await googleSignIn();
-                        token = authRes?.accessToken || null;
-                      }
-                      if (!token) {
-                        alert('Google Sign-in was cancelled');
-                        setIsSyncingSheets(false);
-                        return;
-                      }
-                      const result = await syncAllEntriesToGoogleSheet(entries, undefined, token);
+                      const result = await syncAllEntriesToGoogleSheet(entries);
                       setSheetUrl(result.sheetUrl);
                       setSheetsMessage(`সফলভাবে ${result.syncedCount} টি এন্ট্রি Google Sheets-এ ব্যাকআপ হয়েছে!`);
                     } catch (err: any) {

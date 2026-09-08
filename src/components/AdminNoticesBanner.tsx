@@ -92,7 +92,7 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {latestNotices.map((notice) => {
+            {latestNotices.map((notice, idx) => {
               const isNsc = notice.category === 'NSC';
               const isDisc = notice.category === 'DISCONNECTION';
               const isPole = notice.category === 'POLE CASE';
@@ -100,7 +100,7 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
 
               return (
                 <div
-                  key={notice.id}
+                  key={`${notice.id || 'banner-notice'}-${idx}`}
                   className="bg-slate-50 hover:bg-white border border-slate-200 hover:border-blue-400 rounded-xl p-3.5 flex flex-col justify-between gap-3 transition-all shadow-2xs hover:shadow-md group"
                 >
                   <div className="space-y-2.5">

@@ -142,13 +142,13 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
 
       {/* 5 Work Category Visual Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        {categoryStats.map((item) => {
+        {categoryStats.map((item, idx) => {
           const Icon = item.icon;
           const percentage = totalEntries > 0 ? Math.round((item.count / totalEntries) * 100) : 0;
 
           return (
             <button
-              key={item.id}
+              key={`${item.id}-${idx}`}
               type="button"
               onClick={() => onSelectCategory(item.id)}
               className={`text-left p-3 rounded-xl border ${item.borderAccent} ${item.bgLight} hover:shadow-md transition-all cursor-pointer group relative overflow-hidden`}

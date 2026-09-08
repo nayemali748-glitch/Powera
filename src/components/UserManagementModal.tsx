@@ -787,14 +787,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     কোনো ইউজার পাওয়া যায়নি।
                   </div>
                 ) : (
-                  filteredUsers.map((u) => {
+                  filteredUsers.map((u, idx) => {
                     const isPrimaryAdmin = u.idNo === '8695716192' || u.idNo === 'admin';
                     const isHold = u.status === 'hold';
                     const isEditing = editingUserId === (u.id || u.idNo);
 
                     return (
                       <div
-                        key={u.id || u.idNo}
+                        key={`${u.id || u.idNo || 'user'}-${idx}`}
                         className={`p-3.5 rounded-xl border flex flex-col gap-2.5 transition-all ${
                           isPrimaryAdmin
                             ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400/30'
@@ -1071,8 +1071,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                           (u.role || '').toLowerCase().includes(q)
                         );
                       })
-                      .map((u) => (
-                        <option key={u.id || u.idNo} value={u.id || u.idNo}>
+                      .map((u, idx) => (
+                        <option key={`${u.id || u.idNo || 'user'}-${idx}`} value={u.id || u.idNo}>
                           {u.role === 'admin' ? '👑 [ADMIN]' : '👷 [WORKER]'} {u.name} (ID: {u.idNo}) {u.phone ? `- Tel: ${u.phone}` : ''} {u.status === 'hold' ? '⚠️ [ON HOLD]' : ''}
                         </option>
                       ))}

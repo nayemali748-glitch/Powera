@@ -265,13 +265,13 @@ export const HelpSupportModal: React.FC<HelpSupportModalProps> = ({
               </div>
 
               {/* Chat Thread */}
-              {messages.map((msg) => {
+              {messages.map((msg, idx) => {
                 const isMe = msg.senderId === currentUser?.idNo || (isAdmin && msg.senderRole === 'admin');
                 const isMsgFromAdmin = msg.senderRole === 'admin';
 
                 return (
                   <div
-                    key={msg.id}
+                    key={`${msg.id || 'msg'}-${idx}`}
                     className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
                   >
                     <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1">

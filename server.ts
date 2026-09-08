@@ -185,8 +185,9 @@ function readEntries() {
     }
     const content = fs.readFileSync(DATA_FILE, 'utf-8');
     const parsed = JSON.parse(content || '[]');
-    cachedEntries = parsed;
-    return parsed;
+    const clean = Array.isArray(parsed) ? parsed.filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== ''))) : [];
+    cachedEntries = clean;
+    return clean;
   } catch (err) {
     console.error('Error reading entries:', err);
     return [];
@@ -213,20 +214,29 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', app: 'POWER Utility Management' });
 });
 
-// Get all entries with optional category/status/search query
-app.get('/api/entries', (req, res) => {
+// Get all entries with optional category/status/search query (from Google Sheets via GAS)
+app.get('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { category, status, search } = req.query;
-  let entries = readEntries();
 
+  try {
+    const result = await callGoogleAppsScript('entries', req.query, 'GET');
+    if (result && result.success && Array.isArray(result.entries)) {
+      const cleanList = result.entries.filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== '')));
+      writeEntries(cleanList);
+      return res.json(cleanList);
+    }
+  } catch (e) {
+    console.warn('Failed to fetch entries from Google Sheets, using local cache:', e);
+  }
+
+  let entries = readEntries();
   if (category && category !== 'ALL') {
     entries = entries.filter((e: any) => e.category === category);
   }
-
   if (status && status !== 'ALL') {
     entries = entries.filter((e: any) => e.status === status);
   }
-
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
     entries = entries.filter((e: any) => 
@@ -243,15 +253,13 @@ app.get('/api/entries', (req, res) => {
       (e.feederName && e.feederName.toLowerCase().includes(q))
     );
   }
-
   res.json(entries);
 });
 
-// Create or update entry
-app.post('/api/entries', (req, res) => {
+// Create or update entry in Google Sheets
+app.post('/api/entries', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const entries = readEntries();
     const newEntry = {
       ...req.body,
       id: req.body.id || `PWR-${Date.now().toString().slice(-6)}`,
@@ -260,6 +268,8 @@ app.post('/api/entries', (req, res) => {
       status: req.body.status || 'Completed'
     };
 
+    // Update local cache immediately
+    const entries = readEntries();
     const existingIndex = entries.findIndex((e: any) => e.id === newEntry.id);
     if (existingIndex !== -1) {
       entries[existingIndex] = { ...entries[existingIndex], ...newEntry };
@@ -267,6 +277,16 @@ app.post('/api/entries', (req, res) => {
       entries.unshift(newEntry);
     }
     writeEntries(entries);
+
+    // Save to Google Sheets
+    try {
+      const result = await callGoogleAppsScript('createEntry', { data: newEntry }, 'POST');
+      if (result && result.entry) {
+        return res.status(201).json({ success: true, entry: result.entry });
+      }
+    } catch (e) {
+      console.warn('Failed to save entry to Google Sheets:', e);
+    }
 
     res.status(201).json({ success: true, entry: newEntry });
   } catch (error: any) {
@@ -276,7 +296,7 @@ app.post('/api/entries', (req, res) => {
 });
 
 // Bulk sync endpoint for offline submissions
-app.post('/api/entries/bulk', (req, res) => {
+app.post('/api/entries/bulk', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const { entries: incomingList } = req.body;
@@ -293,6 +313,13 @@ app.post('/api/entries/bulk', (req, res) => {
       }
     }
     writeEntries(currentEntries);
+
+    try {
+      await callGoogleAppsScript('bulkSync', { entries: incomingList }, 'POST');
+    } catch (e) {
+      console.warn('Failed to bulk sync entries to Google Sheets:', e);
+    }
+
     res.json({ success: true, count: incomingList.length });
   } catch (error: any) {
     console.error('Bulk sync error:', error);
@@ -300,42 +327,62 @@ app.post('/api/entries/bulk', (req, res) => {
   }
 });
 
-// Update status or notes
-app.patch('/api/entries/:id', (req, res) => {
+// Update status or notes in Google Sheets
+app.patch('/api/entries/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   const entries = readEntries();
   const index = entries.findIndex((e: any) => e.id === id);
 
+  if (index !== -1) {
+    entries[index] = { ...entries[index], ...req.body, updatedAt: new Date().toISOString() };
+    writeEntries(entries);
+  }
+
+  try {
+    const result = await callGoogleAppsScript('updateEntry', { id, data: req.body }, 'POST');
+    if (result && result.entry) {
+      return res.json({ success: true, entry: result.entry });
+    }
+  } catch (e) {
+    console.warn('Failed to update entry in Google Sheets:', e);
+  }
+
   if (index === -1) {
     return res.status(404).json({ error: 'Entry not found' });
   }
 
-  entries[index] = { ...entries[index], ...req.body, updatedAt: new Date().toISOString() };
-  writeEntries(entries);
   res.json({ success: true, entry: entries[index] });
 });
 
-// Delete entry (Admin only)
-app.delete('/api/entries/:id', (req, res) => {
+// Delete entry (Admin only) from Google Sheets
+app.delete('/api/entries/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { id } = req.params;
   let entries = readEntries();
-  const initialLength = entries.length;
   entries = entries.filter((e: any) => e.id !== id);
+  writeEntries(entries);
 
-  if (entries.length === initialLength) {
-    return res.status(404).json({ error: 'Entry not found' });
+  try {
+    await callGoogleAppsScript('deleteEntry', { id }, 'POST');
+  } catch (e) {
+    console.warn('Failed to delete entry in Google Sheets:', e);
   }
 
-  writeEntries(entries);
   res.json({ success: true, message: 'Entry deleted successfully' });
 });
 
-// Clear all entries (Admin only)
-app.delete('/api/entries', (req, res) => {
+// Clear all entries (Admin only) from Google Sheets
+app.delete('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   writeEntries([]);
+
+  try {
+    await callGoogleAppsScript('clearEntries', {}, 'POST');
+  } catch (e) {
+    console.warn('Failed to clear entries in Google Sheets:', e);
+  }
+
   res.json({ success: true, message: 'All entries deleted successfully' });
 });
 

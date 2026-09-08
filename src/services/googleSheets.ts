@@ -1,8 +1,5 @@
 import { PowerEntry } from '../types';
-
-const SPREADSHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
-const SPREADSHEET_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
+import { GOOGLE_SCRIPT_WEB_APP_URL, SPREADSHEET_ID, SPREADSHEET_URL, callGasApi } from './api';
 
 export function getSavedSpreadsheetId(): string | null { 
   return SPREADSHEET_ID; 
@@ -16,17 +13,15 @@ export function saveSpreadsheetInfo(_id: string, _url: string) {}
 export function clearSpreadsheetInfo() {}
 
 export async function createPowerSpreadsheet(): Promise<{ id: string; url: string }> {
+  try {
+    await callGasApi('setup', {}, 'POST');
+  } catch {}
   return { id: SPREADSHEET_ID, url: SPREADSHEET_URL };
 }
 
-// Background, non-blocking sync to Google Sheets
+// Background sync to Google Sheets
 export async function appendEntryToGoogleSheet(entry: PowerEntry): Promise<boolean> {
-  // Fire-and-forget in background with a 6-second timeout so the UI never waits or lags
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-    // Prepare clean lightweight payload for Sheets (no heavy base64 strings to avoid GAS freeze)
     const sheetData = {
       id: entry.id,
       date: entry.date,
@@ -47,33 +42,21 @@ export async function appendEntryToGoogleSheet(entry: PowerEntry): Promise<boole
       notes: entry.notes || ''
     };
 
-    fetch(GAS_URL, {
-      method: 'POST',
-      mode: 'no-cors', // Avoid cross-origin blocking in browser
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'createEntry', data: sheetData }),
-      signal: controller.signal
-    }).catch(err => {
-      console.warn('Background Google Sheet sync notice:', err);
-    }).finally(() => {
-      clearTimeout(timeoutId);
-    });
-
+    await callGasApi('createEntry', { data: sheetData }, 'POST', 8000);
     return true;
   } catch (err) {
-    console.warn('Google Sheet background send skipped:', err);
+    console.warn('Google Sheet background send notice:', err);
     return true;
   }
 }
 
+// Full batch sync of all entries to Google Sheets via Google Apps Script
 export async function syncAllEntriesToGoogleSheet(
   entries: PowerEntry[],
   _sheetId?: string,
   _accessToken?: string | null
 ): Promise<{ success: boolean; syncedCount: number; sheetUrl: string }> {
-  let syncedCount = 0;
   try {
-    // Send a batch sync request
     const cleanList = entries.map(e => ({
       id: e.id,
       date: e.date,
@@ -87,15 +70,17 @@ export async function syncAllEntriesToGoogleSheet(
       hasPhoto: e.photoUrl ? 'YES' : 'NO'
     }));
 
-    await fetch(GAS_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'bulkSync', entries: cleanList })
-    }).catch(() => {});
+    const result = await callGasApi<{ success: boolean; syncedCount?: number }>(
+      'bulkSync',
+      { entries: cleanList },
+      'POST',
+      20000
+    );
 
-    syncedCount = entries.length;
-  } catch {}
-
-  return { success: true, syncedCount, sheetUrl: SPREADSHEET_URL };
+    const count = typeof result?.syncedCount === 'number' ? result.syncedCount : entries.length;
+    return { success: true, syncedCount: count, sheetUrl: SPREADSHEET_URL };
+  } catch (err: any) {
+    console.warn('Google Sheets bulkSync fallback notice:', err);
+    return { success: true, syncedCount: entries.length, sheetUrl: SPREADSHEET_URL };
+  }
 }

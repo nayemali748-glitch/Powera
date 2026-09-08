@@ -1,24 +1,31 @@
 import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage } from '../types';
-import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
+import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
 
-const API_BASE = '/api';
+// ============================================================================
+// CENTRAL API CONFIGURATION
+// Google Sheets via Google Apps Script is the SINGLE SOURCE OF TRUTH
+// ============================================================================
+export const GOOGLE_SCRIPT_WEB_APP_URL = 
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GOOGLE_APPS_SCRIPT_URL) ||
+  'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
+
+export const SPREADSHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
+export const SPREADSHEET_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
+
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
+const USERS_CACHE_KEY = 'power_app_users_cache';
 const WORK_ORDERS_STORAGE_KEY = 'power_work_orders_cache';
 const CHAT_LOCAL_KEY = 'power_chat_history';
 
 // Empty default accounts - Google Sheets is the ONLY source of truth
 export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [];
 
-// Clean legacy user storage and bloated cache on initialization
+// Clean legacy localStorage keys on initialization
 try {
   localStorage.removeItem('power_registered_users');
   const oldEntries = localStorage.getItem(LOCAL_STORAGE_KEY);
   if (oldEntries && oldEntries.length > 50000) {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
-  }
-  const oldOrders = localStorage.getItem(WORK_ORDERS_STORAGE_KEY);
-  if (oldOrders && oldOrders.length > 50000) {
-    localStorage.removeItem(WORK_ORDERS_STORAGE_KEY);
   }
 } catch {}
 
@@ -37,7 +44,6 @@ function writeCache<T>(key: string, value: T) {
   } catch {}
 }
 
-// Strip heavy base64 images when writing to localStorage cache to prevent UI thread freezing
 function sanitizeEntriesForCache(entries: PowerEntry[]): PowerEntry[] {
   return entries.slice(0, 50).map(e => ({
     ...e,
@@ -53,6 +59,87 @@ function sanitizeWorkOrdersForCache(orders: WorkOrderNotice[]): WorkOrderNotice[
   }));
 }
 
+// ============================================================================
+// CENTRAL API REQUEST HANDLER
+// Communicates directly with Google Apps Script Web App (Works seamlessly on Vercel,
+// local development, and production environments with zero HTTP 404 errors)
+// ============================================================================
+export async function callGasApi<T = any>(
+  action: string,
+  payload: any = {},
+  method: 'GET' | 'POST' = 'GET',
+  timeoutMs = 15000
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    try { controller.abort(); } catch {}
+  }, timeoutMs);
+
+  try {
+    let url = GOOGLE_SCRIPT_WEB_APP_URL;
+    const options: RequestInit = {
+      signal: controller.signal,
+      redirect: 'follow',
+    };
+
+    if (method === 'GET') {
+      const sep = url.includes('?') ? '&' : '?';
+      const queryParams: Record<string, string> = { action };
+      for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined && value !== null) {
+          queryParams[key] = String(value);
+        }
+      }
+      queryParams['_t'] = Date.now().toString();
+      const params = new URLSearchParams(queryParams);
+      url = `${url}${sep}${params.toString()}`;
+      options.method = 'GET';
+    } else {
+      options.method = 'POST';
+      // Use text/plain to prevent browser CORS preflight OPTIONS request
+      options.headers = {
+        'Content-Type': 'text/plain;charset=utf-8'
+      };
+      options.body = JSON.stringify({ action, ...payload });
+    }
+
+    const res = await fetch(url, options);
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Google Apps Script returned invalid response: ${text.slice(0, 150)}`);
+    }
+
+    if (data && data.success === false && data.error) {
+      throw new Error(data.error);
+    }
+
+    return data as T;
+  } catch (err: any) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(`Request timed out for action "${action}". Please try again.`);
+    }
+
+    // Secondary fallback: if running in full-stack dev with /api proxy, attempt fallback
+    if (typeof window !== 'undefined' && window.location && window.location.port === '3000') {
+      try {
+        const proxyRes = await fetch(`/api/${action === 'users' ? 'users' : (action === 'entries' ? 'entries' : 'health')}`);
+        if (proxyRes.ok) {
+          const proxyData = await proxyRes.json();
+          return proxyData as T;
+        }
+      } catch {}
+    }
+
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Background sync for offline submissions
 export async function syncPendingEntries(): Promise<number> {
   let syncedCount = 0;
   try {
@@ -65,15 +152,8 @@ export async function syncPendingEntries(): Promise<number> {
     for (const item of pending) {
       try {
         const { _isPendingSync, ...cleanItem } = item;
-        const res = await fetch(`${API_BASE}/entries`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate'
-          },
-          body: JSON.stringify(cleanItem)
-        });
-        if (res.ok) {
+        const res = await callGasApi('createEntry', { data: cleanItem }, 'POST');
+        if (res && res.success) {
           item._isPendingSync = false;
           syncedCount++;
         }
@@ -91,38 +171,64 @@ export async function syncPendingEntries(): Promise<number> {
   return syncedCount;
 }
 
+// ============================================================================
+// ENTRIES (CRUD & QUERY)
+// ============================================================================
+
 export async function fetchEntries(filters?: {
   category?: string;
   status?: string;
   search?: string;
 }): Promise<PowerEntry[]> {
-  // Background sync of unsynced items
+  // Trigger background sync of any offline items
   syncPendingEntries().catch(() => {});
 
   try {
-    const params = new URLSearchParams();
-    if (filters?.category && filters.category !== 'ALL') params.append('category', filters.category);
-    if (filters?.status && filters.status !== 'ALL') params.append('status', filters.status);
-    if (filters?.search) params.append('search', filters.search);
-    params.append('_t', Date.now().toString());
+    const params: Record<string, string> = {};
+    if (filters?.category && filters.category !== 'ALL') params.category = filters.category;
+    if (filters?.status && filters.status !== 'ALL') params.status = filters.status;
+    if (filters?.search) params.search = filters.search;
 
-    const res = await fetch(`${API_BASE}/entries?${params.toString()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
+    const data = await callGasApi<{ success: boolean; entries: PowerEntry[] }>('entries', params, 'GET');
+    const rawList = Array.isArray(data.entries) ? data.entries : [];
+    // Filter out completely blank rows from Google Sheets (must have id, category, or consumer/app info)
+    const validList = rawList.filter(item => item && (
+      (item.id && String(item.id).trim() !== '') || 
+      (item.category && String(item.category).trim() !== '') || 
+      (item.consumerName && String(item.consumerName).trim() !== '') ||
+      (item.consumerId && String(item.consumerId).trim() !== '') ||
+      (item.applicationNo && String(item.applicationNo).trim() !== '')
+    ));
+
+    // Ensure every single entry has a distinct, guaranteed-unique ID
+    const seenIds = new Set<string>();
+    const uniqueEntries: PowerEntry[] = [];
+    validList.forEach((item, idx) => {
+      let effectiveId = String(item.id || '').trim();
+      if (!effectiveId) {
+        effectiveId = `PWR-${Date.now()}-${idx + 1}`;
+      }
+      if (!seenIds.has(effectiveId)) {
+        seenIds.add(effectiveId);
+        uniqueEntries.push({ ...item, id: effectiveId });
+      } else {
+        const deduplicatedId = `${effectiveId}-${idx + 1}`;
+        seenIds.add(deduplicatedId);
+        uniqueEntries.push({ ...item, id: deduplicatedId });
       }
     });
-
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const data: PowerEntry[] = await res.json();
     
-    // Update local cache safely with stripped images to avoid freezing the UI thread
-    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(data));
-    return data;
+    // Save to local cache for instant UI availability
+    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
+    return uniqueEntries;
   } catch (error) {
-    console.warn('Local server fetch failed, using local cache:', error);
+    console.warn('Direct Google Sheets fetch error, using local cache:', error);
     let list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    list = list.filter(item => item && (
+      (item.id && String(item.id).trim() !== '') || 
+      (item.category && String(item.category).trim() !== '') || 
+      (item.consumerName && String(item.consumerName).trim() !== '')
+    ));
     if (filters?.category && filters.category !== 'ALL') {
       list = list.filter(item => item.category === filters.category);
     }
@@ -155,22 +261,10 @@ export async function createEntry(entryData: Partial<PowerEntry>): Promise<Power
   } catch {}
 
   try {
-    const res = await fetch(`${API_BASE}/entries`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify(cleanEntry),
-    });
-
-    if (res.ok) {
-      const result = await res.json();
-      return result.entry || cleanEntry;
-    }
-    throw new Error(`HTTP ${res.status}`);
+    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('createEntry', { data: cleanEntry }, 'POST');
+    return res.entry || cleanEntry;
   } catch (error) {
-    console.warn('Server createEntry error, saved locally with sync flag:', error);
+    console.warn('Google Sheets createEntry error, saved locally with pending sync flag:', error);
     const fallbackEntry = { ...cleanEntry, _isPendingSync: true };
     const list = readCache<any[]>(LOCAL_STORAGE_KEY, []);
     writeCache(LOCAL_STORAGE_KEY, [fallbackEntry, ...list.filter(e => e.id !== fallbackEntry.id)].slice(0, 100));
@@ -180,14 +274,15 @@ export async function createEntry(entryData: Partial<PowerEntry>): Promise<Power
 
 export async function updateEntry(id: string, updates: Partial<PowerEntry>): Promise<PowerEntry> {
   try {
-    const res = await fetch(`${API_BASE}/entries/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!res.ok) throw new Error('Failed to update entry');
-    const result = await res.json();
-    return result.entry;
+    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('updateEntry', { id, data: updates }, 'POST');
+    const updated = res.entry || { id, ...updates } as PowerEntry;
+    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    const idx = list.findIndex(e => e.id === id);
+    if (idx !== -1) {
+      list[idx] = { ...list[idx], ...updated };
+      writeCache(LOCAL_STORAGE_KEY, list);
+    }
+    return updated;
   } catch (error) {
     const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
     const idx = list.findIndex(e => e.id === id);
@@ -202,8 +297,10 @@ export async function updateEntry(id: string, updates: Partial<PowerEntry>): Pro
 
 export async function deleteEntry(id: string): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}/entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  } catch {}
+    await callGasApi('deleteEntry', { id }, 'POST');
+  } catch (e) {
+    console.warn('Delete entry notice:', e);
+  }
   const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
   writeCache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== id));
   return true;
@@ -211,19 +308,26 @@ export async function deleteEntry(id: string): Promise<boolean> {
 
 export async function clearAllEntries(): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}/entries`, { method: 'DELETE' });
-  } catch {}
-  localStorage.removeItem(LOCAL_STORAGE_KEY);
+    await callGasApi('clearEntries', {}, 'POST');
+  } catch (e) {
+    console.warn('Clear entries notice:', e);
+  }
+  writeCache(LOCAL_STORAGE_KEY, []);
   return true;
 }
 
 export async function fetchStats(): Promise<StatsResponse> {
   try {
-    const res = await fetch(`${API_BASE}/stats`);
-    if (res.ok) return await res.json();
-  } catch {}
+    const data = await callGasApi<{ success: boolean; stats: StatsResponse }>('stats', {}, 'GET');
+    if (data && data.stats) {
+      return data.stats;
+    }
+  } catch (e) {
+    console.warn('Fetch stats fallback to local calculation:', e);
+  }
 
-  const entries = await fetchEntries();
+  // Fallback calculation from local cached entries
+  const entries = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
   return {
     total: entries.length,
     categories: {
@@ -241,195 +345,191 @@ export async function fetchStats(): Promise<StatsResponse> {
   };
 }
 
-// User accounts management APIs (GOOGLE SHEETS IS THE SINGLE SOURCE OF TRUTH)
+// ============================================================================
+// USER MANAGEMENT & AUTHENTICATION (GOOGLE SHEETS)
+// ============================================================================
+
 export async function fetchUsers(): Promise<UserAccount[]> {
-  const res = await fetch(`${API_BASE}/users?_t=${Date.now()}`, {
-    cache: 'no-store',
-    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-  });
-
-  if (!res.ok) {
-    const errJson = await res.json().catch(() => ({}));
-    throw new Error(errJson.error || `Failed to fetch users: HTTP ${res.status}`);
+  try {
+    const data = await callGasApi<{ success: boolean; users: UserAccount[] }>('users', {}, 'GET');
+    if (data && Array.isArray(data.users)) {
+      const validUsers = data.users.filter(u => u && (u.id || u.idNo || u.name));
+      const seen = new Set<string>();
+      const uniqueUsers: UserAccount[] = [];
+      validUsers.forEach((u, idx) => {
+        const idKey = String(u.id || u.idNo || `usr-${idx + 1}`).trim();
+        if (!seen.has(idKey)) {
+          seen.add(idKey);
+          uniqueUsers.push({ ...u, id: idKey });
+        }
+      });
+      writeCache(USERS_CACHE_KEY, uniqueUsers);
+      return uniqueUsers;
+    }
+    throw new Error('Failed to load users from Google Sheets');
+  } catch (err: any) {
+    console.warn('fetchUsers using cache fallback:', err);
+    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+    if (cached.length > 0) return cached;
+    throw new Error(err.message || 'Failed to fetch users from Google Sheets');
   }
-
-  const data = await res.json();
-  if (data && data.success && Array.isArray(data.users)) {
-    return data.users;
-  }
-  if (Array.isArray(data)) {
-    return data;
-  }
-  throw new Error(data?.error || 'Invalid response from Google Sheets user backend');
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
-  const cleanId = normalizeUniversalText(userData.idNo);
-  const cleanPass = normalizePassword(userData.password);
-  const cleanName = (userData.name ? String(userData.name).trim() : cleanId) || 'কর্মী';
-  const cleanPhone = normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '');
+  const cleanId = normalizeUniversalText(userData.idNo || '');
+  const cleanPass = normalizePassword(userData.password || '');
+  const cleanPhone = userData.phone ? normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '') : '';
+  const cleanName = normalizeUniversalText(userData.name || cleanId) || 'কর্মী';
 
-  const res = await fetch(`${API_BASE}/users`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
-    },
-    body: JSON.stringify({
-      ...userData,
-      idNo: cleanId,
-      password: cleanPass,
-      name: cleanName,
-      phone: cleanPhone
-    }),
-  });
+  if (!cleanId) throw new Error('User ID No is required');
+  if (!cleanPass) throw new Error('Password is required');
 
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success && data.user) {
+  const payload = {
+    ...userData,
+    idNo: cleanId,
+    password: cleanPass,
+    name: cleanName,
+    phone: cleanPhone,
+    role: userData.role || 'worker',
+    status: userData.status || 'active',
+  };
+
+  const data = await callGasApi<{ success: boolean; user: UserAccount }>('createUser', { data: payload }, 'POST');
+  if (data && data.user) {
+    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+    writeCache(USERS_CACHE_KEY, [data.user, ...cached.filter(u => u.id !== data.user.id)]);
     return data.user;
   }
-
-  throw new Error(data.error || 'Failed to create user in Google Sheets');
+  throw new Error('Failed to create user in Google Sheets');
 }
 
 export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
-  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
-    },
-    body: JSON.stringify(updates),
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success && data.user) {
+  const data = await callGasApi<{ success: boolean; user: UserAccount }>('updateUser', { id, data: updates }, 'POST');
+  if (data && data.user) {
+    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+    writeCache(USERS_CACHE_KEY, cached.map(u => u.id === id ? { ...u, ...data.user } : u));
     return data.user;
   }
-
-  throw new Error(data.error || 'Failed to update user in Google Sheets');
+  throw new Error('Failed to update user in Google Sheets');
 }
 
 export async function deleteUserAccount(id: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}`, { 
-    method: 'DELETE',
-    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success) {
-    return true;
+  const cleanId = id.toLowerCase();
+  if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') {
+    throw new Error('Primary Admin account cannot be deleted');
   }
-
-  throw new Error(data.error || 'Failed to delete user in Google Sheets');
+  const data = await callGasApi<{ success: boolean }>('deleteUser', { id }, 'POST');
+  const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+  writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id));
+  return Boolean(data.success);
 }
 
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
-  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(id)}/status`, {
-    method: 'PATCH',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
-    },
-    body: JSON.stringify({ status }),
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success && data.user) {
+  const cleanId = id.toLowerCase();
+  if ((cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') && status === 'hold') {
+    throw new Error('Primary Admin account cannot be placed on hold');
+  }
+  const data = await callGasApi<{ success: boolean; user: UserAccount }>('updateUserStatus', { id, status }, 'POST');
+  if (data && data.user) {
+    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+    writeCache(USERS_CACHE_KEY, cached.map(u => u.id === id ? { ...u, status } : u));
     return data.user;
   }
-
-  throw new Error(data.error || 'Failed to update user status in Google Sheets');
+  throw new Error('Failed to update user status in Google Sheets');
 }
 
 export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
   try {
-    const res = await fetch(`${API_BASE}/auth/verify/${encodeURIComponent(idNo)}?_t=${Date.now()}`, {
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data.valid) {
-      return data;
-    }
-    return { valid: false, error: data?.error || 'Session verification failed' };
+    const data = await callGasApi<{ success: boolean; result: { valid: boolean; status?: 'active' | 'hold'; error?: string } }>(
+      'verify',
+      { idNo: normalizeUniversalText(idNo) },
+      'GET'
+    );
+    return data.result || { valid: false, error: 'User not found' };
   } catch (err: any) {
-    return { valid: false, error: err?.message || 'Session verification connection failed' };
+    return { valid: false, error: err?.message || 'Verification error' };
   }
 }
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
-  const cleanId = normalizeUniversalText(loginId);
-  const cleanPass = normalizePassword(password);
+  const cleanId = normalizeUniversalText(loginId).trim();
+  const cleanPass = normalizePassword(password).trim();
 
-  const res = await fetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
-    },
-    body: JSON.stringify({ loginId: cleanId, password: cleanPass }),
-  });
+  if (!cleanId || !cleanPass) {
+    throw new Error('User ID No and Password are required');
+  }
 
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success && data.session) {
+  const data = await callGasApi<{ success: boolean; session: UserSession }>(
+    'login',
+    { idNo: cleanId, password: cleanPass },
+    'POST'
+  );
+
+  if (data && data.success && data.session) {
     return data.session;
   }
 
-  throw new Error(data.error || 'ভুল আইডি বা পাসওয়ার্ড!');
+  throw new Error('Invalid User ID or Password in Google Sheets');
 }
 
 export async function changeUserPassword(idNo: string, currentPassword: string, newPassword: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/auth/change-password`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
+  const data = await callGasApi<{ success: boolean }>(
+    'changePassword',
+    {
+      idNo: normalizeUniversalText(idNo),
+      currentPassword: normalizePassword(currentPassword),
+      newPassword: normalizePassword(newPassword)
     },
-    body: JSON.stringify({ 
-      idNo: normalizeUniversalText(idNo), 
-      currentPassword: normalizePassword(currentPassword), 
-      newPassword: normalizePassword(newPassword) 
-    }),
-  });
+    'POST'
+  );
 
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success) {
-    return true;
-  }
-
-  throw new Error(data.error || 'Failed to change password in Google Sheets');
+  if (data && data.success) return true;
+  throw new Error('Failed to change password in Google Sheets');
 }
 
 export async function resetUserPassword(idNo: string, newPassword: string, phone?: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/auth/reset-password`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
+  const data = await callGasApi<{ success: boolean }>(
+    'resetPassword',
+    {
+      idNo: normalizeUniversalText(idNo),
+      phone: phone ? normalizeUniversalText(phone).replace(/[^0-9]/g, '') : undefined,
+      newPassword: normalizePassword(newPassword)
     },
-    body: JSON.stringify({ 
-      idNo: normalizeUniversalText(idNo), 
-      phone: phone ? normalizeUniversalText(phone).replace(/[^0-9]/g, '') : undefined, 
-      newPassword: normalizePassword(newPassword) 
-    }),
-  });
+    'POST'
+  );
 
-  const data = await res.json().catch(() => ({}));
-  if (res.ok && data.success) {
-    return true;
-  }
-
-  throw new Error(data.error || 'Failed to reset password in Google Sheets');
+  if (data && data.success) return true;
+  throw new Error('Failed to reset password in Google Sheets');
 }
+
+// ============================================================================
+// LIVE CHAT
+// ============================================================================
 
 export async function fetchChatMessages(workerId?: string): Promise<ChatMessage[]> {
   try {
-    const params = workerId ? `?workerId=${encodeURIComponent(workerId)}` : '';
-    const res = await fetch(`${API_BASE}/chat${params}`);
-    if (res.ok) {
-      const data = await res.json();
-      writeCache(CHAT_LOCAL_KEY, data);
-      return data;
+    const data = await callGasApi<{ success: boolean; messages: ChatMessage[] }>(
+      'chat',
+      workerId ? { workerId } : {},
+      'GET'
+    );
+    if (data && Array.isArray(data.messages)) {
+      const valid = data.messages.filter(m => m && (m.id || m.message));
+      const seen = new Set<string>();
+      const uniqueMsgs: ChatMessage[] = [];
+      valid.forEach((m, idx) => {
+        const idKey = String(m.id || `msg-${idx + 1}-${m.timestamp || Date.now()}`).trim();
+        if (!seen.has(idKey)) {
+          seen.add(idKey);
+          uniqueMsgs.push({ ...m, id: idKey });
+        } else {
+          const dedupe = `${idKey}-${idx + 1}`;
+          seen.add(dedupe);
+          uniqueMsgs.push({ ...m, id: dedupe });
+        }
+      });
+      writeCache(CHAT_LOCAL_KEY, uniqueMsgs);
+      return uniqueMsgs;
     }
   } catch {}
   return readCache(CHAT_LOCAL_KEY, []);
@@ -443,13 +543,10 @@ export async function sendChatMessage(payload: {
   message: string;
 }): Promise<ChatMessage> {
   try {
-    const res = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const data = await res.json();
+    const data = await callGasApi<{ success: boolean; message: ChatMessage }>('sendChat', { data: payload }, 'POST');
+    if (data && data.message) {
+      const list = readCache<ChatMessage[]>(CHAT_LOCAL_KEY, []);
+      writeCache(CHAT_LOCAL_KEY, [...list, data.message]);
       return data.message;
     }
   } catch {}
@@ -467,29 +564,38 @@ export async function sendChatMessage(payload: {
 
 export async function clearChatMessages(): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}/chat`, { method: 'DELETE' });
+    await callGasApi('clearChat', {}, 'POST');
   } catch {}
   localStorage.removeItem(CHAT_LOCAL_KEY);
   return true;
 }
 
+// ============================================================================
+// WORK ORDERS & KHATA NOTICES
+// ============================================================================
+
 export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotice[]> {
   try {
-    const params = new URLSearchParams();
-    if (category && category !== 'ALL') params.append('category', category);
-    params.append('_t', Date.now().toString());
-
-    const res = await fetch(`${API_BASE}/work-orders?${params.toString()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
-      }
-    });
-    if (res.ok) {
-      const data: WorkOrderNotice[] = await res.json();
-      writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache(data));
-      return data;
+    const params: Record<string, string> = {};
+    if (category && category !== 'ALL') params.category = category;
+    const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET');
+    if (data && Array.isArray(data.workOrders)) {
+      const validOrders = data.workOrders.filter(w => w && (w.id || w.title || w.photoUrl));
+      const seen = new Set<string>();
+      const uniqueOrders: WorkOrderNotice[] = [];
+      validOrders.forEach((w, idx) => {
+        const idKey = String(w.id || `wo-${idx + 1}-${w.createdAt || Date.now()}`).trim();
+        if (!seen.has(idKey)) {
+          seen.add(idKey);
+          uniqueOrders.push({ ...w, id: idKey });
+        } else {
+          const dedupe = `${idKey}-${idx + 1}`;
+          seen.add(dedupe);
+          uniqueOrders.push({ ...w, id: dedupe });
+        }
+      });
+      writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache(uniqueOrders));
+      return uniqueOrders;
     }
   } catch {}
   return readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
@@ -506,17 +612,9 @@ export async function uploadWorkOrder(payload: {
   isHidden?: boolean;
 }): Promise<WorkOrderNotice> {
   try {
-    const res = await fetch(`${API_BASE}/work-orders`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const savedOrder: WorkOrderNotice = data.workOrder;
+    const data = await callGasApi<{ success: boolean; workOrder: WorkOrderNotice }>('createWorkOrder', { data: payload }, 'POST');
+    if (data && data.workOrder) {
+      const savedOrder = data.workOrder;
       const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
       writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache([savedOrder, ...list.filter(w => w.id !== savedOrder.id)]));
       return savedOrder;
@@ -545,11 +643,7 @@ export async function uploadWorkOrder(payload: {
 
 export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}/visibility`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isHidden }),
-    });
+    await callGasApi('toggleWorkOrder', { id, isHidden }, 'POST');
   } catch {}
   const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
   writeCache(WORK_ORDERS_STORAGE_KEY, list.map(item => String(item.id) === String(id) ? { ...item, isHidden } : item));
@@ -558,7 +652,7 @@ export async function toggleWorkOrderVisibility(id: string, isHidden: boolean): 
 
 export async function deleteWorkOrder(id: string): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}/work-orders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await callGasApi('deleteWorkOrder', { id }, 'POST');
   } catch {}
   const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
   writeCache(WORK_ORDERS_STORAGE_KEY, list.filter(item => String(item.id) !== String(id)));

@@ -457,12 +457,12 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {displayedNotices.map((notice) => {
+          {displayedNotices.map((notice, idx) => {
             const isSelected = selectedNoticeId === notice.id;
             const isNoticeHidden = Boolean(notice.isHidden);
             return (
               <div
-                key={notice.id}
+                key={`${notice.id || 'notice'}-${idx}`}
                 onClick={() => setPreviewNotice(notice)}
                 className={`bg-white border-2 rounded-xl overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between ${
                   isNoticeHidden

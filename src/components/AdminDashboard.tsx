@@ -49,7 +49,6 @@ import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
 import { Language, translations } from '../utils/translations';
-import { googleSignIn, getAccessToken, googleLogout } from '../services/googleAuth';
 import { 
   syncAllEntriesToGoogleSheet, 
   getSavedSpreadsheetUrl, 
@@ -93,20 +92,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSyncingSheets(true);
     setSheetsSyncMessage(null);
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        // Trigger Google OAuth sign-in popup
-        const authRes = await googleSignIn();
-        token = authRes?.accessToken || null;
-      }
-
-      if (!token) {
-        alert(lang === 'bn' ? 'Google একাউন্টে সাইন ইন করা যায়নি।' : 'Google Sign-in failed or was cancelled.');
-        setIsSyncingSheets(false);
-        return;
-      }
-
-      const result = await syncAllEntriesToGoogleSheet(entries, undefined, token);
+      const result = await syncAllEntriesToGoogleSheet(entries);
       setCurrentSheetUrl(result.sheetUrl);
       setSheetsSyncMessage(
         lang === 'bn'
@@ -1497,7 +1483,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {/* Dynamic Table Body */}
                 <tbody className="divide-y divide-slate-100">
-                  {filteredEntries.map((item) => {
+                  {filteredEntries.map((item, idx) => {
                     const isNsc = item.category === 'NSC';
                     const isDisc = item.category === 'DISCONNECTION';
                     const isPole = item.category === 'POLE CASE';
@@ -1506,7 +1492,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     return (
                       <tr 
-                        key={item.id} 
+                        key={`${item.id || 'admin-row'}-${idx}`} 
                         className="hover:bg-slate-50/90 transition-colors group cursor-pointer"
                         onClick={() => setSelectedEntry(item)}
                       >

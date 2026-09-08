@@ -109,14 +109,14 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
 
       {/* Grid of 5 Category Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 sm:gap-4">
-        {categories.map((cat) => {
+        {categories.map((cat, idx) => {
           const Icon = cat.icon;
           const isSelected = selectedCategory === cat.id;
           const count = categoryCounts[cat.id] || 0;
 
           return (
             <button
-              key={cat.id}
+              key={`${cat.id}-${idx}`}
               type="button"
               onClick={() => onSelectCategory(cat.id)}
               className={`text-left p-4 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative cursor-pointer group bg-white shadow-xs ${cat.cardHover} ${
