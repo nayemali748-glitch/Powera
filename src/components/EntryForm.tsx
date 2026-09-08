@@ -29,7 +29,7 @@ import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types
 import { createEntry } from '../services/api';
 import { appendEntryToGoogleSheet } from '../services/googleSheets';
 import { Language, translations } from '../utils/translations';
-import { WorkOrderNoticeSection, resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
+import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 import { compressImageFile } from '../utils/imageCompressor';
 
 interface EntryFormProps {
@@ -236,31 +236,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         setIsCompressing(false);
         e.target.value = '';
       }
-    }
-  };
-
-  const setSamplePhoto = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 400;
-    canvas.height = 300;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, 400, 300);
-      ctx.fillStyle = '#f59e0b';
-      ctx.font = 'bold 18px sans-serif';
-      ctx.fillText(`WBSEDCL FIELD OPS: ${category}`, 20, 50);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '13px sans-serif';
-      ctx.fillText(`Date: ${new Date().toLocaleDateString()}`, 20, 90);
-      ctx.fillText(`Lineman: ${worker}`, 20, 120);
-      ctx.fillText(`Ref: ${consumerId || poleNo || dtrName || applicationNo || 'Field Point'}`, 20, 150);
-      ctx.fillStyle = '#10b981';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.fillText(`✓ WBSEDCL Field Evidence Verified`, 20, 200);
-      setIsVideo(false);
-      setPhotoPreview(canvas.toDataURL());
-      clearError('photo');
     }
   };
 
@@ -603,16 +578,30 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         </div>
       )}
 
-      {/* WORK ORDER / KHATA PHOTO BOARD (Independent Work Order Board for NSC) */}
-      {category === 'NSC' && (
-        <div className="p-5 sm:p-7 pb-0">
-          <WorkOrderNoticeSection 
-            category={category} 
-            currentUser={currentUser} 
-            lang={lang} 
-            selectedNoticeId={selectedWorkOrderNotice?.id}
-            onSelectNotice={(notice) => setSelectedWorkOrderNotice(notice)}
-          />
+      {/* Optional Linked Work Order Banner if selected by user */}
+      {selectedWorkOrderNotice && (
+        <div className="mx-5 sm:mx-7 mt-5 p-3.5 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <img 
+              src={resolveWorkOrderImageUrl(selectedWorkOrderNotice)} 
+              alt={selectedWorkOrderNotice.title} 
+              className="w-12 h-12 object-cover rounded-lg border border-amber-300 shrink-0" 
+            />
+            <div className="overflow-hidden">
+              <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider block">
+                {lang === 'bn' ? '✓ সংযুক্ত ওয়ার্ক অর্ডার ও খাতা' : '✓ Linked Work Order & Khata'}
+              </span>
+              <p className="text-xs font-black text-slate-900 truncate">{selectedWorkOrderNotice.title}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedWorkOrderNotice(null)}
+            className="text-xs text-slate-600 hover:text-red-600 px-2.5 py-1.5 rounded-lg hover:bg-red-50 font-bold transition-colors cursor-pointer border border-slate-200"
+            title="Remove work order link"
+          >
+            {lang === 'bn' ? 'বাতিল করুন' : 'Unlink'}
+          </button>
         </div>
       )}
 
@@ -2056,17 +2045,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                     disabled={isCompressing}
                   />
                 </label>
-
-                {/* Sample Stamp */}
-                <button
-                  type="button"
-                  onClick={setSamplePhoto}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer border border-slate-200"
-                  title="Generate sample verified photo stamp"
-                  disabled={isCompressing}
-                >
-                  {t.takeSamplePhoto}
-                </button>
               </div>
             </div>
           </div>

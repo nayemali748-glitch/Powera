@@ -15,7 +15,6 @@ import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, Work
 import { fetchEntries, fetchStats, fetchWorkOrders } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
-import { AdminNoticesBanner } from './components/AdminNoticesBanner';
 import { 
   Zap, 
   ShieldCheck, 
@@ -754,19 +753,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* ADMIN NOTICES & WORK ORDERS (What Admin gave - visible to Workers) */}
-                  <AdminNoticesBanner
-                    workOrders={workOrders}
-                    onSelectNoticeForEntry={(notice) => {
-                      setSelectedWorkOrderForEntry(notice);
-                      setSelectedCategory(notice.category);
-                      setActiveFormCategory(notice.category);
-                    }}
-                    onViewAllNotices={() => setActiveTab('work-orders')}
-                    lang={currentLanguage}
-                    isAdmin={isAdmin}
-                  />
-
                   {/* 5 Work Category Cards Selector */}
                   <CategorySelector
                     selectedCategory={selectedCategory}
@@ -795,15 +781,6 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          onClick={() => {
-                            setActiveTab('work-orders');
-                          }}
-                          className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                          <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা' : 'Work Orders & Khata'}</span>
-                        </button>
                         <button
                           onClick={() => {
                             setSelectedCategory('NSC');

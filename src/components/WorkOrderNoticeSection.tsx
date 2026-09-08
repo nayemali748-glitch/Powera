@@ -186,54 +186,6 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     }
   };
 
-  const handleCreateSampleKhataPhoto = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 600;
-    canvas.height = 400;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = '#fffbeb';
-      ctx.fillRect(0, 0, 600, 400);
-
-      ctx.strokeStyle = '#b45309';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(10, 10, 580, 380);
-
-      ctx.fillStyle = '#78350f';
-      ctx.font = 'bold 20px sans-serif';
-      ctx.fillText('⚡ WBSEDCL - NSC DAILY WORK ORDER KHATA', 25, 45);
-
-      ctx.fillStyle = '#92400e';
-      ctx.font = 'bold 14px monospace';
-      ctx.fillText(`DATE: ${new Date().toLocaleDateString('en-GB')}  |  FEEDER: TOWN-1`, 25, 75);
-
-      // Lines simulating khata
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 1;
-      for (let y = 100; y <= 350; y += 30) {
-        ctx.beginPath();
-        ctx.moveTo(25, y);
-        ctx.lineTo(575, y);
-        ctx.stroke();
-      }
-
-      ctx.fillStyle = '#1e293b';
-      ctx.font = '13px sans-serif';
-      ctx.fillText('1. Con: Anup Das | App: CA-9812 | Meter: WB26-88124 | Load: 2kW', 30, 120);
-      ctx.fillText('2. Con: Rekha Roy | App: CA-9815 | Meter: WB26-88125 | Load: 1kW', 30, 150);
-      ctx.fillText('3. Con: Subir Paul | App: CA-9820 | Meter: WB26-88128 | Load: 3kW', 30, 180);
-      ctx.fillText('4. Con: Sk. Nazrul | App: CA-9822 | Meter: WB26-88130 | Load: 2kW', 30, 210);
-
-      ctx.fillStyle = '#059669';
-      ctx.font = 'bold 13px sans-serif';
-      ctx.fillText('✓ Approved by WBSEDCL Sub-Division Office', 30, 320);
-
-      setUploadFileName(`WBSEDCL_Sample_Khata_${Date.now()}.jpg`);
-      setUploadFileType('image/jpeg');
-      setPhotoPreview(canvas.toDataURL('image/jpeg', 0.85));
-    }
-  };
-
   const handleUploadSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e) {
       e.preventDefault();
@@ -918,15 +870,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   />
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[11px] text-slate-500">
-                      {lang === 'bn' ? '📷 ক্যামেরা বা ফাইল থেকে ছবি দিন' : '📷 Take photo or upload from gallery'}
+                      {lang === 'bn' ? '📷 ক্যামেরা বা ফাইল থেকে আসল ছবি দিন' : '📷 Take photo or upload from gallery'}
                     </span>
-                    <button
-                      type="button"
-                      onClick={handleCreateSampleKhataPhoto}
-                      className="text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-2 py-1 rounded-md border border-amber-300 cursor-pointer transition-colors"
-                    >
-                      {lang === 'bn' ? '⚡ ডেমো খাতার ছবি তৈরি করুন' : '⚡ Generate Sample Khata'}
-                    </button>
                   </div>
                   {isCompressing && (
                     <div className="p-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-xs font-bold flex items-center gap-2 animate-pulse">
