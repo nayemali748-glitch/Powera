@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import dns from 'dns';
-import { createServer as createViteServer } from 'vite';
 
 // Ensure IPv4 resolution first for stable script.google.com connection
 try {
@@ -82,14 +81,26 @@ app.use(express.json({ limit: '80mb' }));
 app.use(express.urlencoded({ limit: '80mb', extended: true }));
 
 // Ensure data directory exists for local non-user data (entries and chat)
-const DATA_DIR = path.join(process.cwd(), 'data');
+let DATA_DIR = path.join(process.cwd(), 'data');
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch {
+  try {
+    const tmpDir = process.env.TMPDIR || '/tmp';
+    DATA_DIR = path.join(tmpDir, 'power_data');
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {
+    // Keep in-memory cache if filesystem is strictly read-only
+  }
+}
+
 const DATA_FILE = path.join(DATA_DIR, 'entries.json');
 const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
 const WORK_ORDERS_FILE = path.join(DATA_DIR, 'work_orders.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
 
 // Security Middleware & Headers
 app.use((req, res, next) => {
@@ -163,8 +174,7 @@ function writeWorkOrders(orders: any[]) {
     }
     fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error writing work orders:', err);
-    throw err;
+    console.warn('Filesystem write warning (orders cached in memory):', err);
   }
 }
 
@@ -203,15 +213,14 @@ function writeEntries(entries: any[]) {
     }
     fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error writing entries:', err);
-    throw err;
+    console.warn('Filesystem write warning (entries cached in memory):', err);
   }
 }
 
-// REST API Endpoints
-app.get('/api/health', (req, res) => {
+// REST API Endpoints & Health checks for Cloud Run deployment probes
+app.get(['/health', '/healthz', '/api/health'], (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.json({ status: 'ok', app: 'POWER Utility Management' });
+  res.status(200).json({ status: 'ok', app: 'POWER Utility Management' });
 });
 
 // Get all entries with optional category/status/search query (from Google Sheets via GAS)
@@ -1078,22 +1087,45 @@ app.get('/api/stats', (req, res) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    process.argv.some(arg => typeof arg === 'string' && (arg.includes('dist') || arg.endsWith('.cjs')));
+
+  const distPath = path.join(process.cwd(), 'dist');
+
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>POWER Utility Management</title></head><body><div id="root"></div></body></html>');
+      }
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`⚡ POWER server running on http://localhost:${PORT}`);
+  });
+
+  process.on('SIGTERM', () => {
+    server.close(() => {
+      process.exit(0);
+    });
+  });
+
+  process.on('SIGINT', () => {
+    server.close(() => {
+      process.exit(0);
+    });
   });
 }
 
