@@ -150,8 +150,14 @@ export async function callGasApi<T = any>(
   }
 }
 
-// Background sync for offline submissions
+// In-flight request deduplication map to prevent concurrent duplicate submissions
+const inFlightSubmissions = new Map<string, Promise<PowerEntry>>();
+
+// Background sync for offline submissions (idempotent, won't duplicate)
+let isSyncingPending = false;
 export async function syncPendingEntries(): Promise<number> {
+  if (isSyncingPending) return 0;
+  isSyncingPending = true;
   let syncedCount = 0;
   try {
     const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -163,8 +169,8 @@ export async function syncPendingEntries(): Promise<number> {
     for (const item of pending) {
       try {
         const { _isPendingSync, ...cleanItem } = item;
-        const res = await callGasApi('createEntry', { data: cleanItem }, 'POST');
-        if (res && res.success) {
+        const res = await callGasApi<{ success: boolean; entry?: PowerEntry; duplicate?: boolean }>('createEntry', { data: cleanItem }, 'POST');
+        if (res && (res.success || res.duplicate)) {
           item._isPendingSync = false;
           syncedCount++;
         }
@@ -178,6 +184,8 @@ export async function syncPendingEntries(): Promise<number> {
     }
   } catch (err) {
     console.warn('Error during syncPendingEntries:', err);
+  } finally {
+    isSyncingPending = false;
   }
   return syncedCount;
 }
@@ -191,9 +199,6 @@ export async function fetchEntries(filters?: {
   status?: string;
   search?: string;
 }): Promise<PowerEntry[]> {
-  // Trigger background sync of any offline items
-  syncPendingEntries().catch(() => {});
-
   try {
     const params: Record<string, string> = {};
     if (filters?.category && filters.category !== 'ALL') params.category = filters.category;
@@ -202,7 +207,7 @@ export async function fetchEntries(filters?: {
 
     const data = await callGasApi<{ success: boolean; entries: PowerEntry[] }>('entries', params, 'GET');
     const rawList = Array.isArray(data.entries) ? data.entries : [];
-    // Filter out completely blank rows from Google Sheets (must have id, category, or consumer/app info)
+    // Filter out completely blank rows from Google Sheets
     const validList = rawList.filter(item => item && (
       (item.id && String(item.id).trim() !== '') || 
       (item.category && String(item.category).trim() !== '') || 
@@ -211,23 +216,36 @@ export async function fetchEntries(filters?: {
       (item.applicationNo && String(item.applicationNo).trim() !== '')
     ));
 
-    // Ensure every single entry has a distinct, guaranteed-unique ID
-    const seenIds = new Set<string>();
+    // STRICT DEDUPLICATION: One worker action = One single record displayed in Admin & Worker view
+    const seenKeys = new Set<string>();
     const uniqueEntries: PowerEntry[] = [];
-    validList.forEach((item, idx) => {
-      let effectiveId = String(item.id || '').trim();
-      if (!effectiveId) {
-        effectiveId = `PWR-${Date.now()}-${idx + 1}`;
-      }
-      if (!seenIds.has(effectiveId)) {
-        seenIds.add(effectiveId);
-        uniqueEntries.push({ ...item, id: effectiveId });
+
+    for (const item of validList) {
+      const subId = item.submissionId ? String(item.submissionId).trim() : '';
+      const idVal = item.id ? String(item.id).trim() : '';
+      const catVal = String(item.category || '').trim().toUpperCase();
+      const consVal = String(item.consumerId || '').trim().toLowerCase();
+      const meterVal = String(item.meterNo || '').trim().toLowerCase();
+      const appNo = String(item.applicationNo || '').trim().toLowerCase();
+
+      let primaryKey = '';
+      if (subId && subId.startsWith('SUB-')) {
+        primaryKey = `SUB:${subId}`;
+      } else if (idVal && idVal.startsWith('PWR-')) {
+        primaryKey = `ID:${idVal}`;
+      } else if (consVal && meterVal) {
+        primaryKey = `DATA:${catVal}:${consVal}:${meterVal}`;
+      } else if (appNo) {
+        primaryKey = `APP:${catVal}:${appNo}`;
       } else {
-        const deduplicatedId = `${effectiveId}-${idx + 1}`;
-        seenIds.add(deduplicatedId);
-        uniqueEntries.push({ ...item, id: deduplicatedId });
+        primaryKey = `RAW:${idVal || Math.random()}`;
       }
-    });
+
+      if (!seenKeys.has(primaryKey)) {
+        seenKeys.add(primaryKey);
+        uniqueEntries.push(item);
+      }
+    }
     
     // Save to local cache for instant UI availability
     writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
@@ -254,32 +272,89 @@ export async function fetchEntries(filters?: {
   }
 }
 
+// Map category to explicit Apps Script action
+function getCreateActionForCategory(cat?: string): string {
+  const c = String(cat || '').toUpperCase();
+  if (c === 'NSC') return 'createNSC';
+  if (c === 'DISCONNECTION') return 'createDisconnection';
+  if (c === 'POLE CASE' || c === 'POLE_CASE') return 'createPoleCase';
+  if (c === 'METER REPLESMENT' || c === 'METER_REPLACEMENT') return 'createMeterReplacement';
+  if (c === 'DTR REPLESMENT' || c === 'DTR_REPLACEMENT') return 'createDTRReplacement';
+  return 'createEntry';
+}
+
 export async function createEntry(entryData: Partial<PowerEntry>): Promise<PowerEntry> {
+  // Guaranteed single unique Submission ID across entire lifecycle
+  const submissionId = entryData.submissionId || `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+  
+  // If an identical submission is already currently executing in-flight, return the existing Promise
+  if (inFlightSubmissions.has(submissionId)) {
+    return inFlightSubmissions.get(submissionId)!;
+  }
+
   const generatedId = entryData.id || `PWR-${Date.now().toString().slice(-6)}`;
   const nowIso = new Date().toISOString();
   const cleanEntry: PowerEntry = {
     ...entryData as any,
+    submissionId,
     id: generatedId,
     date: entryData.date || nowIso,
     createdAt: entryData.createdAt || nowIso,
     status: entryData.status || 'Completed',
   };
 
-  // Immediate local cache update for instant UI feedback (0ms delay)
-  try {
-    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([cleanEntry, ...list.filter(e => e.id !== cleanEntry.id)]));
-  } catch {}
+  const action = getCreateActionForCategory(cleanEntry.category);
 
+  const promise = (async () => {
+    // Immediate local cache update for instant UI feedback (0ms delay)
+    try {
+      const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+      // Deduplicate in cache: replace if matching id or submissionId
+      const filtered = list.filter(e => e.id !== cleanEntry.id && e.submissionId !== cleanEntry.submissionId);
+      writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([cleanEntry, ...filtered]));
+    } catch {}
+
+    try {
+      const res = await callGasApi<{ success: boolean; entry?: PowerEntry; duplicate?: boolean; recordId?: string }>(
+        action,
+        { data: cleanEntry },
+        'POST',
+        25000
+      );
+
+      const returned = res.entry || cleanEntry;
+      return returned;
+    } catch (error) {
+      console.warn('Google Sheets createEntry error, marked with pending sync flag:', error);
+      const fallbackEntry = { ...cleanEntry, _isPendingSync: true };
+      const list = readCache<any[]>(LOCAL_STORAGE_KEY, []);
+      const filtered = list.filter(e => e.id !== fallbackEntry.id && e.submissionId !== fallbackEntry.submissionId);
+      writeCache(LOCAL_STORAGE_KEY, [fallbackEntry, ...filtered].slice(0, 100));
+      return cleanEntry;
+    } finally {
+      inFlightSubmissions.delete(submissionId);
+    }
+  })();
+
+  inFlightSubmissions.set(submissionId, promise);
+  return promise;
+}
+
+// Cleanup duplicates on Google Sheets and local storage
+export async function cleanupDuplicatesApi(sheetName?: string): Promise<{ success: boolean; message: string; details?: any }> {
   try {
-    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('createEntry', { data: cleanEntry }, 'POST');
-    return res.entry || cleanEntry;
-  } catch (error) {
-    console.warn('Google Sheets createEntry error, saved locally with pending sync flag:', error);
-    const fallbackEntry = { ...cleanEntry, _isPendingSync: true };
-    const list = readCache<any[]>(LOCAL_STORAGE_KEY, []);
-    writeCache(LOCAL_STORAGE_KEY, [fallbackEntry, ...list.filter(e => e.id !== fallbackEntry.id)].slice(0, 100));
-    return cleanEntry;
+    const res = await callGasApi<{ success: boolean; message: string; details?: any }>(
+      'cleanupDuplicates',
+      { sheetName },
+      'POST',
+      30000
+    );
+    // Refresh local cache with deduplicated entries
+    await fetchEntries();
+    return res;
+  } catch (err: any) {
+    console.error('cleanupDuplicates error:', err);
+    throw err;
   }
 }
 

@@ -226,12 +226,17 @@ export default function App() {
 
   const handleEntrySuccess = (newEntry: PowerEntry) => {
     setEntries((prev) => {
-      const updated = [newEntry, ...prev.filter(e => e.id !== newEntry.id)];
+      const updated = [
+        newEntry,
+        ...prev.filter(e => e.id !== newEntry.id && (!newEntry.submissionId || e.submissionId !== newEntry.submissionId))
+      ];
       lastDataHashRef.current = computeJsonChangeHash(updated);
       return updated;
     });
     setActiveFormCategory(null);
-    loadData(true);
+    setTimeout(() => {
+      loadData(true);
+    }, 1200);
   };
 
   const handleAdminLogin = (pin?: string): boolean => {

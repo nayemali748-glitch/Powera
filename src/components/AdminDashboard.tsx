@@ -94,10 +94,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const result = await syncAllEntriesToGoogleSheet(entries);
       setCurrentSheetUrl(result.sheetUrl);
+      if (onRefresh) onRefresh();
       setSheetsSyncMessage(
         lang === 'bn'
-          ? `সফলভাবে ${result.syncedCount} টি এন্ট্রি Google Sheets-এ লাইভ ব্যাকআপ ও সেভ হয়েছে!`
-          : `Successfully synced ${result.syncedCount} records to Google Sheets!`
+          ? `সফলভাবে ${result.syncedCount} টি এন্ট্রি Google Sheets থেকে রিফ্রেশ ও সিঙ্ক হয়েছে!`
+          : `Successfully refreshed and synced ${result.syncedCount} records from Google Sheets!`
       );
     } catch (err: any) {
       console.error('Failed to sync to Google Sheets:', err);

@@ -223,8 +223,33 @@ app.get('/api/entries', async (req, res) => {
     const result = await callGoogleAppsScript('entries', req.query, 'GET');
     if (result && result.success && Array.isArray(result.entries)) {
       const cleanList = result.entries.filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== '')));
-      writeEntries(cleanList);
-      return res.json(cleanList);
+      
+      // Deduplicate to guarantee single record per submission
+      const seenKeys = new Set<string>();
+      const dedupedList: any[] = [];
+      for (const e of cleanList) {
+        const subId = e.submissionId ? String(e.submissionId).trim() : '';
+        const idVal = e.id ? String(e.id).trim() : '';
+        const catVal = String(e.category || '').trim().toUpperCase();
+        const consVal = String(e.consumerId || '').trim().toLowerCase();
+        const meterVal = String(e.meterNo || '').trim().toLowerCase();
+        const appNo = String(e.applicationNo || '').trim().toLowerCase();
+
+        let key = '';
+        if (subId && subId.startsWith('SUB-')) key = `SUB:${subId}`;
+        else if (idVal && idVal.startsWith('PWR-')) key = `ID:${idVal}`;
+        else if (consVal && meterVal) key = `DATA:${catVal}:${consVal}:${meterVal}`;
+        else if (appNo) key = `APP:${catVal}:${appNo}`;
+        else key = `RAW:${idVal || Math.random()}`;
+
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          dedupedList.push(e);
+        }
+      }
+
+      writeEntries(dedupedList);
+      return res.json(dedupedList);
     }
   } catch (e) {
     console.warn('Failed to fetch entries from Google Sheets, using local cache:', e);
@@ -260,17 +285,21 @@ app.get('/api/entries', async (req, res) => {
 app.post('/api/entries', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const submissionId = req.body.submissionId || `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     const newEntry = {
       ...req.body,
+      submissionId,
       id: req.body.id || `PWR-${Date.now().toString().slice(-6)}`,
       date: req.body.date || req.body.createdAt || new Date().toISOString(),
       createdAt: req.body.createdAt || req.body.date || new Date().toISOString(),
       status: req.body.status || 'Completed'
     };
 
-    // Update local cache immediately
+    // Update local cache immediately with deduplication check
     const entries = readEntries();
-    const existingIndex = entries.findIndex((e: any) => e.id === newEntry.id);
+    const existingIndex = entries.findIndex((e: any) => 
+      (e.submissionId && e.submissionId === newEntry.submissionId) || e.id === newEntry.id
+    );
     if (existingIndex !== -1) {
       entries[existingIndex] = { ...entries[existingIndex], ...newEntry };
     } else {

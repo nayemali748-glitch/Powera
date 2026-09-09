@@ -9,6 +9,7 @@ export type StatusType = 'Pending' | 'In Progress' | 'Completed' | 'Approved' | 
 
 export interface PowerEntry {
   id: string;
+  submissionId?: string;
   category: CategoryType;
   date: string;
   workerName: string;

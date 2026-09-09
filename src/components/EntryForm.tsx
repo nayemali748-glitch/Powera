@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Zap, 
   Send, 
@@ -54,6 +54,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const t = translations[lang] || translations.bn;
 
   const [loading, setLoading] = useState(false);
+  const isSubmittingRef = useRef<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submissionModalEntry, setSubmissionModalEntry] = useState<PowerEntry | null>(null);
   const [fetchingGps, setFetchingGps] = useState(false);
@@ -369,6 +370,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
     setHasAttemptedSubmit(true);
 
     const validation = validateForm();
@@ -388,14 +390,17 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       return;
     }
 
+    isSubmittingRef.current = true;
     setValidationErrors({});
     setLoading(true);
     setSuccessMessage(null);
 
+    const submissionId = `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
     const entryPayload: Partial<PowerEntry> = {
+      submissionId,
       id: generatedId,
       category,
       workerName: (category === 'NSC' ? nscWorkerName : worker).trim(),
@@ -507,10 +512,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       } catch (e) {
         // ignore
       }
-      // Asynchronously append to Google Sheet if Google Auth is active
-      appendEntryToGoogleSheet(created).catch((sheetErr) => {
-        console.warn('Google Sheet auto-sync notice:', sheetErr);
-      });
 
       setSuccessMessage(t.entryCreatedSuccess);
       setSubmissionModalEntry(created);
@@ -520,6 +521,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       alert('Error saving data: ' + (err.message || 'Check connection'));
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        isSubmittingRef.current = false;
+      }, 1000);
     }
   };
 
@@ -2184,9 +2188,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             <button
               type="button"
               onClick={() => {
-                const entry = submissionModalEntry;
                 setSubmissionModalEntry(null);
-                onSuccess(entry);
               }}
               className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2"
             >
