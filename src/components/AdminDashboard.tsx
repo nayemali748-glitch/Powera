@@ -43,7 +43,7 @@ import {
   Hash,
   ArrowRight
 } from 'lucide-react';
-import { PowerEntry, CategoryType, StatusType } from '../types';
+import { PowerEntry, CategoryType, StatusType, SyncMode } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
 import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
@@ -63,6 +63,7 @@ interface AdminDashboardProps {
   onLogout?: () => void;
   lang?: Language;
   onOpenLanguageModal?: () => void;
+  syncMode?: SyncMode;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -72,6 +73,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onLogout,
   lang = 'bn',
   onOpenLanguageModal,
+  syncMode = 'auto',
 }) => {
   const t = translations[lang] || translations.bn;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
@@ -465,14 +467,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Auto-refresh entries when Admin Dashboard is active to immediately reflect worker submissions
+  // Auto-refresh entries when Admin Dashboard is active to immediately reflect worker submissions (respects manual sync to conserve mobile data)
   React.useEffect(() => {
     onRefresh();
-    const interval = setInterval(() => {
-      onRefresh();
-    }, 8000);
-    return () => clearInterval(interval);
-  }, []);
+    if (syncMode === 'auto') {
+      const interval = setInterval(() => {
+        onRefresh();
+      }, 8000);
+      return () => clearInterval(interval);
+    }
+  }, [syncMode]);
 
   // Filter calculations
   const filteredEntries = entries.filter((item) => {

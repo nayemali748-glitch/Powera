@@ -79,7 +79,7 @@ export async function callGasApi<T = any>(
   action: string,
   payload: any = {},
   method: 'GET' | 'POST' = 'GET',
-  timeoutMs = 15000
+  timeoutMs = 25000
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -198,12 +198,16 @@ export async function fetchEntries(filters?: {
   category?: string;
   status?: string;
   search?: string;
+  workerId?: string;
+  workerName?: string;
 }): Promise<PowerEntry[]> {
   try {
     const params: Record<string, string> = {};
     if (filters?.category && filters.category !== 'ALL') params.category = filters.category;
     if (filters?.status && filters.status !== 'ALL') params.status = filters.status;
     if (filters?.search) params.search = filters.search;
+    if (filters?.workerId) params.workerId = filters.workerId;
+    if (filters?.workerName) params.workerName = filters.workerName;
 
     const data = await callGasApi<{ success: boolean; entries: PowerEntry[] }>('entries', params, 'GET');
     const rawList = Array.isArray(data.entries) ? data.entries : [];
@@ -548,7 +552,8 @@ export async function loginUser(loginId: string, password: string): Promise<User
   const data = await callGasApi<{ success: boolean; session: UserSession }>(
     'login',
     { idNo: cleanId, password: cleanPass },
-    'POST'
+    'POST',
+    25000
   );
 
   if (data && data.success && data.session) {

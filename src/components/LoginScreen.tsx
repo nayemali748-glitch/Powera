@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import appLogo from '../assets/images/power_round_logo_1787860440979.jpg';
 import { 
   Zap, 
@@ -60,25 +60,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // Screen mode: 'login' | 'register' | 'forgot'
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
 
-  // Accounts list loaded exclusively from Google Sheets backend
+  // Accounts list (lazy-loaded if user registers or resets password)
   const [accounts, setAccounts] = useState<UserAccount[]>([]);
-
-  // Load latest users from backend on mount
-  useEffect(() => {
-    fetchUsers().then(users => {
-      if (users && users.length > 0) {
-        setAccounts(users);
-      }
-    }).catch(err => {
-      console.warn('Failed to load accounts from server:', err);
-    });
-  }, []);
 
   // --- LOGIN STATE ---
   // Default to empty strings so credentials remain private and secret
   const [loginId, setLoginId] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const isLoggingInRef = useRef(false);
 
   // --- REGISTER (CREATE ACCOUNT) STATE ---
   const [regRole, setRegRole] = useState<'admin' | 'worker'>('worker');
@@ -113,14 +104,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setSuccessMsg(null);
   }, [mode]);
 
-  // Handle Login Submit
+  // Handle Login Submit - STRICT 1 CLICK = 1 REQUEST WITH SUBMISSION LOCK
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoggingInRef.current || isLoggingIn || loading) {
+      return;
+    }
     setError(null);
 
     const cleanId = normalizeUniversalText(loginId);
     const cleanPass = normalizePassword(loginPassword);
-    const cleanIdLower = cleanId.toLowerCase();
 
     if (!cleanId) {
       setError('অনুগ্রহ করে আপনার User ID প্রবেশ করান');
@@ -132,6 +125,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
+    isLoggingInRef.current = true;
+    setIsLoggingIn(true);
     setLoading(true);
 
     try {
@@ -140,18 +135,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     } catch (err: any) {
       setError(err.message || 'ভুল আইডি বা পাসওয়ার্ড! সঠিক এডমিন / কর্মী আইডি প্রবেশ করান।');
     } finally {
+      isLoggingInRef.current = false;
+      setIsLoggingIn(false);
       setLoading(false);
     }
   };
 
   // Handle Quick 1-Click Login
   const handleQuickLogin = async (accIdNo: string, accPass: string) => {
+    if (isLoggingInRef.current || isLoggingIn || loading) {
+      return;
+    }
     setError(null);
     const cleanId = normalizeUniversalText(accIdNo);
     const cleanPass = normalizePassword(accPass);
     setLoginId(cleanId);
     setLoginPassword(cleanPass);
 
+    isLoggingInRef.current = true;
+    setIsLoggingIn(true);
     setLoading(true);
     try {
       const session = await loginUser(cleanId, cleanPass);
@@ -159,6 +161,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     } catch (err: any) {
       setError(err.message || 'লগইন ব্যর্থ হয়েছে');
     } finally {
+      isLoggingInRef.current = false;
+      setIsLoggingIn(false);
       setLoading(false);
     }
   };
@@ -450,8 +454,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 {/* Submit Button */}
                 <button
                   type="submit"
-                  disabled={loading}
-                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
+                  disabled={loading || isLoggingIn}
+                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">

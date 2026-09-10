@@ -22,7 +22,7 @@ import {
   SlidersHorizontal,
   ExternalLink
 } from 'lucide-react';
-import { CategoryType, WorkOrderNotice, UserSession } from '../types';
+import { CategoryType, WorkOrderNotice, UserSession, SyncMode } from '../types';
 import { fetchWorkOrders, uploadWorkOrder, deleteWorkOrder, toggleWorkOrderVisibility } from '../services/api';
 import { Language } from '../utils/translations';
 import { compressImageFile } from '../utils/imageCompressor';
@@ -55,6 +55,7 @@ interface WorkOrderNoticeSectionProps {
   onStartWorkWithNotice?: (notice: WorkOrderNotice) => void;
   isAdmin?: boolean;
   standalonePage?: boolean;
+  syncMode?: SyncMode;
 }
 
 export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
@@ -66,6 +67,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   onStartWorkWithNotice,
   isAdmin: propIsAdmin,
   standalonePage = false,
+  syncMode = 'auto',
 }) => {
   const [notices, setNotices] = useState<WorkOrderNotice[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -132,6 +134,12 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
   useEffect(() => {
     loadNotices(false);
+
+    // Only run background polling if auto-sync is active (conserves mobile data in manual mode)
+    if (syncMode !== 'auto') {
+      return;
+    }
+
     // Background polling every 12 seconds when tab is visible
     const interval = setInterval(() => {
       if (!document.hidden) {
@@ -154,7 +162,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [selectedCategoryTab, isAdmin]);
+  }, [selectedCategoryTab, isAdmin, syncMode]);
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -547,6 +555,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   <img
                     src={resolveWorkOrderImageUrl(notice)}
                     alt={notice.title}
+                    loading="lazy"
+                    decoding="async"
                     className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${
                       isNoticeHidden ? 'opacity-70 filter grayscale-[30%]' : ''
                     }`}

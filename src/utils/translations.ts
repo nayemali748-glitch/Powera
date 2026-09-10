@@ -187,6 +187,15 @@ export interface Translations {
   installAppSubtitle: string;
   helpSupport: string;
   helpSupportDesc: string;
+  syncModeTitle: string;
+  autoSync: string;
+  manualSync: string;
+  syncNow: string;
+  dataSaver: string;
+  dataSaverDesc: string;
+  autoSyncDesc: string;
+  lastSynced: string;
+  dataConservedNotice: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -373,6 +382,15 @@ export const translations: Record<Language, Translations> = {
     installAppSubtitle: 'ফিল্ডে দ্রুত ব্যবহারের জন্য ফোনে সরাসরি অ্যাপটি ইনস্টল করুন',
     helpSupport: 'হেল্প ও সাপোর্ট (Help & Support)',
     helpSupportDesc: 'ইমেইল সাপোর্ট ও এডমিনের সাথে লাইভ চ্যাট (Email & Live Chat)',
+    syncModeTitle: 'সিঙ্ক মোড (Sync Mode)',
+    autoSync: 'অটো-সিঙ্ক (৮ সে.)',
+    manualSync: 'ম্যানুয়াল সিঙ্ক',
+    syncNow: 'এখনই সিঙ্ক করুন',
+    dataSaver: 'ডাটা সেভার',
+    dataSaverDesc: 'মোবাইল ইন্টারনেট ডাটা বাঁচাতে ব্যাকগ্রাউন্ড সিঙ্ক বন্ধ থাকবে',
+    autoSyncDesc: 'প্রতি ৮ সেকেন্ড পর পর স্বয়ংক্রিয় লাইভ সিঙ্ক',
+    lastSynced: 'সর্বশেষ সিঙ্ক',
+    dataConservedNotice: 'ম্যানুয়াল মোড চালু: মোবাইল ইন্টারনেট ডাটা সংরক্ষিত হচ্ছে',
   },
 
   en: {
@@ -558,6 +576,15 @@ export const translations: Record<Language, Translations> = {
     installAppSubtitle: 'Install this utility directly on your mobile device for rapid field operations',
     helpSupport: 'Help & Support',
     helpSupportDesc: 'Official email assistance & Live Chat with Admin',
+    syncModeTitle: 'Sync Mode',
+    autoSync: 'Auto-Sync (8s)',
+    manualSync: 'Manual Sync',
+    syncNow: 'Sync Now',
+    dataSaver: 'Data Saver',
+    dataSaverDesc: 'Conserve mobile data by disabling background polling',
+    autoSyncDesc: 'Automatic live synchronization every 8 seconds',
+    lastSynced: 'Last synced',
+    dataConservedNotice: 'Manual mode active: Mobile data is conserved',
   },
 
   hi: {
@@ -743,6 +770,15 @@ export const translations: Record<Language, Translations> = {
     installAppSubtitle: 'फील्ड में त्वरित उपयोग के लिए सीधे अपने फोन में इंस्टॉल करें',
     helpSupport: 'सहायता एवं समर्थन (Help & Support)',
     helpSupportDesc: 'ईमेल सहायता एवं एडमिन के साथ लाइव चैट',
+    syncModeTitle: 'सिंक मोड (Sync Mode)',
+    autoSync: 'ऑटो-सिंक (8s)',
+    manualSync: 'मैन्युअल सिंक',
+    syncNow: 'अभी सिंक करें',
+    dataSaver: 'डेटा सेवर',
+    dataSaverDesc: 'मोबाइल इंटरनेट डेटा बचाने के लिए बैकग्राउंड सिंक बंद रहेगा',
+    autoSyncDesc: 'हर 8 सेकंड में स्वचालित रूप से लाइव सिंक',
+    lastSynced: 'अंतिम सिंक',
+    dataConservedNotice: 'मैन्युअल मोड सक्रिय: मोबाइल डेटा की बचत हो रही है',
   },
 
   ur: {
@@ -928,5 +964,14 @@ export const translations: Record<Language, Translations> = {
     installAppSubtitle: 'فیلڈ میں تیز رفتار استعمال کے لیے براہ راست اپنے فون پر انسٹال کریں',
     helpSupport: 'مدد اور سپورٹ (Help & Support)',
     helpSupportDesc: 'ای میل سپورٹ اور ایڈمن کے ساتھ براہ راست چیٹ',
+    syncModeTitle: 'سنک موڈ (Sync Mode)',
+    autoSync: 'آٹو سنک (8s)',
+    manualSync: 'دستی سنک',
+    syncNow: 'ابھی سنک کریں',
+    dataSaver: 'ڈیٹا سیور',
+    dataSaverDesc: 'موبائل انٹرنیٹ ڈیٹا بچانے کے لیے پس منظر میں سنکنگ بند رہے گی',
+    autoSyncDesc: 'ہر 8 سیکنڈ میں خودکار لائیو سنک',
+    lastSynced: 'آخری سنک',
+    dataConservedNotice: 'دستی موڈ فعال: موبائل ڈیٹا محفوظ کیا جا رہا ہے',
   }
 };

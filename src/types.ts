@@ -110,6 +110,8 @@ export interface StatsResponse {
 
 export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance' | 'work-orders';
 
+export type SyncMode = 'auto' | 'manual';
+
 export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_reports' | null;
 
 export interface UserSession {

@@ -18,7 +18,7 @@ async function callGoogleAppsScript(
   action: string, 
   payload: any = {}, 
   method: 'GET' | 'POST' = 'POST',
-  timeoutMs = 15000
+  timeoutMs = 25000
 ): Promise<any> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {

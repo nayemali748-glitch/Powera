@@ -275,7 +275,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Dropdown Menu for Quick Tools & Options (in English & Indian WBSEDCL Standard) */}
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150 divide-y divide-slate-100">
+            <div className="absolute right-0 mt-2 w-72 sm:w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150 divide-y divide-slate-100">
               <div className="px-4 py-2.5 bg-slate-50 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-amber-600" />

@@ -11,7 +11,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { InstallAppModal } from './components/InstallAppModal';
 import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
-import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice } from './types';
+import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode } from './types';
 import { fetchEntries, fetchStats, fetchWorkOrders } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
@@ -40,7 +40,8 @@ import {
   Globe,
   BarChart3,
   TrendingUp,
-  HelpCircle
+  HelpCircle,
+  WifiOff
 } from 'lucide-react';
 
 /**
@@ -152,15 +153,32 @@ export default function App() {
   }, []);
 
   const inFlightRef = useRef(false);
+  const [syncMode, setSyncMode] = useState<SyncMode>(() => {
+    try {
+      return (localStorage.getItem('power_sync_mode') as SyncMode) || 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const loadData = async (silent: boolean | unknown = false) => {
+    if (!currentUser) return;
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent) setLoading(true);
+      const isWorker = currentUser.role === 'worker';
+      const filters = isWorker ? {
+        workerId: currentUser.idNo || currentUser.id,
+        workerName: currentUser.name
+      } : undefined;
+
       const [data, orders] = await Promise.all([
-        fetchEntries(),
+        fetchEntries(filters),
         fetchWorkOrders().catch(() => [])
       ]);
       const currentData = data || [];
@@ -174,16 +192,29 @@ export default function App() {
       if (Array.isArray(orders)) {
         setWorkOrders(orders);
       }
+      setLastSyncedAt(new Date());
     } catch (err) {
       console.error('Failed to load power entries:', err);
     } finally {
       inFlightRef.current = false;
+      setIsSyncing(false);
       if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
+    if (!currentUser) {
+      setLoading(false);
+      return;
+    }
+
     loadData(false);
+
+    // In manual sync mode: disable 8-second interval and focus polling to conserve mobile data
+    if (syncMode !== 'auto') {
+      return;
+    }
+
     // Real-time background sync every 8 seconds, only when tab is visible
     const interval = setInterval(() => {
       if (!document.hidden) {
@@ -204,7 +235,21 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, []);
+  }, [syncMode, currentUser?.idNo]);
+
+  const handleToggleSyncMode = (mode: SyncMode) => {
+    setSyncMode(mode);
+    try {
+      localStorage.setItem('power_sync_mode', mode);
+    } catch {}
+    if (mode === 'auto') {
+      loadData(true);
+    }
+  };
+
+  const handleManualSync = () => {
+    loadData(false);
+  };
 
   // Strict role sync: Workers NEVER have admin privileges
   useEffect(() => {
@@ -559,6 +604,92 @@ export default function App() {
               Live Chat
             </span>
           </button>
+
+          {/* AUTO-SYNC MODE OPTION INSIDE MAIN MODULES (ABOVE LOGOUT BUTTON) */}
+          <div 
+            id="sidebar-sync-mode-container"
+            className="bg-slate-800/85 border border-slate-700/80 rounded-lg p-2.5 space-y-2 shadow-xs transition-all"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                  syncMode === 'auto' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
+                }`}>
+                  {syncMode === 'auto' ? (
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  ) : (
+                    <WifiOff className="w-3.5 h-3.5" />
+                  )}
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-200 leading-none block">{t.syncModeTitle}</span>
+                  <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+                    {syncMode === 'auto' ? 'Auto (8s Sync)' : t.dataSaver}
+                  </p>
+                </div>
+              </div>
+
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider ${
+                syncMode === 'auto'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+              }`}>
+                {syncMode === 'auto' ? 'Auto 8s' : 'Manual'}
+              </span>
+            </div>
+
+            {/* Segmented Switcher for Auto-Sync vs Manual Sync */}
+            <div className="grid grid-cols-2 gap-1 bg-slate-900/90 p-1 rounded-md border border-slate-700/70 text-xs">
+              <button
+                id="sidebar-sync-mode-auto-btn"
+                type="button"
+                onClick={() => handleToggleSyncMode('auto')}
+                className={`py-1.5 px-2 rounded font-bold text-[11px] transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  syncMode === 'auto'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                }`}
+                title="প্রতি ৮ সেকেন্ড পর পর স্বয়ংক্রিয় লাইভ সিঙ্ক"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncing && syncMode === 'auto' ? 'animate-spin' : ''}`} />
+                <span>{t.autoSync}</span>
+              </button>
+
+              <button
+                id="sidebar-sync-mode-manual-btn"
+                type="button"
+                onClick={() => handleToggleSyncMode('manual')}
+                className={`py-1.5 px-2 rounded font-bold text-[11px] transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  syncMode === 'manual'
+                    ? 'bg-amber-500 text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                }`}
+                title="মোবাইল ইন্টারনেট ডাটা সাশ্রয় করতে ব্যাকগ্রাউন্ড সিঙ্ক বন্ধ থাকবে"
+              >
+                <WifiOff className="w-3 h-3" />
+                <span>{t.manualSync}</span>
+              </button>
+            </div>
+
+            {/* Sync Information & One-click Sync Now */}
+            <div className="flex items-center justify-between pt-1 border-t border-slate-700/50 text-[10px] text-slate-400">
+              <span className="truncate max-w-[130px]">
+                {lastSyncedAt ? `${t.lastSynced}: ${lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Synced'}
+              </span>
+
+              <button
+                id="sidebar-manual-sync-now-btn"
+                type="button"
+                onClick={handleManualSync}
+                disabled={isSyncing}
+                className="px-2 py-1 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold rounded text-[10px] flex items-center gap-1 shadow-xs transition-all disabled:opacity-50 cursor-pointer shrink-0"
+                title={t.syncNow}
+              >
+                <RefreshCw className={`w-2.5 h-2.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? '...' : t.syncNow}</span>
+              </button>
+            </div>
+          </div>
 
           {/* Direct Logout Option Right Below Help & Support */}
           <button
@@ -984,6 +1115,7 @@ export default function App() {
                 onLogout={handleUserLogout}
                 lang={currentLanguage}
                 onOpenLanguageModal={() => setShowLanguageModal(true)}
+                syncMode={syncMode}
               />
             </div>
           )}
@@ -1012,6 +1144,7 @@ export default function App() {
                 isAdmin={isAdmin}
                 lang={currentLanguage}
                 standalonePage={true}
+                syncMode={syncMode}
                 onStartWorkWithNotice={(notice) => {
                   setSelectedWorkOrderForEntry(notice);
                   const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;

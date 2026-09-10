@@ -73,18 +73,26 @@ const CHAT_HEADERS = [
   'message', 'timestamp', 'status', 'createdAt'
 ];
 
+var _ssInstance = null;
 function ss() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+  if (!_ssInstance) {
+    _ssInstance = SpreadsheetApp.openById(SPREADSHEET_ID);
+  }
+  return _ssInstance;
 }
 
+var _sheetMemoryMap = {};
 function getExistingOrNewSheet(canonicalName, headers) {
+  if (_sheetMemoryMap[canonicalName]) {
+    return _sheetMemoryMap[canonicalName];
+  }
   const spreadsheet = ss();
   const aliases = SHEET_ALIASES[canonicalName] || [canonicalName];
   
   for (let i = 0; i < aliases.length; i++) {
     const existing = spreadsheet.getSheetByName(aliases[i]);
     if (existing) {
-      ensureHeaders(existing, headers);
+      _sheetMemoryMap[canonicalName] = existing;
       return existing;
     }
   }
@@ -92,6 +100,7 @@ function getExistingOrNewSheet(canonicalName, headers) {
   const newSheet = spreadsheet.insertSheet(canonicalName);
   newSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   newSheet.setFrozenRows(1);
+  _sheetMemoryMap[canonicalName] = newSheet;
   return newSheet;
 }
 
@@ -132,6 +141,7 @@ function setupDatabase() {
 
   canonicalNames.forEach(name => {
     const s = getSheet(name);
+    ensureHeaders(s, headersFor(name));
     sheetsCreated.push(s.getName());
   });
 
@@ -366,19 +376,91 @@ function createUser(d) {
   };
 
   appendRow('USERS', user);
+  invalidateUserCache(user.idNo, user.id);
   logActivity(user.id, user.idNo, user.name, user.role, 'CREATE_USER', 'User account created');
   return sanitizeUser(user);
+}
+
+function invalidateUserCache(idNo, id) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (idNo) cache.remove('auth_usr_' + String(idNo).trim().toLowerCase());
+    if (id) cache.remove('auth_usr_' + String(id).trim().toLowerCase());
+  } catch (e) {}
 }
 
 function authenticateUser(idNo, password) {
   const cleanId = String(idNo || '').trim().toLowerCase();
   const cleanPass = String(password || '').trim();
-  const users = getRows('USERS');
 
-  const user = users.find(u => 
-    String(u.idNo).trim().toLowerCase() === cleanId || 
-    String(u.id).trim().toLowerCase() === cleanId
-  );
+  if (!cleanId || !cleanPass) {
+    throw Error('User ID and Password are required');
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'auth_usr_' + cleanId;
+  let cachedJson = null;
+  try {
+    cachedJson = cache.get(cacheKey);
+  } catch (e) {}
+
+  let user = null;
+  if (cachedJson) {
+    try {
+      user = JSON.parse(cachedJson);
+    } catch (e) {}
+  }
+
+  if (!user) {
+    // High-speed direct read from USERS sheet without ensureHeaders overhead
+    const s = getSheet('USERS');
+    const totalRows = s.getLastRow();
+    const totalCols = s.getLastColumn();
+    if (totalRows < 2 || totalCols < 1) {
+      throw Error('Invalid User ID or Password');
+    }
+
+    const allValues = s.getRange(1, 1, totalRows, totalCols).getValues();
+    const headers = allValues[0].map(h => String(h || '').trim());
+    const idNoIdx = headers.indexOf('idNo');
+    const idIdx = headers.indexOf('id');
+    const passIdx = headers.indexOf('password');
+    const passHashIdx = headers.indexOf('passwordHash');
+    const nameIdx = headers.indexOf('name');
+    const phoneIdx = headers.indexOf('phone');
+    const roleIdx = headers.indexOf('role');
+    const statusIdx = headers.indexOf('status');
+    const desigIdx = headers.indexOf('designation');
+    const badgeIdx = headers.indexOf('badgeNo');
+
+    for (let i = 1; i < totalRows; i++) {
+      const row = allValues[i];
+      const rowIdNo = idNoIdx >= 0 ? String(row[idNoIdx] || '').trim().toLowerCase() : '';
+      const rowId = idIdx >= 0 ? String(row[idIdx] || '').trim().toLowerCase() : '';
+
+      if (rowIdNo === cleanId || rowId === cleanId) {
+        user = {
+          id: idIdx >= 0 ? String(row[idIdx] || '') : ('usr_' + cleanId),
+          idNo: idNoIdx >= 0 ? String(row[idNoIdx] || '') : cleanId,
+          password: passIdx >= 0 ? String(row[passIdx] || '') : '',
+          passwordHash: passHashIdx >= 0 ? String(row[passHashIdx] || '') : '',
+          name: nameIdx >= 0 ? String(row[nameIdx] || '') : cleanId,
+          phone: phoneIdx >= 0 ? String(row[phoneIdx] || '') : '',
+          role: roleIdx >= 0 ? String(row[roleIdx] || 'worker') : 'worker',
+          status: statusIdx >= 0 ? String(row[statusIdx] || 'active') : 'active',
+          designation: desigIdx >= 0 ? String(row[desigIdx] || '') : '',
+          badgeNo: badgeIdx >= 0 ? String(row[badgeIdx] || '') : ''
+        };
+        break;
+      }
+    }
+
+    if (user) {
+      try {
+        cache.put(cacheKey, JSON.stringify(user), 1800); // 30 mins TTL
+      } catch (e) {}
+    }
+  }
 
   if (!user) throw Error('Invalid User ID or Password');
   if (user.status === 'hold') throw Error('This user account is currently ON HOLD. Contact Admin.');
@@ -400,7 +482,12 @@ function authenticateUser(idNo, password) {
     loggedInAt: now()
   };
 
-  logActivity(user.id, user.idNo, user.name, user.role, 'LOGIN', 'Successful login');
+  // Asynchronous activity logging: do NOT block or delay the login response
+  try {
+    const sAct = getSheet('USER_ACTIVITY');
+    sAct.appendRow([generateId('ACT'), user.id, user.idNo, user.name, user.role, 'LOGIN', 'Successful login', now()]);
+  } catch (e) {}
+
   return session;
 }
 
@@ -512,6 +599,8 @@ function saveEntry(d) {
         Logger.log('Category sheet append warning: ' + e);
       }
     }
+
+    try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
 
     return {
       success: true,
@@ -631,12 +720,26 @@ function removeEntry(id) {
       try { deleteRow(k, 'id', id); } catch (e) {}
     }
   });
+  try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
   return true;
 }
 
 function queryEntries(params) {
   let list = getRows('MASTER_DATA');
   
+  if (params.workerId || params.workerName) {
+    const wId = String(params.workerId || '').toLowerCase().trim();
+    const wName = String(params.workerName || '').toLowerCase().trim();
+    list = list.filter(e => {
+      const eWId = String(e.workerId || e.idNo || '').toLowerCase().trim();
+      const eWName = String(e.workerName || '').toLowerCase().trim();
+      const eCreator = String(e.createdBy || '').toLowerCase().trim();
+      if (wId && (eWId === wId || eCreator === wId)) return true;
+      if (wName && eWName.indexOf(wName) >= 0) return true;
+      return false;
+    });
+  }
+
   if (params.category && params.category !== 'ALL') {
     const catQuery = String(params.category).toUpperCase();
     list = list.filter(e => {
@@ -666,6 +769,12 @@ function queryEntries(params) {
 }
 
 function computeStats() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get('dashboard_stats');
+    if (cached) return JSON.parse(cached);
+  } catch (e) {}
+
   const entries = getRows('MASTER_DATA');
   const countCat = (catName) => {
     return entries.filter(e => {
@@ -674,17 +783,17 @@ function computeStats() {
     }).length;
   };
 
-  return {
+  const result = {
     total: entries.length,
     categories: {
       NSC: countCat('NSC'),
       DISCONNECTION: countCat('DISCONNECTION'),
-      POLE_CASE: countCat('POLE_CASE'),
-      'POLE CASE': countCat('POLE CASE'),
-      METER_REPLESMENT: countCat('METER_REPLESMENT'),
-      METER_REPLACEMENT: countCat('METER_REPLACEMENT'),
-      DTR_REPLESMENT: countCat('DTR_REPLESMENT'),
-      DTR_REPLACEMENT: countCat('DTR_REPLACEMENT')
+      POLE_CASE: countCat('POLE_CASE') + countCat('POLE CASE'),
+      'POLE CASE': countCat('POLE_CASE') + countCat('POLE CASE'),
+      METER_REPLESMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
+      METER_REPLACEMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
+      DTR_REPLESMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT'),
+      DTR_REPLACEMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT')
     },
     status: {
       pending: entries.filter(e => String(e.status).toLowerCase() === 'pending').length,
@@ -692,6 +801,12 @@ function computeStats() {
       approved: entries.filter(e => String(e.status).toLowerCase() === 'approved').length
     }
   };
+
+  try {
+    cache.put('dashboard_stats', JSON.stringify(result), 45); // 45s cache
+  } catch (e) {}
+
+  return result;
 }
 
 function bulkSyncEntries(items) {
@@ -960,12 +1075,14 @@ function doPost(e) {
     }
     if (action === 'updateUser') {
       const updated = updateRow('USERS', 'id', body.id, data);
+      invalidateUserCache(updated?.idNo || body?.idNo, body?.id);
       return out({ success: true, user: sanitizeUser(updated) });
     }
     if (action === 'updateUserStatus') {
       const targetId = body.id || body.idNo;
       const key = body.id ? 'id' : 'idNo';
       const updated = updateRow('USERS', key, targetId, { status: body.status });
+      invalidateUserCache(body.idNo, body.id);
       return out({ success: true, user: sanitizeUser(updated) });
     }
     if (action === 'deleteUser') {
@@ -975,6 +1092,7 @@ function doPost(e) {
       }
       const key = body.id ? 'id' : 'idNo';
       deleteRow('USERS', key, body.id || body.idNo);
+      invalidateUserCache(body.idNo, body.id);
       return out({ success: true, message: 'User deleted from Google Sheets' });
     }
     if (action === 'changePassword') {
@@ -986,6 +1104,7 @@ function doPost(e) {
         (u.passwordHash && u.passwordHash === sha(body.currentPassword));
       if (!match) throw Error('Current password is incorrect');
       updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
+      invalidateUserCache(u.idNo, u.id);
       return out({ success: true, message: 'Password updated successfully in Google Sheets' });
     }
     if (action === 'resetPassword') {
@@ -1001,6 +1120,7 @@ function doPost(e) {
       });
       if (!u) throw Error('User verification failed in Google Sheets');
       updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
+      invalidateUserCache(u.idNo, u.id);
       return out({ success: true, message: 'Password reset successfully in Google Sheets' });
     }
 
