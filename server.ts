@@ -18,7 +18,7 @@ async function callGoogleAppsScript(
   action: string, 
   payload: any = {}, 
   method: 'GET' | 'POST' = 'POST',
-  timeoutMs = 25000
+  timeoutMs = 45000
 ): Promise<any> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -304,32 +304,40 @@ app.post('/api/entries', async (req, res) => {
       status: req.body.status || 'Completed'
     };
 
-    // Update local cache immediately with deduplication check
-    const entries = readEntries();
-    const existingIndex = entries.findIndex((e: any) => 
-      (e.submissionId && e.submissionId === newEntry.submissionId) || e.id === newEntry.id
-    );
-    if (existingIndex !== -1) {
-      entries[existingIndex] = { ...entries[existingIndex], ...newEntry };
-    } else {
-      entries.unshift(newEntry);
-    }
-    writeEntries(entries);
+    // Save to Google Sheets (Single Source of Truth)
+    let result: any = null;
+    let gasError: any = null;
 
-    // Save to Google Sheets
     try {
-      const result = await callGoogleAppsScript('createEntry', { data: newEntry }, 'POST');
-      if (result && result.entry) {
-        return res.status(201).json({ success: true, entry: result.entry });
-      }
-    } catch (e) {
+      result = await callGoogleAppsScript('createEntry', { data: newEntry }, 'POST', 30000);
+    } catch (e: any) {
+      gasError = e;
       console.warn('Failed to save entry to Google Sheets:', e);
     }
 
-    res.status(201).json({ success: true, entry: newEntry });
+    if (!result || result.success === false) {
+      const errMsg = result?.error || result?.message || gasError?.message || 'Google Sheets failed to confirm record save';
+      return res.status(502).json({ success: false, error: errMsg });
+    }
+
+    const savedEntry = result.entry || result.data || newEntry;
+
+    // Update local cache only AFTER Google Sheets confirms save
+    const entries = readEntries();
+    const existingIndex = entries.findIndex((e: any) => 
+      (e.submissionId && e.submissionId === savedEntry.submissionId) || e.id === savedEntry.id
+    );
+    if (existingIndex !== -1) {
+      entries[existingIndex] = { ...entries[existingIndex], ...savedEntry };
+    } else {
+      entries.unshift(savedEntry);
+    }
+    writeEntries(entries);
+
+    return res.status(201).json({ success: true, message: 'Data saved successfully', entry: savedEntry });
   } catch (error: any) {
     console.error('Error saving entry:', error);
-    res.status(500).json({ error: error.message || 'Failed to save entry' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to save entry' });
   }
 });
 
@@ -843,14 +851,27 @@ app.delete('/api/chat', (req, res) => {
 
 // Work Order & Khata Photo Notice Endpoints (Uploaded by Admin, viewable by all field workers)
 // Integrated with Google Apps Script + Google Drive + Google Sheets
+let cachedWorkOrdersInMemory: any[] | null = null;
+let lastWorkOrdersFetchTime = 0;
+
 app.get('/api/work-orders', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { category } = req.query;
+    const { category, forceRefresh } = req.query;
+    const now = Date.now();
 
-    // First attempt to fetch live from Google Sheets via Google Apps Script
+    // Fast-path: Return cached in-memory work orders if fetched within 30s and not force-refreshed
+    if (cachedWorkOrdersInMemory !== null && !forceRefresh && (now - lastWorkOrdersFetchTime < 30000)) {
+      let orders = [...cachedWorkOrdersInMemory];
+      if (category && category !== 'ALL') {
+        orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
+      }
+      return res.json(orders);
+    }
+
+    // Attempt to fetch live from Google Sheets via Google Apps Script (generous 35s timeout)
     try {
-      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 15000);
+      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 35000);
       if (result && result.success && Array.isArray(result.workOrders)) {
         let orders = result.workOrders.map((o: any) => {
           let photo = o.photoUrl || o.directImageUrl || '';
@@ -867,17 +888,22 @@ app.get('/api/work-orders', async (req, res) => {
           };
         });
 
+        cachedWorkOrdersInMemory = orders;
+        lastWorkOrdersFetchTime = Date.now();
+        writeWorkOrders(orders);
+
         if (category && category !== 'ALL') {
           orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
         }
-        writeWorkOrders(orders);
         return res.json(orders);
       }
-    } catch (gasErr) {
-      console.warn('[server.ts] GAS workorders fetch fallback:', gasErr);
+    } catch {
+      // Quietly fall back to local cache if Google Apps Script is slow or unavailable
     }
 
     let orders = readWorkOrders();
+    cachedWorkOrdersInMemory = orders;
+    lastWorkOrdersFetchTime = Date.now();
     if (category && category !== 'ALL') {
       orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
     }
@@ -924,10 +950,11 @@ app.post('/api/work-orders', async (req, res) => {
         }
         const currentOrders = readWorkOrders();
         writeWorkOrders([savedOrder, ...currentOrders.filter((o: any) => o.id !== savedOrder.id)]);
+        cachedWorkOrdersInMemory = null;
         return res.status(201).json({ success: true, workOrder: savedOrder });
       }
-    } catch (gasErr) {
-      console.warn('[server.ts] GAS createWorkOrder fallback:', gasErr);
+    } catch {
+      // Continue to local fallback
     }
 
     // Local fallback
@@ -953,6 +980,7 @@ app.post('/api/work-orders', async (req, res) => {
 
     orders.unshift(newOrder);
     writeWorkOrders(orders);
+    cachedWorkOrdersInMemory = null;
 
     res.status(201).json({ success: true, workOrder: newOrder });
   } catch (error: any) {
@@ -1020,6 +1048,7 @@ const handleVisibilityToggle = async (req: express.Request, res: express.Respons
     orders[index].isHidden = Boolean(isHidden);
     orders[index].updatedAt = new Date().toISOString();
     writeWorkOrders(orders);
+    cachedWorkOrdersInMemory = null;
 
     res.json({ success: true, workOrder: orders[index] });
   } catch (error: any) {
@@ -1046,6 +1075,7 @@ const handleDeleteWorkOrder = async (req: express.Request, res: express.Response
     let orders = readWorkOrders();
     orders = orders.filter((o: any) => String(o.id) !== String(id));
     writeWorkOrders(orders);
+    cachedWorkOrdersInMemory = null;
     res.json({ success: true, message: 'Work order photo deleted successfully' });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to delete work order photo' });

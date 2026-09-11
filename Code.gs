@@ -11,7 +11,8 @@ const SHEET_ALIASES = {
   'USERS': ['USERS', 'Users', 'users'],
   'USER_ACTIVITY': ['USER_ACTIVITY', 'UserActivity', 'ActivityLogs'],
   'MASTER_DATA': ['MASTER_DATA', 'Entries', 'master_data', 'entries'],
-  'NEW_CONNECTION': ['NEW_CONNECTION', 'NSC', 'NewConnection'],
+  'NSC': ['NSC', 'NEW_CONNECTION', 'NewConnection'],
+  'NEW_CONNECTION': ['NSC', 'NEW_CONNECTION', 'NewConnection'],
   'DISCONNECTION': ['DISCONNECTION', 'Disconnection'],
   'POLE_CASE': ['POLE_CASE', 'PoleCase', 'POLE CASE'],
   'METER_REPLACEMENT': ['METER_REPLACEMENT', 'METER_REPLESMENT', 'MeterReplacement'],
@@ -22,8 +23,8 @@ const SHEET_ALIASES = {
 };
 
 const CATEGORY_MAP = {
-  'NSC': 'NEW_CONNECTION',
-  'NEW_CONNECTION': 'NEW_CONNECTION',
+  'NSC': 'NSC',
+  'NEW_CONNECTION': 'NSC',
   'DISCONNECTION': 'DISCONNECTION',
   'POLE CASE': 'POLE_CASE',
   'POLE_CASE': 'POLE_CASE',
@@ -36,7 +37,7 @@ const CATEGORY_MAP = {
 };
 
 const COMMON_ENTRY_HEADERS = [
-  'submissionId', 'id', 'category', 'status', 'date', 'createdAt', 'workerName', 'workerPhone', 'substation',
+  'submissionId', 'id', 'category', 'status', 'date', 'createdAt', 'workerId', 'workerName', 'role', 'submittedBy', 'workerPhone', 'substation',
   'feederName', 'consumerId', 'consumerName', 'fatherName', 'applicationNo', 'agencyName', 'cccName',
   'mobile', 'address', 'poleNo', 'appliedLoad', 'phase', 'tariffCategory', 'meterNo', 'initialReading',
   'sealNo', 'serviceCableLength', 'meterInstallDate', 'inspectionAgencyName', 'meterMake', 'workOrderNo',
@@ -135,7 +136,7 @@ function getSheet(name) {
 function setupDatabase() {
   const sheetsCreated = [];
   const canonicalNames = [
-    'USERS', 'USER_ACTIVITY', 'MASTER_DATA', 'NEW_CONNECTION', 'DISCONNECTION',
+    'USERS', 'USER_ACTIVITY', 'MASTER_DATA', 'NSC', 'DISCONNECTION',
     'POLE_CASE', 'METER_REPLACEMENT', 'DTR_REPLACEMENT', 'SETTINGS', 'WORK_ORDERS', 'CHAT'
   ];
 
@@ -576,6 +577,10 @@ function saveEntry(d) {
     const newEntry = Object.assign({}, d, {
       submissionId: finalSubmissionId,
       id: entryId,
+      workerId: String(d.workerId || d.WorkerID || d.idNo || '').trim(),
+      workerName: String(d.workerName || d.WorkerName || '').trim(),
+      role: String(d.role || d.Role || 'worker').trim(),
+      submittedBy: String(d.submittedBy || d.SubmittedBy || d.workerName || '').trim(),
       date: d.date || now(),
       createdAt: d.createdAt || d.date || now(),
       status: d.status || 'Completed',
@@ -605,10 +610,11 @@ function saveEntry(d) {
     return {
       success: true,
       duplicate: false,
-      message: 'Record saved successfully',
+      message: 'Data saved successfully',
       recordId: newEntry.id,
       submissionId: newEntry.submissionId,
-      entry: newEntry
+      entry: newEntry,
+      data: newEntry
     };
   } finally {
     lock.releaseLock();
@@ -1141,6 +1147,11 @@ function doPost(e) {
       action === 'createMeterReplacement' ||
       action === 'createDTRReplacement'
     ) {
+      if (action === 'createNSC' || action === 'createNewConnection') data.category = data.category || 'NSC';
+      if (action === 'createDisconnection') data.category = data.category || 'DISCONNECTION';
+      if (action === 'createPoleCase') data.category = data.category || 'POLE CASE';
+      if (action === 'createMeterReplacement') data.category = data.category || 'METER REPLESMENT';
+      if (action === 'createDTRReplacement') data.category = data.category || 'DTR REPLESMENT';
       return out(saveEntry(data));
     }
     if (

@@ -399,13 +399,24 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
+    const workerIdVal = currentUser?.idNo || currentUser?.id || '';
+    const workerNameVal = (currentUser?.name || (category === 'NSC' ? nscWorkerName : worker)).trim();
+    const workerRoleVal = currentUser?.role || 'Field Worker';
+    const submittedByVal = currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : workerNameVal;
+    const workerPhoneVal = (currentUser?.phone || workerPhone).trim();
+
     const entryPayload: Partial<PowerEntry> = {
       submissionId,
       id: generatedId,
       category,
-      workerName: (category === 'NSC' ? nscWorkerName : worker).trim(),
-      workerPhone: workerPhone.trim(),
+      workerId: workerIdVal,
+      workerName: workerNameVal,
+      role: workerRoleVal,
+      submittedBy: submittedByVal,
+      workerPhone: workerPhoneVal,
       date: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
       status: 'Completed',
       locationGps,
       photoUrl: photoPreview || undefined,
@@ -506,7 +517,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     }
 
     try {
-      const created = await createEntry(entryPayload);
+      const created = await createEntry(entryPayload, currentUser);
       try {
         confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
       } catch (e) {
@@ -517,8 +528,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       setSubmissionModalEntry(created);
       onSuccess(created);
     } catch (err: any) {
-      console.error('Error creating entry:', err);
-      alert('Error saving data: ' + (err.message || 'Check connection'));
+      console.error('Error creating entry in Google Sheets:', err);
+      const errMsg = err?.message || 'Check network connection';
+      alert(lang === 'bn' 
+        ? `গুগল শিটে ডেটা সেভ করা যায়নি:\n${errMsg}\nঅনুগ্রহ করে ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।`
+        : `Failed to save record to Google Sheets:\n${errMsg}\nPlease verify your internet connection and try again.`);
     } finally {
       setLoading(false);
       setTimeout(() => {

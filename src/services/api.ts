@@ -79,7 +79,7 @@ export async function callGasApi<T = any>(
   action: string,
   payload: any = {},
   method: 'GET' | 'POST' = 'GET',
-  timeoutMs = 25000
+  timeoutMs = 45000
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -277,7 +277,7 @@ export async function fetchEntries(filters?: {
 }
 
 // Map category to explicit Apps Script action
-function getCreateActionForCategory(cat?: string): string {
+export function getCreateActionForCategory(cat?: string): string {
   const c = String(cat || '').toUpperCase();
   if (c === 'NSC') return 'createNSC';
   if (c === 'DISCONNECTION') return 'createDisconnection';
@@ -287,58 +287,94 @@ function getCreateActionForCategory(cat?: string): string {
   return 'createEntry';
 }
 
-export async function createEntry(entryData: Partial<PowerEntry>): Promise<PowerEntry> {
+export async function createEntry(
+  entryData: Partial<PowerEntry>,
+  currentUser?: UserSession | null
+): Promise<PowerEntry> {
   // Guaranteed single unique Submission ID across entire lifecycle
   const submissionId = entryData.submissionId || `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
   
-  // If an identical submission is already currently executing in-flight, return the existing Promise
+  // Strict deduplication guard: If an identical submission is already currently executing in-flight, return the existing Promise
   if (inFlightSubmissions.has(submissionId)) {
     return inFlightSubmissions.get(submissionId)!;
   }
 
   const generatedId = entryData.id || `PWR-${Date.now().toString().slice(-6)}`;
   const nowIso = new Date().toISOString();
+
+  // Attach authenticated worker identity & metadata
   const cleanEntry: PowerEntry = {
     ...entryData as any,
     submissionId,
     id: generatedId,
+    workerId: entryData.workerId || currentUser?.idNo || currentUser?.id || '',
+    workerName: (entryData.workerName || currentUser?.name || 'Field Worker').trim(),
+    role: entryData.role || currentUser?.role || 'worker',
+    submittedBy: entryData.submittedBy || (currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : entryData.workerName || 'Worker'),
+    workerPhone: (entryData.workerPhone || currentUser?.phone || '').trim(),
     date: entryData.date || nowIso,
     createdAt: entryData.createdAt || nowIso,
+    updatedAt: nowIso,
     status: entryData.status || 'Completed',
   };
 
   const action = getCreateActionForCategory(cleanEntry.category);
 
   const promise = (async () => {
-    // Immediate local cache update for instant UI feedback (0ms delay)
-    try {
-      const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-      // Deduplicate in cache: replace if matching id or submissionId
-      const filtered = list.filter(e => e.id !== cleanEntry.id && e.submissionId !== cleanEntry.submissionId);
-      writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([cleanEntry, ...filtered]));
-    } catch {}
+    let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
+    let backendError: any = null;
 
+    // 1. Send to Google Apps Script backend API with the designated category action
     try {
-      const res = await callGasApi<{ success: boolean; entry?: PowerEntry; duplicate?: boolean; recordId?: string }>(
+      res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
         action,
         { data: cleanEntry },
         'POST',
-        25000
+        30000
       );
-
-      const returned = res.entry || cleanEntry;
-      return returned;
-    } catch (error) {
-      console.warn('Google Sheets createEntry error, marked with pending sync flag:', error);
-      const fallbackEntry = { ...cleanEntry, _isPendingSync: true };
-      const list = readCache<any[]>(LOCAL_STORAGE_KEY, []);
-      const filtered = list.filter(e => e.id !== fallbackEntry.id && e.submissionId !== fallbackEntry.submissionId);
-      writeCache(LOCAL_STORAGE_KEY, [fallbackEntry, ...filtered].slice(0, 100));
-      return cleanEntry;
-    } finally {
-      inFlightSubmissions.delete(submissionId);
+    } catch (err: any) {
+      const errMsg = String(err?.message || err);
+      // Backward-compatibility fallback: If deployed web app doesn't recognize category-specific action (e.g. createNSC),
+      // seamlessly fall back to 'createEntry' which is universally supported
+      if (errMsg.includes('Unknown POST action') && action !== 'createEntry') {
+        try {
+          res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
+            'createEntry',
+            { data: cleanEntry },
+            'POST',
+            30000
+          );
+        } catch (retryErr) {
+          backendError = retryErr;
+        }
+      } else {
+        backendError = err;
+      }
     }
-  })();
+
+    // 2. Strict Backend Save Confirmation check
+    if (!res || res.success === false) {
+      const detailMsg = res?.message || (backendError ? (backendError.message || String(backendError)) : 'Google Sheets backend failed to save the entry.');
+      console.error('Google Sheets Backend Save Failed:', detailMsg);
+      // DO NOT fake success. DO NOT store in local storage as a finished submission.
+      // Throw the real error so the user and form know and can retry.
+      throw new Error(`Google Sheets save error: ${detailMsg}`);
+    }
+
+    // 3. Data successfully saved and confirmed by Google Sheets!
+    const confirmedEntry: PowerEntry = res.entry || res.data || cleanEntry;
+
+    // Now update cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
+    try {
+      const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+      const filtered = list.filter(e => e.id !== confirmedEntry.id && e.submissionId !== confirmedEntry.submissionId);
+      writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([confirmedEntry, ...filtered]));
+    } catch {}
+
+    return confirmedEntry;
+  })().finally(() => {
+    inFlightSubmissions.delete(submissionId);
+  });
 
   inFlightSubmissions.set(submissionId, promise);
   return promise;
@@ -672,28 +708,34 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
     
     // First try Google Apps Script (Primary Source)
     let rawList: any[] = [];
+    let fetchedSuccessfully = false;
+
     try {
-      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 20000);
-      if (data && Array.isArray(data.workOrders)) {
+      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 30000);
+      if (data && data.success && Array.isArray(data.workOrders)) {
         rawList = data.workOrders;
+        fetchedSuccessfully = true;
       }
-    } catch (e) {
-      console.warn('Direct GAS workorders fetch failed, trying proxy:', e);
+    } catch {
+      // Direct GAS fetch failed or timed out; will fall back to proxy
     }
 
-    // Proxy fallback if direct GAS fetch returned nothing
-    if (rawList.length === 0) {
+    // Proxy fallback ONLY if direct GAS fetch failed
+    if (!fetchedSuccessfully) {
       try {
         const pUrl = category && category !== 'ALL' ? `/api/work-orders?category=${encodeURIComponent(category)}` : '/api/work-orders';
         const res = await fetch(pUrl);
         if (res.ok) {
           const pData = await res.json();
-          if (Array.isArray(pData)) rawList = pData;
+          if (Array.isArray(pData)) {
+            rawList = pData;
+            fetchedSuccessfully = true;
+          }
         }
       } catch {}
     }
 
-    if (rawList.length > 0) {
+    if (fetchedSuccessfully) {
       const validOrders = rawList.filter(w => w && (w.id || w.title || w.photoUrl || w.fileId));
       const seen = new Set<string>();
       const uniqueOrders: WorkOrderNotice[] = [];

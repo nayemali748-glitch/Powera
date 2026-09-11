@@ -29,6 +29,11 @@ export interface PowerEntry {
   createdAt: string;
   updatedAt?: string;
 
+  // Authenticated Worker Identity
+  workerId?: string;
+  role?: string;
+  submittedBy?: string;
+
   // NSC specific
   workOrderNo?: string;
   workOrderDate?: string;
