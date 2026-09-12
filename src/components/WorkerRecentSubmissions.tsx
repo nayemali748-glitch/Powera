@@ -41,9 +41,17 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
   const t = translations[lang] || translations.bn;
 
   // Filter for this worker or show all recent
-  const workerEntries = entries.filter(
-    e => !workerName || e.workerName?.toLowerCase().includes(workerName.toLowerCase()) || workerName === 'Worker-1'
-  );
+  const workerEntries = entries.filter(e => {
+    const wName = String(workerName || currentUser?.name || '').toLowerCase().trim();
+    const wId = String(currentUser?.idNo || currentUser?.id || '').toLowerCase().trim();
+    const eWName = String(e.workerName || '').toLowerCase().trim();
+    const eWId = String(e.workerId || '').toLowerCase().trim();
+    const eSub = String(e.submittedBy || '').toLowerCase().trim();
+    if (!wName && !wId) return true;
+    if (wName && (eWName.includes(wName) || eSub.includes(wName))) return true;
+    if (wId && (eWId === wId || eSub.includes(wId))) return true;
+    return workerName === 'Worker-1';
+  });
 
   const displayEntries = workerEntries.length > 0 ? workerEntries : entries;
 

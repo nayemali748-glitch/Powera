@@ -1,5 +1,6 @@
 import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage } from '../types';
 import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
+import { deduplicateEntries, normalizeEntry } from '../utils/entryNormalizer';
 
 // ============================================================================
 // CENTRAL API CONFIGURATION
@@ -211,57 +212,14 @@ export async function fetchEntries(filters?: {
 
     const data = await callGasApi<{ success: boolean; entries: PowerEntry[] }>('entries', params, 'GET');
     const rawList = Array.isArray(data.entries) ? data.entries : [];
-    // Filter out completely blank rows from Google Sheets
-    const validList = rawList.filter(item => item && (
-      (item.id && String(item.id).trim() !== '') || 
-      (item.category && String(item.category).trim() !== '') || 
-      (item.consumerName && String(item.consumerName).trim() !== '') ||
-      (item.consumerId && String(item.consumerId).trim() !== '') ||
-      (item.applicationNo && String(item.applicationNo).trim() !== '')
-    ));
-
-    // STRICT DEDUPLICATION: One worker action = One single record displayed in Admin & Worker view
-    const seenKeys = new Set<string>();
-    const uniqueEntries: PowerEntry[] = [];
-
-    for (const item of validList) {
-      const subId = item.submissionId ? String(item.submissionId).trim() : '';
-      const idVal = item.id ? String(item.id).trim() : '';
-      const catVal = String(item.category || '').trim().toUpperCase();
-      const consVal = String(item.consumerId || '').trim().toLowerCase();
-      const meterVal = String(item.meterNo || '').trim().toLowerCase();
-      const appNo = String(item.applicationNo || '').trim().toLowerCase();
-
-      let primaryKey = '';
-      if (subId && subId.startsWith('SUB-')) {
-        primaryKey = `SUB:${subId}`;
-      } else if (idVal && idVal.startsWith('PWR-')) {
-        primaryKey = `ID:${idVal}`;
-      } else if (consVal && meterVal) {
-        primaryKey = `DATA:${catVal}:${consVal}:${meterVal}`;
-      } else if (appNo) {
-        primaryKey = `APP:${catVal}:${appNo}`;
-      } else {
-        primaryKey = `RAW:${idVal || Math.random()}`;
-      }
-
-      if (!seenKeys.has(primaryKey)) {
-        seenKeys.add(primaryKey);
-        uniqueEntries.push(item);
-      }
-    }
+    const uniqueEntries = deduplicateEntries(rawList);
     
     // Save to local cache for instant UI availability
     writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
     return uniqueEntries;
   } catch (error) {
     console.warn('Direct Google Sheets fetch error, using local cache:', error);
-    let list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    list = list.filter(item => item && (
-      (item.id && String(item.id).trim() !== '') || 
-      (item.category && String(item.category).trim() !== '') || 
-      (item.consumerName && String(item.consumerName).trim() !== '')
-    ));
+    let list = deduplicateEntries(readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []));
     if (filters?.category && filters.category !== 'ALL') {
       list = list.filter(item => item.category === filters.category);
     }
@@ -362,7 +320,7 @@ export async function createEntry(
     }
 
     // 3. Data successfully saved and confirmed by Google Sheets!
-    const confirmedEntry: PowerEntry = res.entry || res.data || cleanEntry;
+    const confirmedEntry: PowerEntry = normalizeEntry(res.entry || res.data || cleanEntry);
 
     // Now update cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
     try {
@@ -711,7 +669,7 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
     let fetchedSuccessfully = false;
 
     try {
-      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 30000);
+      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 12000);
       if (data && data.success && Array.isArray(data.workOrders)) {
         rawList = data.workOrders;
         fetchedSuccessfully = true;

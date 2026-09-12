@@ -171,14 +171,8 @@ export default function App() {
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent) setLoading(true);
-      const isWorker = currentUser.role === 'worker';
-      const filters = isWorker ? {
-        workerId: currentUser.idNo || currentUser.id,
-        workerName: currentUser.name
-      } : undefined;
-
       const [data, orders] = await Promise.all([
-        fetchEntries(filters),
+        fetchEntries(),
         fetchWorkOrders().catch(() => [])
       ]);
       const currentData = data || [];

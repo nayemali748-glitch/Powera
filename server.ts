@@ -223,15 +223,65 @@ app.get(['/health', '/healthz', '/api/health'], (req, res) => {
   res.status(200).json({ status: 'ok', app: 'POWER Utility Management' });
 });
 
+// Normalizer for Google Sheets column shifts
+function normalizeServerEntry(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw;
+
+  const cName = String(raw.consumerName || '').trim();
+  const cId = String(raw.consumerId || '').trim();
+  const mNo = String(raw.meterNo || '').trim();
+  const initR = String(raw.initialReading || '').trim();
+  const fName = String(raw.feederName || '').trim();
+
+  const isShifted =
+    (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
+    (initR && /^APP/i.test(initR)) ||
+    (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
+    (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11')));
+
+  if (isShifted) {
+    return {
+      ...raw,
+      id: String(raw.id || '').trim(),
+      category: raw.category || 'NSC',
+      status: raw.status || 'Completed',
+      date: raw.date || raw.createdAt || new Date().toISOString(),
+      createdAt: raw.createdAt || raw.date || new Date().toISOString(),
+      workerName: String(raw.workerName || '').trim(),
+      workerPhone: String(raw.substation || raw.workerPhone || '').trim(),
+      substation: String(raw.feederName || raw.substation || '').trim(),
+      feederName: String(raw.consumerId || raw.feederName || '').trim(),
+      consumerId: String(raw.consumerName || raw.consumerId || '').trim(),
+      consumerName: String(raw.meterNo || raw.consumerName || '').trim(),
+      fatherName: String(raw.sealNo || raw.fatherName || '').trim(),
+      applicationNo: String(raw.initialReading || raw.applicationNo || '').trim(),
+      meterNo: String(raw.finalReading || raw.meterNo || '').trim(),
+      sealNo: String(raw.address || raw.sealNo || '').trim(),
+      initialReading: String(raw.workOrderNo || raw.initialReading || '').trim(),
+      finalReading: '',
+      address: String(raw.locationGps || raw.address || '').trim(),
+      workOrderNo: String(raw.photoUrl || raw.workOrderNo || '').trim(),
+      locationGps: String(raw.notes || raw.locationGps || '').trim(),
+      notes: String(raw.updatedAt || raw.notes || '').trim(),
+      photoUrl: String(raw.photoUrl && (raw.photoUrl.startsWith('http') || raw.photoUrl.startsWith('data:')) ? raw.photoUrl : (raw.directImageUrl || '')),
+      updatedAt: String(raw[''] || raw.updatedAt || raw.createdAt || new Date().toISOString())
+    };
+  }
+
+  return raw;
+}
+
 // Get all entries with optional category/status/search query (from Google Sheets via GAS)
 app.get('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const { category, status, search } = req.query;
 
   try {
-    const result = await callGoogleAppsScript('entries', req.query, 'GET');
+    const result = await callGoogleAppsScript('entries', req.query, 'GET', 15000);
     if (result && result.success && Array.isArray(result.entries)) {
-      const cleanList = result.entries.filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== '')));
+      const cleanList = result.entries
+        .map(normalizeServerEntry)
+        .filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== '')));
       
       // Deduplicate to guarantee single record per submission
       const seenKeys = new Set<string>();
@@ -264,7 +314,7 @@ app.get('/api/entries', async (req, res) => {
     console.warn('Failed to fetch entries from Google Sheets, using local cache:', e);
   }
 
-  let entries = readEntries();
+  let entries = readEntries().map(normalizeServerEntry);
   if (category && category !== 'ALL') {
     entries = entries.filter((e: any) => e.category === category);
   }
@@ -869,9 +919,9 @@ app.get('/api/work-orders', async (req, res) => {
       return res.json(orders);
     }
 
-    // Attempt to fetch live from Google Sheets via Google Apps Script (generous 35s timeout)
+    // Attempt to fetch live from Google Sheets via Google Apps Script (responsive 12s timeout)
     try {
-      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 35000);
+      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 12000);
       if (result && result.success && Array.isArray(result.workOrders)) {
         let orders = result.workOrders.map((o: any) => {
           let photo = o.photoUrl || o.directImageUrl || '';

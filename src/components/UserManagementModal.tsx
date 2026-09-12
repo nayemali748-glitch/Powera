@@ -1065,10 +1065,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                         if (!changePassSearch.trim()) return true;
                         const q = changePassSearch.toLowerCase();
                         return (
-                          (u.name || '').toLowerCase().includes(q) ||
-                          (u.idNo || '').toLowerCase().includes(q) ||
-                          (u.phone || '').includes(q) ||
-                          (u.role || '').toLowerCase().includes(q)
+                          String(u.name || '').toLowerCase().includes(q) ||
+                          String(u.idNo || '').toLowerCase().includes(q) ||
+                          String(u.phone || '').includes(q) ||
+                          String(u.role || '').toLowerCase().includes(q)
                         );
                       })
                       .map((u, idx) => (
