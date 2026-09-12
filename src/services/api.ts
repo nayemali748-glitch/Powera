@@ -107,6 +107,8 @@ export async function callGasApi<T = any>(
       url = `${url}${sep}${params.toString()}`;
       options.method = 'GET';
     } else {
+      const sep = url.includes('?') ? '&' : '?';
+      url = `${url}${sep}action=${encodeURIComponent(action)}`;
       options.method = 'POST';
       // Use text/plain to prevent browser CORS preflight OPTIONS request
       options.headers = {
@@ -134,13 +136,16 @@ export async function callGasApi<T = any>(
       throw new Error(`Request timed out for action "${action}". Please try again.`);
     }
 
-    // Secondary fallback: if running in full-stack dev with /api proxy, attempt fallback
-    if (typeof window !== 'undefined' && window.location && window.location.port === '3000') {
+    // Secondary fallback for read operations ONLY: if direct GAS GET fails, try server proxy
+    if (method === 'GET' && typeof window !== 'undefined' && window.location && window.location.port === '3000') {
       try {
-        const proxyRes = await fetch(`/api/${action === 'users' ? 'users' : (action === 'entries' ? 'entries' : 'health')}`);
-        if (proxyRes.ok) {
-          const proxyData = await proxyRes.json();
-          return proxyData as T;
+        const endpoint = action === 'users' ? '/api/users' : (action === 'entries' ? '/api/entries' : (action === 'workorders' ? '/api/work-orders' : null));
+        if (endpoint) {
+          const proxyRes = await fetch(endpoint);
+          if (proxyRes.ok) {
+            const proxyData = await proxyRes.json();
+            return (action === 'entries' ? { success: true, entries: proxyData } : (action === 'workorders' ? { success: true, workOrders: proxyData } : proxyData)) as T;
+          }
         }
       } catch {}
     }
@@ -265,48 +270,45 @@ export async function createEntry(
     ...entryData as any,
     submissionId,
     id: generatedId,
-    workerId: entryData.workerId || currentUser?.idNo || currentUser?.id || '',
-    workerName: (entryData.workerName || currentUser?.name || 'Field Worker').trim(),
-    role: entryData.role || currentUser?.role || 'worker',
-    submittedBy: entryData.submittedBy || (currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : entryData.workerName || 'Worker'),
-    workerPhone: (entryData.workerPhone || currentUser?.phone || '').trim(),
+    workerId: String(entryData.workerId || currentUser?.idNo || currentUser?.id || ''),
+    workerName: String(entryData.workerName || currentUser?.name || 'Field Worker').trim(),
+    role: String(entryData.role || currentUser?.role || 'worker'),
+    submittedBy: String(entryData.submittedBy || (currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : entryData.workerName || 'Worker')),
+    workerPhone: String(entryData.workerPhone || currentUser?.phone || '').trim(),
     date: entryData.date || nowIso,
     createdAt: entryData.createdAt || nowIso,
     updatedAt: nowIso,
     status: entryData.status || 'Completed',
   };
 
-  const action = getCreateActionForCategory(cleanEntry.category);
-
   const promise = (async () => {
     let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
     let backendError: any = null;
 
-    // 1. Send to Google Apps Script backend API with the designated category action
+    // 1. Send to Google Apps Script backend API using canonical 'createEntry' action
     try {
       res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-        action,
+        'createEntry',
         { data: cleanEntry },
         'POST',
-        30000
+        25000
       );
     } catch (err: any) {
-      const errMsg = String(err?.message || err);
-      // Backward-compatibility fallback: If deployed web app doesn't recognize category-specific action (e.g. createNSC),
-      // seamlessly fall back to 'createEntry' which is universally supported
-      if (errMsg.includes('Unknown POST action') && action !== 'createEntry') {
-        try {
-          res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-            'createEntry',
-            { data: cleanEntry },
-            'POST',
-            30000
-          );
-        } catch (retryErr) {
-          backendError = retryErr;
+      console.warn('Direct GAS createEntry failed, attempting server proxy /api/entries:', err);
+      try {
+        const proxyRes = await fetch('/api/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cleanEntry),
+        });
+        if (proxyRes.ok) {
+          res = await proxyRes.json();
+        } else {
+          const errBody = await proxyRes.json().catch(() => ({}));
+          backendError = new Error(errBody.error || `Server proxy returned ${proxyRes.status}`);
         }
-      } else {
-        backendError = err;
+      } catch (proxyErr) {
+        backendError = proxyErr;
       }
     }
 
@@ -314,13 +316,20 @@ export async function createEntry(
     if (!res || res.success === false) {
       const detailMsg = res?.message || (backendError ? (backendError.message || String(backendError)) : 'Google Sheets backend failed to save the entry.');
       console.error('Google Sheets Backend Save Failed:', detailMsg);
-      // DO NOT fake success. DO NOT store in local storage as a finished submission.
-      // Throw the real error so the user and form know and can retry.
       throw new Error(`Google Sheets save error: ${detailMsg}`);
     }
 
     // 3. Data successfully saved and confirmed by Google Sheets!
     const confirmedEntry: PowerEntry = normalizeEntry(res.entry || res.data || cleanEntry);
+
+    // Synchronize to server cache in the background so Admin Panel sees it immediately
+    try {
+      fetch('/api/entries/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: [confirmedEntry] }),
+      }).catch(() => {});
+    } catch {}
 
     // Now update cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
     try {
@@ -543,6 +552,33 @@ export async function loginUser(loginId: string, password: string): Promise<User
     throw new Error('User ID No and Password are required');
   }
 
+  // 1. Try server endpoint first (fast, same-origin, immune to iframe CORS and redirects)
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ loginId: cleanId, password: cleanPass })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.session) {
+        return data.session;
+      }
+    } else {
+      const errJson = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(errJson.error || 'ভুল ইউজার আইডি বা পাসওয়ার্ড!');
+      }
+    }
+  } catch (err: any) {
+    // If it's a 401/403 rejection from backend, don't fallback to duplicate call, rethrow immediately
+    if (err && err.message && (err.message.includes('ভুল') || err.message.includes('Invalid') || err.message.includes('Password') || err.message.includes('User ID') || err.message.includes('Hold') || err.message.includes('hold'))) {
+      throw err;
+    }
+    console.warn('Local /api/auth/login failed, falling back to direct GAS:', err);
+  }
+
+  // 2. Direct GAS login fallback
   const data = await callGasApi<{ success: boolean; session: UserSession }>(
     'login',
     { idNo: cleanId, password: cleanPass },
@@ -748,6 +784,7 @@ export async function uploadWorkOrder(payload: {
   const uploadPayload = {
     ...payload,
     fileData: payload.fileData || payload.photoUrl,
+    description: payload.description || payload.photoUrl,
     fileName: payload.fileName || `WBSEDCL_Notice_${Date.now()}.jpg`,
     fileType: payload.fileType || 'image/jpeg',
   };
@@ -768,8 +805,21 @@ export async function uploadWorkOrder(payload: {
       if (!savedOrder.photoUrl && (savedOrder as any).fileId) {
         savedOrder.photoUrl = `https://drive.google.com/thumbnail?id=${(savedOrder as any).fileId}&sz=w2000`;
       }
+      if (!savedOrder.photoUrl) {
+        savedOrder.photoUrl = payload.photoUrl;
+      }
       const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
       writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache([savedOrder, ...list.filter(w => w.id !== savedOrder.id)]));
+
+      // Also sync to server in background so server cache has the image
+      try {
+        fetch('/api/work-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...uploadPayload, id: savedOrder.id }),
+        }).catch(() => {});
+      } catch {}
+
       return savedOrder;
     }
   } catch (gasErr) {

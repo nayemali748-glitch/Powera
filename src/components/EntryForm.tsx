@@ -73,8 +73,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   };
 
   // Common Form Fields
-  const [worker, setWorker] = useState(workerName || 'WBSEDCL Lineman-01');
-  const [workerPhone, setWorkerPhone] = useState('');
+  const [worker, setWorker] = useState(workerName || currentUser?.name || 'WBSEDCL Lineman-01');
+  const [workerPhone, setWorkerPhone] = useState(() => currentUser?.phone ? String(currentUser.phone) : '');
   const [feederName, setFeederName] = useState('11kV Town Feeder-01');
   const [substation, setSubstation] = useState('Central 33/11kV Substation');
   const [cccOffice, setCccOffice] = useState('Burdwan / Howrah CCC');
@@ -166,8 +166,15 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   // Keep worker name synced
   useEffect(() => {
-    if (workerName) setWorker(workerName);
-  }, [workerName]);
+    if (workerName) {
+      setWorker(workerName);
+    } else if (currentUser?.name) {
+      setWorker(String(currentUser.name));
+    }
+    if (currentUser?.phone) {
+      setWorkerPhone(String(currentUser.phone));
+    }
+  }, [workerName, currentUser]);
 
   useEffect(() => {
     setSuccessMessage(null);
@@ -399,11 +406,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
-    const workerIdVal = currentUser?.idNo || currentUser?.id || '';
-    const workerNameVal = (currentUser?.name || (category === 'NSC' ? nscWorkerName : worker)).trim();
-    const workerRoleVal = currentUser?.role || 'Field Worker';
+    const workerIdVal = String(currentUser?.idNo || currentUser?.id || '');
+    const workerNameVal = String(currentUser?.name || (category === 'NSC' ? nscWorkerName : worker) || '').trim();
+    const workerRoleVal = String(currentUser?.role || 'Field Worker');
     const submittedByVal = currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : workerNameVal;
-    const workerPhoneVal = (currentUser?.phone || workerPhone).trim();
+    const workerPhoneVal = String(currentUser?.phone || workerPhone || '').trim();
 
     const entryPayload: Partial<PowerEntry> = {
       submissionId,

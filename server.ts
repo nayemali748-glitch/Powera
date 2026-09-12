@@ -47,6 +47,8 @@ async function callGoogleAppsScript(
       url = `${url}${sep}${params.toString()}`;
       options.method = 'GET';
     } else {
+      const sep = url.includes('?') ? '&' : '?';
+      url = `${url}${sep}action=${encodeURIComponent(action)}`;
       options.method = 'POST';
       options.headers = {
         ...options.headers,
@@ -232,14 +234,23 @@ function normalizeServerEntry(raw: any): any {
   const mNo = String(raw.meterNo || '').trim();
   const initR = String(raw.initialReading || '').trim();
   const fName = String(raw.feederName || '').trim();
+  const sub = String(raw.substation || '').trim();
+  const workOrd = String(raw.workOrderNo || '').trim();
+  const notesVal = String(raw.notes || '').trim();
+  const updatedVal = String(raw.updatedAt || '').trim();
 
   const isShifted =
     (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
     (initR && /^APP/i.test(initR)) ||
+    (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
     (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
     (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11')));
 
   if (isShifted) {
+    const isMobileInWorkOrder = /^[6-9]\d{9}$/.test(workOrd.replace(/\D/g, ''));
+    const isAppliedLoadInNotes = /kw|hp|phase|w|load/i.test(notesVal);
+    const isPhaseInUpdatedAt = /phase/i.test(updatedVal);
+
     return {
       ...raw,
       id: String(raw.id || '').trim(),
@@ -255,14 +266,17 @@ function normalizeServerEntry(raw: any): any {
       consumerName: String(raw.meterNo || raw.consumerName || '').trim(),
       fatherName: String(raw.sealNo || raw.fatherName || '').trim(),
       applicationNo: String(raw.initialReading || raw.applicationNo || '').trim(),
-      meterNo: String(raw.finalReading || raw.meterNo || '').trim(),
+      meterNo: String(raw.finalReading || (mNo.includes(' ') ? '' : raw.meterNo) || '').trim(),
       sealNo: String(raw.address || raw.sealNo || '').trim(),
-      initialReading: String(raw.workOrderNo || raw.initialReading || '').trim(),
+      initialReading: String(raw.initialReading && !/^APP/i.test(raw.initialReading) ? raw.initialReading : (raw.finalReading || '000000')).trim(),
       finalReading: '',
+      mobile: isMobileInWorkOrder ? workOrd : (raw.mobile || ''),
       address: String(raw.locationGps || raw.address || '').trim(),
-      workOrderNo: String(raw.photoUrl || raw.workOrderNo || '').trim(),
-      locationGps: String(raw.notes || raw.locationGps || '').trim(),
-      notes: String(raw.updatedAt || raw.notes || '').trim(),
+      workOrderNo: isMobileInWorkOrder ? '' : String(raw.workOrderNo || '').trim(),
+      locationGps: isAppliedLoadInNotes ? '' : String(raw.locationGps || '').trim(),
+      appliedLoad: isAppliedLoadInNotes ? notesVal : (raw.appliedLoad || ''),
+      phase: isPhaseInUpdatedAt ? updatedVal : (raw.phase || '1 Phase'),
+      notes: isAppliedLoadInNotes || isPhaseInUpdatedAt ? '' : String(raw.notes || '').trim(),
       photoUrl: String(raw.photoUrl && (raw.photoUrl.startsWith('http') || raw.photoUrl.startsWith('data:')) ? raw.photoUrl : (raw.directImageUrl || '')),
       updatedAt: String(raw[''] || raw.updatedAt || raw.createdAt || new Date().toISOString())
     };
@@ -923,7 +937,15 @@ app.get('/api/work-orders', async (req, res) => {
     try {
       const result = await callGoogleAppsScript('workorders', req.query, 'GET', 12000);
       if (result && result.success && Array.isArray(result.workOrders)) {
+        const localExistingOrders = readWorkOrders();
+        const localMap = new Map<string, any>();
+        localExistingOrders.forEach((o: any) => {
+          if (o && o.id) localMap.set(String(o.id), o);
+          if (o && o.title) localMap.set(`TITLE:${String(o.title).trim()}`, o);
+        });
+
         let orders = result.workOrders.map((o: any) => {
+          const matchedLocal = localMap.get(String(o.id)) || localMap.get(`TITLE:${String(o.title).trim()}`);
           let photo = o.photoUrl || o.directImageUrl || '';
           if (!photo && o.description && (String(o.description).startsWith('http') || String(o.description).startsWith('data:'))) {
             photo = String(o.description);
@@ -931,7 +953,12 @@ app.get('/api/work-orders', async (req, res) => {
           if (!photo && o.fileId) {
             photo = `https://drive.google.com/thumbnail?id=${o.fileId}&sz=w2000`;
           }
+          // Preserve local photo if remote GAS row had empty photo column
+          if (!photo && matchedLocal && (matchedLocal.photoUrl || matchedLocal.fileData)) {
+            photo = matchedLocal.photoUrl || matchedLocal.fileData;
+          }
           return {
+            ...matchedLocal,
             ...o,
             photoUrl: photo,
             directImageUrl: o.directImageUrl || photo
@@ -980,7 +1007,7 @@ app.post('/api/work-orders', async (req, res) => {
       fileData: rawPhoto,
       fileName: fileName || `${title || 'WorkOrder'}_${Date.now()}.jpg`,
       fileType: fileType || 'image/jpeg',
-      description: description || '',
+      description: description || rawPhoto, // Store in description so Google Sheet saves photo even without photoUrl column
       uploadedBy: uploadedBy || 'admin',
       adminName: adminName || 'Admin Controller',
       adminPhone: adminPhone || '8695716192',
@@ -991,13 +1018,11 @@ app.post('/api/work-orders', async (req, res) => {
     try {
       const result = await callGoogleAppsScript('createWorkOrder', { data: payload }, 'POST', 60000);
       if (result && result.success && result.workOrder) {
-        const savedOrder = result.workOrder;
-        if (!savedOrder.photoUrl && savedOrder.directImageUrl) {
-          savedOrder.photoUrl = savedOrder.directImageUrl;
-        }
-        if (!savedOrder.photoUrl && savedOrder.fileId) {
-          savedOrder.photoUrl = `https://drive.google.com/thumbnail?id=${savedOrder.fileId}&sz=w2000`;
-        }
+        const savedOrder = {
+          ...result.workOrder,
+          photoUrl: result.workOrder.photoUrl || rawPhoto,
+          directImageUrl: result.workOrder.directImageUrl || rawPhoto,
+        };
         const currentOrders = readWorkOrders();
         writeWorkOrders([savedOrder, ...currentOrders.filter((o: any) => o.id !== savedOrder.id)]);
         cachedWorkOrdersInMemory = null;
@@ -1018,7 +1043,7 @@ app.post('/api/work-orders', async (req, res) => {
       category: category || 'NSC',
       title: title || 'WBSEDCL Work Order / Khata Notice',
       photoUrl: rawPhoto,
-      description: description || '',
+      description: description || rawPhoto,
       uploadedBy: uploadedBy || 'admin',
       adminName: adminName || 'Admin Controller',
       adminPhone: adminPhone || '8695716192',
@@ -1045,6 +1070,20 @@ app.get('/api/drive-proxy/:fileId', async (req, res) => {
   const { fileId } = req.params;
   if (!fileId || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).send('Invalid file ID');
+  }
+
+  // 1. Check local work orders cache for instant high-speed response
+  const localOrders = readWorkOrders();
+  const matched = localOrders.find((o: any) => o.fileId === fileId || o.id === fileId);
+  if (matched && (matched.photoUrl || matched.fileData)) {
+    const raw = matched.photoUrl || matched.fileData;
+    if (typeof raw === 'string' && raw.startsWith('data:')) {
+      const parts = raw.split(';base64,');
+      const mime = parts[0].replace('data:', '') || 'image/jpeg';
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(Buffer.from(parts[1], 'base64'));
+    }
   }
 
   const driveUrls = [

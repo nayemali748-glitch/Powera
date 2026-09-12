@@ -2052,6 +2052,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         alt="Work Order Khata Slip" 
                         className="max-h-52 w-full object-contain mx-auto"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          const url = target.src;
+                          const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+                          if (idMatch && idMatch[1] && !url.includes('/api/drive-proxy/')) {
+                            target.src = `/api/drive-proxy/${idMatch[1]}`;
+                          }
+                        }}
                       />
                     </div>
                   </div>
@@ -2080,6 +2088,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         alt="Field evidence" 
                         className="max-h-52 w-full object-contain mx-auto"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          const url = target.src;
+                          const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+                          if (idMatch && idMatch[1] && !url.includes('/api/drive-proxy/')) {
+                            target.src = `/api/drive-proxy/${idMatch[1]}`;
+                          }
+                        }}
                       />
                     </div>
                   </div>

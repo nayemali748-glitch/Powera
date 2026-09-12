@@ -18,6 +18,9 @@ export function normalizeEntry(entry: any): PowerEntry {
   const initR = String(raw.initialReading || '').trim();
   const fName = String(raw.feederName || '').trim();
   const sub = String(raw.substation || '').trim();
+  const workOrd = String(raw.workOrderNo || '').trim();
+  const notesVal = String(raw.notes || '').trim();
+  const updatedVal = String(raw.updatedAt || '').trim();
 
   // Signature of shifted Google Sheet row:
   // When an older GAS version appended [id, cat, status, date, createdAt, workerName, workerPhone, substation, feederName, consumerId, consumerName, fatherName, applicationNo, meterNo, sealNo, initialReading, address, workOrderNo, locationGps, notes, updatedAt]
@@ -27,14 +30,20 @@ export function normalizeEntry(entry: any): PowerEntry {
     (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
     // Pattern 2: initialReading starts with 'APP' or looks like an application number
     (initR && /^APP/i.test(initR)) ||
-    // Pattern 3: consumerId contains feeder identifiers
+    // Pattern 3: substation contains a phone number (10 digits)
+    (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
+    // Pattern 4: consumerId contains feeder identifiers
     (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
-    // Pattern 4: feederName looks like a substation name
+    // Pattern 5: feederName looks like a substation name
     (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11') || fName.toLowerCase().includes('132/33')));
 
   let normalized: PowerEntry;
 
   if (isShifted) {
+    const isMobileInWorkOrder = /^[6-9]\d{9}$/.test(workOrd.replace(/\D/g, ''));
+    const isAppliedLoadInNotes = /kw|hp|phase|w|load/i.test(notesVal);
+    const isPhaseInUpdatedAt = /phase/i.test(updatedVal);
+
     normalized = {
       ...raw,
       id: String(raw.id || '').trim(),
@@ -50,14 +59,17 @@ export function normalizeEntry(entry: any): PowerEntry {
       consumerName: String(raw.meterNo || raw.consumerName || '').trim(),
       fatherName: String(raw.sealNo || raw.fatherName || '').trim(),
       applicationNo: String(raw.initialReading || raw.applicationNo || '').trim(),
-      meterNo: String(raw.finalReading || raw.meterNo || '').trim(),
+      meterNo: String(raw.finalReading || (mNo.includes(' ') ? '' : raw.meterNo) || '').trim(),
       sealNo: String(raw.address || raw.sealNo || '').trim(),
-      initialReading: String(raw.workOrderNo || raw.initialReading || '').trim(),
+      initialReading: String(raw.initialReading && !/^APP/i.test(raw.initialReading) ? raw.initialReading : (raw.finalReading || '000000')).trim(),
       finalReading: '',
+      mobile: isMobileInWorkOrder ? workOrd : (raw.mobile || ''),
       address: String(raw.locationGps || raw.address || '').trim(),
-      workOrderNo: String(raw.photoUrl || raw.workOrderNo || '').trim(),
-      locationGps: String(raw.notes || raw.locationGps || '').trim(),
-      notes: String(raw.updatedAt || raw.notes || '').trim(),
+      workOrderNo: isMobileInWorkOrder ? '' : String(raw.workOrderNo || '').trim(),
+      locationGps: isAppliedLoadInNotes ? '' : String(raw.locationGps || '').trim(),
+      appliedLoad: isAppliedLoadInNotes ? notesVal : (raw.appliedLoad || ''),
+      phase: isPhaseInUpdatedAt ? updatedVal : (raw.phase || '1 Phase'),
+      notes: isAppliedLoadInNotes || isPhaseInUpdatedAt ? '' : String(raw.notes || '').trim(),
       photoUrl: String(raw.photoUrl && (raw.photoUrl.startsWith('http') || raw.photoUrl.startsWith('data:')) ? raw.photoUrl : (raw.directImageUrl || '')),
       updatedAt: String(raw[''] || raw.updatedAt || raw.createdAt || new Date().toISOString())
     };
@@ -114,14 +126,20 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
     if (!raw) continue;
     const item = normalizeEntry(raw);
 
-    // Skip empty ghost rows
-    if (
-      !item.id && 
-      !item.category && 
-      !item.consumerName && 
-      !item.consumerId && 
-      !item.applicationNo
-    ) {
+    // Skip empty ghost rows (records where no real form data was provided)
+    const hasMeaningfulData = Boolean(
+      item.consumerName ||
+      item.consumerId ||
+      item.applicationNo ||
+      item.meterNo ||
+      item.feederName ||
+      item.poleNo ||
+      item.dtrName ||
+      item.substation ||
+      (item.category && item.workerName)
+    );
+
+    if (!hasMeaningfulData) {
       continue;
     }
 
