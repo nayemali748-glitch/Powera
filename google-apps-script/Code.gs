@@ -869,6 +869,10 @@ function doGet(e) {
       return out({ success: true, users: users });
     }
 
+    if (action === 'login' || action === 'authenticate') {
+      return out({ success: true, session: authenticateUser(p.idNo, p.password) });
+    }
+
     if (action === 'entries' || action === 'getMasterData') {
       return out({ success: true, entries: queryEntries(p) });
     }

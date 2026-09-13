@@ -26,14 +26,7 @@ async function callGoogleAppsScript(
   }, timeoutMs);
 
   try {
-    let url = GOOGLE_APPS_SCRIPT_URL;
-    const options: RequestInit = {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        'Accept': 'application/json'
-      }
-    };
+    const url = GOOGLE_APPS_SCRIPT_URL;
 
     if (method === 'GET') {
       const sep = url.includes('?') ? '&' : '?';
@@ -43,26 +36,57 @@ async function callGoogleAppsScript(
           queryParams[key] = String(value);
         }
       }
+      queryParams['_t'] = Date.now().toString();
       const params = new URLSearchParams(queryParams);
-      url = `${url}${sep}${params.toString()}`;
-      options.method = 'GET';
-    } else {
-      const sep = url.includes('?') ? '&' : '?';
-      url = `${url}${sep}action=${encodeURIComponent(action)}`;
-      options.method = 'POST';
-      options.headers = {
-        ...options.headers,
-        'Content-Type': 'text/plain;charset=utf-8'
-      };
-      options.body = JSON.stringify({ action, ...payload });
-    }
+      const getUrl = `${url}${sep}${params.toString()}`;
 
-    const res = await fetch(url, options);
-    const text = await res.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error(`Google Apps Script returned non-JSON response: ${text.slice(0, 150)}`);
+      const res = await fetch(getUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`Google Apps Script GET returned non-JSON response: ${text.slice(0, 150)}`);
+      }
+    } else {
+      // POST: Send to clean GOOGLE_APPS_SCRIPT_URL with manual redirect handling
+      const body = JSON.stringify({ action, ...payload });
+      const res = await fetch(url, {
+        method: 'POST',
+        signal: controller.signal,
+        redirect: 'manual',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+          'Accept': 'application/json'
+        },
+        body
+      });
+
+      let finalRes: Response;
+      if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
+        const redirectUrl = res.headers.get('location');
+        if (!redirectUrl) {
+          throw new Error('Google Apps Script returned redirect status without location header');
+        }
+        finalRes = await fetch(redirectUrl, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+      } else {
+        finalRes = res;
+      }
+
+      const text = await finalRes.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`Google Apps Script POST returned non-JSON response: ${text.slice(0, 150)}`);
+      }
     }
   } catch (err: any) {
     if (err && err.name === 'AbortError') {
@@ -743,6 +767,22 @@ app.post('/api/auth/login', async (req, res) => {
       success: false, 
       error: error?.message || 'Backend connection failed. Please try again.' 
     });
+  }
+});
+
+// Generic direct proxy to Google Apps Script for all write/read operations
+app.post('/api/gas-proxy', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const { action, payload, method = 'POST' } = req.body;
+    if (!action) {
+      return res.status(400).json({ success: false, error: 'Action parameter is required' });
+    }
+    const result = await callGoogleAppsScript(action, payload || {}, method);
+    return res.json(result);
+  } catch (err: any) {
+    console.error(`Error in /api/gas-proxy for action ${req.body?.action}:`, err);
+    return res.status(502).json({ success: false, error: err.message || 'Google Apps Script proxy error' });
   }
 });
 

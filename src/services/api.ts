@@ -82,6 +82,43 @@ export async function callGasApi<T = any>(
   method: 'GET' | 'POST' = 'GET',
   timeoutMs = 45000
 ): Promise<T> {
+  const isServerHost = typeof window !== 'undefined' && window.location && window.location.port === '3000';
+
+  if (isServerHost) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      try { controller.abort(); } catch {}
+    }, timeoutMs);
+
+    try {
+      const res = await fetch('/api/gas-proxy', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, payload, method })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.success !== false) {
+        return data as T;
+      }
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+    } catch (err: any) {
+      if (err && err.name === 'AbortError') {
+        throw new Error(`Request timed out for action "${action}". Please try again.`);
+      }
+      // If error is explicit user/business error (like wrong password or hold), rethrow immediately
+      if (err?.message && (err.message.includes('ভুল') || err.message.includes('Invalid') || err.message.includes('Hold') || err.message.includes('Password'))) {
+        throw err;
+      }
+      console.warn(`Local proxy for "${action}" failed, trying direct Google Apps Script:`, err);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  // Direct Google Apps Script call
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     try { controller.abort(); } catch {}
@@ -107,8 +144,6 @@ export async function callGasApi<T = any>(
       url = `${url}${sep}${params.toString()}`;
       options.method = 'GET';
     } else {
-      const sep = url.includes('?') ? '&' : '?';
-      url = `${url}${sep}action=${encodeURIComponent(action)}`;
       options.method = 'POST';
       // Use text/plain to prevent browser CORS preflight OPTIONS request
       options.headers = {
@@ -135,21 +170,6 @@ export async function callGasApi<T = any>(
     if (err && err.name === 'AbortError') {
       throw new Error(`Request timed out for action "${action}". Please try again.`);
     }
-
-    // Secondary fallback for read operations ONLY: if direct GAS GET fails, try server proxy
-    if (method === 'GET' && typeof window !== 'undefined' && window.location && window.location.port === '3000') {
-      try {
-        const endpoint = action === 'users' ? '/api/users' : (action === 'entries' ? '/api/entries' : (action === 'workorders' ? '/api/work-orders' : null));
-        if (endpoint) {
-          const proxyRes = await fetch(endpoint);
-          if (proxyRes.ok) {
-            const proxyData = await proxyRes.json();
-            return (action === 'entries' ? { success: true, entries: proxyData } : (action === 'workorders' ? { success: true, workOrders: proxyData } : proxyData)) as T;
-          }
-        }
-      } catch {}
-    }
-
     throw err;
   } finally {
     clearTimeout(timeoutId);
@@ -285,31 +305,16 @@ export async function createEntry(
     let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
     let backendError: any = null;
 
-    // 1. Send to Google Apps Script backend API using canonical 'createEntry' action
+    // 1. Send exactly one canonical submission request to Google Apps Script / Google Sheets
     try {
       res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
         'createEntry',
         { data: cleanEntry },
         'POST',
-        25000
+        35000
       );
     } catch (err: any) {
-      console.warn('Direct GAS createEntry failed, attempting server proxy /api/entries:', err);
-      try {
-        const proxyRes = await fetch('/api/entries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cleanEntry),
-        });
-        if (proxyRes.ok) {
-          res = await proxyRes.json();
-        } else {
-          const errBody = await proxyRes.json().catch(() => ({}));
-          backendError = new Error(errBody.error || `Server proxy returned ${proxyRes.status}`);
-        }
-      } catch (proxyErr) {
-        backendError = proxyErr;
-      }
+      backendError = err;
     }
 
     // 2. Strict Backend Save Confirmation check
@@ -322,16 +327,7 @@ export async function createEntry(
     // 3. Data successfully saved and confirmed by Google Sheets!
     const confirmedEntry: PowerEntry = normalizeEntry(res.entry || res.data || cleanEntry);
 
-    // Synchronize to server cache in the background so Admin Panel sees it immediately
-    try {
-      fetch('/api/entries/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: [confirmedEntry] }),
-      }).catch(() => {});
-    } catch {}
-
-    // Now update cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
+    // Update local cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
     try {
       const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
       const filtered = list.filter(e => e.id !== confirmedEntry.id && e.submissionId !== confirmedEntry.submissionId);
@@ -552,38 +548,27 @@ export async function loginUser(loginId: string, password: string): Promise<User
     throw new Error('User ID No and Password are required');
   }
 
-  // 1. Try server endpoint first (fast, same-origin, immune to iframe CORS and redirects)
-  try {
+  const isServerHost = typeof window !== 'undefined' && window.location && window.location.port === '3000';
+  if (isServerHost) {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ loginId: cleanId, password: cleanPass })
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && data.session) {
-        return data.session;
-      }
-    } else {
-      const errJson = await res.json().catch(() => ({}));
-      if (res.status === 401 || res.status === 403) {
-        throw new Error(errJson.error || 'ভুল ইউজার আইডি বা পাসওয়ার্ড!');
-      }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data && data.success && data.session) {
+      return data.session;
     }
-  } catch (err: any) {
-    // If it's a 401/403 rejection from backend, don't fallback to duplicate call, rethrow immediately
-    if (err && err.message && (err.message.includes('ভুল') || err.message.includes('Invalid') || err.message.includes('Password') || err.message.includes('User ID') || err.message.includes('Hold') || err.message.includes('hold'))) {
-      throw err;
-    }
-    console.warn('Local /api/auth/login failed, falling back to direct GAS:', err);
+    const errorMsg = data?.error || (res.status === 401 ? 'ভুল ইউজার আইডি বা পাসওয়ার্ড!' : 'লগইন ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+    throw new Error(errorMsg);
   }
 
-  // 2. Direct GAS login fallback
+  // Direct GAS login for standalone/Vercel
   const data = await callGasApi<{ success: boolean; session: UserSession }>(
     'login',
     { idNo: cleanId, password: cleanPass },
     'POST',
-    25000
+    30000
   );
 
   if (data && data.success && data.session) {
