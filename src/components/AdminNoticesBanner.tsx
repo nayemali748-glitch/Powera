@@ -28,10 +28,10 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
   workOrders,
   onSelectNoticeForEntry,
   onViewAllNotices,
-  lang = 'bn',
+  lang = 'en',
   isAdmin = false,
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
   const [selectedPreviewNotice, setSelectedPreviewNotice] = useState<WorkOrderNotice | null>(null);
 
   // Filter for visible notices

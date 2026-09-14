@@ -36,9 +36,9 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
   onLogout,
   onSelectEntry,
   onNewEntry,
-  lang = 'bn',
+  lang = 'en',
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
 
   // Filter for this worker or show all recent
   const workerEntries = entries.filter(e => {

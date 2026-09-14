@@ -47,11 +47,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   workerName,
   onSuccess,
   onBack,
-  lang = 'bn',
+  lang = 'en',
   currentUser,
   initialNotice,
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
 
   const [loading, setLoading] = useState(false);
   const isSubmittingRef = useRef<boolean>(false);

@@ -66,11 +66,15 @@ function computeJsonChangeHash(data: unknown): string {
 
 export default function App() {
   const [currentLanguage, setCurrentLanguage] = useState<Language>(() => {
-    return (localStorage.getItem('power_app_lang') as Language) || 'bn';
+    const saved = localStorage.getItem('power_app_lang') as Language;
+    if (saved && (saved === 'en' || saved === 'bn' || saved === 'hi' || saved === 'ur')) {
+      return saved;
+    }
+    return 'en'; // Primary / Default Language is English
   });
   const [showLanguageModal, setShowLanguageModal] = useState<boolean>(false);
 
-  const t = translations[currentLanguage] || translations.bn;
+  const t = translations[currentLanguage] || translations.en;
 
   const [currentUser, setCurrentUser] = useState<UserSession | null>(() => {
     const saved = localStorage.getItem('power_user_session');

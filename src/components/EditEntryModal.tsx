@@ -35,7 +35,7 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
 }) => {
   if (!isOpen || !entry) return null;
 
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
 
   const [formData, setFormData] = useState<Partial<PowerEntry>>({ ...entry });
   const [loading, setLoading] = useState(false);

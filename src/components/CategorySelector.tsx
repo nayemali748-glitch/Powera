@@ -23,9 +23,9 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
   selectedCategory,
   onSelectCategory,
   categoryCounts = {},
-  currentLanguage = 'bn',
+  currentLanguage = 'en',
 }) => {
-  const t = translations[currentLanguage] || translations.bn;
+  const t = translations[currentLanguage] || translations.en;
 
   const categories = [
     {

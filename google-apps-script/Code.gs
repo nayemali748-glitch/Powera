@@ -11,32 +11,56 @@ const SHEET_ALIASES = {
   'USERS': ['USERS', 'Users', 'users'],
   'USER_ACTIVITY': ['USER_ACTIVITY', 'UserActivity', 'ActivityLogs'],
   'MASTER_DATA': ['MASTER_DATA', 'Entries', 'master_data', 'entries'],
-  'NEW_CONNECTION': ['NEW_CONNECTION', 'NSC', 'NewConnection'],
-  'DISCONNECTION': ['DISCONNECTION', 'Disconnection'],
-  'POLE_CASE': ['POLE_CASE', 'PoleCase', 'POLE CASE'],
-  'METER_REPLACEMENT': ['METER_REPLACEMENT', 'METER_REPLESMENT', 'MeterReplacement'],
-  'DTR_REPLACEMENT': ['DTR_REPLACEMENT', 'DTR_REPLESMENT', 'DtrReplacement'],
+  'NSC': ['NSC', 'NEW_CONNECTION', 'NewConnection', 'NEW CONNECTION', 'New Connection'],
+  'NEW_CONNECTION': ['NSC', 'NEW_CONNECTION', 'NewConnection', 'NEW CONNECTION', 'New Connection'],
+  'DISCONNECTION': ['DISCONNECTION', 'Disconnection', 'DISCONNECT', 'Disconnect'],
+  'POLE CASE': ['POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case', 'CALL CASE', 'CALL_CASE', 'CallCase', 'Call Case'],
+  'POLE_CASE': ['POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case', 'CALL CASE', 'CALL_CASE', 'CallCase', 'Call Case'],
+  'METER REPLESMENT': ['METER REPLESMENT', 'METER_REPLESMENT', 'METER REPLACEMENT', 'METER_REPLACEMENT', 'MeterReplacement', 'Meter Replacement', 'Meter Replesment'],
+  'METER_REPLACEMENT': ['METER REPLESMENT', 'METER_REPLESMENT', 'METER REPLACEMENT', 'METER_REPLACEMENT', 'MeterReplacement', 'Meter Replacement', 'Meter Replesment'],
+  'DTR REPLESMENT': ['DTR REPLESMENT', 'DTR_REPLESMENT', 'DTR REPLACEMENT', 'DTR_REPLACEMENT', 'DtrReplacement', 'Dtr Replacement', 'Dtr Replesment'],
+  'DTR_REPLACEMENT': ['DTR REPLESMENT', 'DTR_REPLESMENT', 'DTR REPLACEMENT', 'DTR_REPLACEMENT', 'DtrReplacement', 'Dtr Replacement', 'Dtr Replesment'],
   'SETTINGS': ['SETTINGS', 'Settings'],
   'WORK_ORDERS': ['WORK_ORDERS', 'WorkOrders', 'workorders'],
   'CHAT': ['CHAT', 'Chat', 'chat']
 };
 
 const CATEGORY_MAP = {
-  'NSC': 'NEW_CONNECTION',
-  'NEW_CONNECTION': 'NEW_CONNECTION',
+  'NSC': 'NSC',
+  'NEW_CONNECTION': 'NSC',
+  'NEW CONNECTION': 'NSC',
   'DISCONNECTION': 'DISCONNECTION',
-  'POLE CASE': 'POLE_CASE',
-  'POLE_CASE': 'POLE_CASE',
-  'METER REPLESMENT': 'METER_REPLACEMENT',
-  'METER_REPLESMENT': 'METER_REPLACEMENT',
-  'METER_REPLACEMENT': 'METER_REPLACEMENT',
-  'DTR REPLESMENT': 'DTR_REPLACEMENT',
-  'DTR_REPLESMENT': 'DTR_REPLACEMENT',
-  'DTR_REPLACEMENT': 'DTR_REPLACEMENT'
+  'POLE CASE': 'POLE CASE',
+  'POLE_CASE': 'POLE CASE',
+  'POLECASE': 'POLE CASE',
+  'CALL CASE': 'POLE CASE',
+  'CALL_CASE': 'POLE CASE',
+  'CALLCASE': 'POLE CASE',
+  'METER REPLESMENT': 'METER REPLESMENT',
+  'METER_REPLESMENT': 'METER REPLESMENT',
+  'METER REPLACEMENT': 'METER REPLESMENT',
+  'METER_REPLACEMENT': 'METER REPLESMENT',
+  'DTR REPLESMENT': 'DTR REPLESMENT',
+  'DTR_REPLESMENT': 'DTR REPLESMENT',
+  'DTR REPLACEMENT': 'DTR REPLESMENT',
+  'DTR_REPLACEMENT': 'DTR REPLESMENT'
 };
 
+function normalizeCategory(cat) {
+  if (!cat) return null;
+  const raw = String(cat).trim().toUpperCase();
+  if (CATEGORY_MAP[raw]) return CATEGORY_MAP[raw];
+  const cleaned = raw.replace(/[\s_\-]/g, '');
+  if (cleaned === 'NSC' || cleaned === 'NEWCONNECTION') return 'NSC';
+  if (cleaned === 'DISCONNECTION' || cleaned === 'DISCONNECT') return 'DISCONNECTION';
+  if (cleaned === 'POLECASE' || cleaned === 'CALLCASE') return 'POLE CASE';
+  if (cleaned === 'METERREPLESMENT' || cleaned === 'METERREPLACEMENT') return 'METER REPLESMENT';
+  if (cleaned === 'DTRREPLESMENT' || cleaned === 'DTRREPLACEMENT') return 'DTR REPLESMENT';
+  return null;
+}
+
 const COMMON_ENTRY_HEADERS = [
-  'submissionId', 'id', 'category', 'status', 'date', 'createdAt', 'workerName', 'workerPhone', 'substation',
+  'submissionId', 'id', 'category', 'status', 'date', 'createdAt', 'workerId', 'workerName', 'role', 'submittedBy', 'workerPhone', 'substation',
   'feederName', 'consumerId', 'consumerName', 'fatherName', 'applicationNo', 'agencyName', 'cccName',
   'mobile', 'address', 'poleNo', 'appliedLoad', 'phase', 'tariffCategory', 'meterNo', 'initialReading',
   'sealNo', 'serviceCableLength', 'meterInstallDate', 'inspectionAgencyName', 'meterMake', 'workOrderNo',
@@ -73,26 +97,55 @@ const CHAT_HEADERS = [
   'message', 'timestamp', 'status', 'createdAt'
 ];
 
+var _ssInstance = null;
 function ss() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+  if (!_ssInstance) {
+    _ssInstance = SpreadsheetApp.openById(SPREADSHEET_ID);
+  }
+  return _ssInstance;
 }
 
+var _sheetMemoryMap = {};
 function getExistingOrNewSheet(canonicalName, headers) {
+  if (_sheetMemoryMap[canonicalName]) {
+    return _sheetMemoryMap[canonicalName];
+  }
   const spreadsheet = ss();
   const aliases = SHEET_ALIASES[canonicalName] || [canonicalName];
   
+  // 1. Direct match on alias names
   for (let i = 0; i < aliases.length; i++) {
     const existing = spreadsheet.getSheetByName(aliases[i]);
     if (existing) {
       ensureHeaders(existing, headers);
+      _sheetMemoryMap[canonicalName] = existing;
       return existing;
     }
   }
 
+  // 2. Case-insensitive and normalized match across all sheets
+  const allSheets = spreadsheet.getSheets();
+  const normalizedAliases = aliases.map(a => a.toUpperCase().replace(/[\s_\-]/g, ''));
+  for (let i = 0; i < allSheets.length; i++) {
+    const s = allSheets[i];
+    const sNorm = s.getName().toUpperCase().replace(/[\s_\-]/g, '');
+    if (normalizedAliases.indexOf(sNorm) >= 0) {
+      ensureHeaders(s, headers);
+      _sheetMemoryMap[canonicalName] = s;
+      return s;
+    }
+  }
+
+  // 3. Create destination sheet with canonical name if not found
   const newSheet = spreadsheet.insertSheet(canonicalName);
   newSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   newSheet.setFrozenRows(1);
+  _sheetMemoryMap[canonicalName] = newSheet;
   return newSheet;
+}
+
+function getCategorySheet(canonicalCategory) {
+  return getExistingOrNewSheet(canonicalCategory, headersFor(canonicalCategory));
 }
 
 function ensureHeaders(s, headers) {
@@ -101,7 +154,7 @@ function ensureHeaders(s, headers) {
     s.setFrozenRows(1);
     return;
   }
-  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0];
+  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
   const missingHeaders = headers.filter(h => currentHeaders.indexOf(h) === -1);
   if (missingHeaders.length > 0) {
     const startCol = currentHeaders.length + 1;
@@ -126,12 +179,13 @@ function getSheet(name) {
 function setupDatabase() {
   const sheetsCreated = [];
   const canonicalNames = [
-    'USERS', 'USER_ACTIVITY', 'MASTER_DATA', 'NEW_CONNECTION', 'DISCONNECTION',
-    'POLE_CASE', 'METER_REPLACEMENT', 'DTR_REPLACEMENT', 'SETTINGS', 'WORK_ORDERS', 'CHAT'
+    'USERS', 'USER_ACTIVITY', 'MASTER_DATA', 'NSC', 'DISCONNECTION',
+    'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT', 'SETTINGS', 'WORK_ORDERS', 'CHAT'
   ];
 
   canonicalNames.forEach(name => {
     const s = getSheet(name);
+    ensureHeaders(s, headersFor(name));
     sheetsCreated.push(s.getName());
   });
 
@@ -211,17 +265,66 @@ function getRows(sheetName) {
   });
 }
 
-function appendRow(sheetName, obj) {
-  const s = getSheet(sheetName);
-  ensureHeaders(s, headersFor(sheetName));
-  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0];
+function getRowsFromSheet(s) {
+  if (!s) return [];
+  const totalRows = s.getLastRow();
+  const totalCols = s.getLastColumn();
+  if (totalRows < 2 || totalCols < 1) return [];
+
+  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
+  const data = s.getRange(2, 1, totalRows - 1, totalCols).getValues();
+
+  return data.map(r => {
+    const item = {};
+    headers.forEach((h, i) => {
+      if (h) item[h] = r[i];
+    });
+    return item;
+  });
+}
+
+function appendRowDynamic(sheetOrName, obj, defaultHeaders) {
+  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
+  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
+  
+  if (s.getLastRow() === 0) {
+    const headers = defaultHeaders || headersFor(s.getName());
+    s.getRange(1, 1, 1, headers.length).setValues([headers]);
+    s.setFrozenRows(1);
+  }
+
+  let currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
+
+  // Dynamic Header Detection: Automatically append new columns at the end if new fields arrive
+  const missingHeaders = [];
+  Object.keys(obj).forEach(k => {
+    const trimmed = String(k || '').trim();
+    if (trimmed && !trimmed.startsWith('_') && currentHeaders.indexOf(trimmed) === -1) {
+      missingHeaders.push(trimmed);
+    }
+  });
+
+  if (missingHeaders.length > 0) {
+    const startCol = currentHeaders.length + 1;
+    s.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
+    currentHeaders = currentHeaders.concat(missingHeaders);
+  }
 
   const rowValues = currentHeaders.map(h => {
     const k = String(h || '').trim();
     if (!k) return '';
     if (obj[k] !== undefined && obj[k] !== null) return obj[k];
 
-    // Aliases for legacy sheets
+    // Aliases and field fallbacks
+    if (k === 'workerId') return obj.workerId || obj.WorkerID || obj.idNo || '';
+    if (k === 'workerName') return obj.workerName || obj.WorkerName || '';
+    if (k === 'role') return obj.role || obj.Role || '';
+    if (k === 'submittedBy') return obj.submittedBy || obj.SubmittedBy || obj.workerName || '';
+    if (k === 'submissionId') return obj.submissionId || obj.SubmissionID || '';
+    if (k === 'createdAt') return obj.createdAt || obj.CreatedAt || obj.date || '';
+    if (k === 'updatedAt') return obj.updatedAt || obj.UpdatedAt || '';
+    if (k === 'status') return obj.status || obj.Status || 'Completed';
+    if (k === 'category') return obj.category || obj.Category || '';
     if (k === 'photoUrl') return obj.photoUrl || obj.directImageUrl || obj.driveViewUrl || '';
     if (k === 'description') {
       if (currentHeaders.indexOf('photoUrl') === -1) {
@@ -240,13 +343,20 @@ function appendRow(sheetName, obj) {
   return obj;
 }
 
-function findRowIndex(sheetName, key, value) {
-  const s = getSheet(sheetName);
-  const h = headersFor(sheetName);
-  const colIndex = h.indexOf(key);
-  if (colIndex < 0) return -1;
+function appendRow(sheetName, obj) {
+  return appendRowDynamic(sheetName, obj, headersFor(sheetName));
+}
+
+function findRowIndex(sheetOrName, key, value) {
+  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
+  if (!s) return -1;
   const totalRows = s.getLastRow();
-  if (totalRows < 2) return -1;
+  const totalCols = s.getLastColumn();
+  if (totalRows < 2 || totalCols < 1) return -1;
+
+  const currentHeaders = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
+  const colIndex = currentHeaders.indexOf(key);
+  if (colIndex < 0) return -1;
 
   const vals = s.getRange(2, colIndex + 1, totalRows - 1, 1).getValues();
   const target = String(value).trim().toLowerCase();
@@ -258,42 +368,50 @@ function findRowIndex(sheetName, key, value) {
   return -1;
 }
 
-function getRowByIndex(sheetName, rowIdx) {
-  const s = getSheet(sheetName);
+function getRowByIndex(sheetOrName, rowIdx) {
+  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
+  if (!s) return {};
   const totalCols = Math.max(1, s.getLastColumn());
-  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0];
+  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
   const rowValues = s.getRange(rowIdx, 1, 1, totalCols).getValues()[0];
   const item = {};
   headers.forEach((h, i) => {
-    const col = String(h || '').trim();
-    if (col) item[col] = rowValues[i];
+    if (h) item[h] = rowValues[i];
   });
   return item;
 }
 
-function updateRow(sheetName, key, value, updates) {
-  const s = getSheet(sheetName);
-  const h = headersFor(sheetName);
-  const rowIdx = findRowIndex(sheetName, key, value);
-  if (rowIdx < 0) throw Error('Record not found in ' + sheetName);
+function updateRow(sheetOrName, key, value, updates) {
+  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
+  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
+  const rowIdx = findRowIndex(s, key, value);
+  if (rowIdx < 0) throw Error('Record not found in ' + s.getName());
+
+  const totalCols = Math.max(1, s.getLastColumn());
+  const currentHeaders = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
+  const existingValues = s.getRange(rowIdx, 1, 1, totalCols).getValues()[0];
 
   const existingRow = {};
-  h.forEach((k, i) => {
-    existingRow[k] = s.getRange(rowIdx, i + 1).getValue();
+  currentHeaders.forEach((k, i) => {
+    if (k) existingRow[k] = existingValues[i];
   });
 
   const updatedObj = Object.assign({}, existingRow, updates, { updatedAt: now() });
-  h.forEach((k, i) => {
-    s.getRange(rowIdx, i + 1).setValue(updatedObj[k] === undefined ? '' : updatedObj[k]);
+  const newRowValues = currentHeaders.map(h => {
+    const k = String(h || '').trim();
+    if (!k) return '';
+    return updatedObj[k] !== undefined ? updatedObj[k] : '';
   });
 
+  s.getRange(rowIdx, 1, 1, totalCols).setValues([newRowValues]);
   return updatedObj;
 }
 
-function deleteRow(sheetName, key, value) {
-  const s = getSheet(sheetName);
-  const rowIdx = findRowIndex(sheetName, key, value);
-  if (rowIdx < 0) throw Error('Record not found in ' + sheetName);
+function deleteRow(sheetOrName, key, value) {
+  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
+  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
+  const rowIdx = findRowIndex(s, key, value);
+  if (rowIdx < 0) throw Error('Record not found in ' + s.getName());
   s.deleteRow(rowIdx);
   return true;
 }
@@ -366,19 +484,91 @@ function createUser(d) {
   };
 
   appendRow('USERS', user);
+  invalidateUserCache(user.idNo, user.id);
   logActivity(user.id, user.idNo, user.name, user.role, 'CREATE_USER', 'User account created');
   return sanitizeUser(user);
+}
+
+function invalidateUserCache(idNo, id) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (idNo) cache.remove('auth_usr_' + String(idNo).trim().toLowerCase());
+    if (id) cache.remove('auth_usr_' + String(id).trim().toLowerCase());
+  } catch (e) {}
 }
 
 function authenticateUser(idNo, password) {
   const cleanId = String(idNo || '').trim().toLowerCase();
   const cleanPass = String(password || '').trim();
-  const users = getRows('USERS');
 
-  const user = users.find(u => 
-    String(u.idNo).trim().toLowerCase() === cleanId || 
-    String(u.id).trim().toLowerCase() === cleanId
-  );
+  if (!cleanId || !cleanPass) {
+    throw Error('User ID and Password are required');
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'auth_usr_' + cleanId;
+  let cachedJson = null;
+  try {
+    cachedJson = cache.get(cacheKey);
+  } catch (e) {}
+
+  let user = null;
+  if (cachedJson) {
+    try {
+      user = JSON.parse(cachedJson);
+    } catch (e) {}
+  }
+
+  if (!user) {
+    // High-speed direct read from USERS sheet without ensureHeaders overhead
+    const s = getSheet('USERS');
+    const totalRows = s.getLastRow();
+    const totalCols = s.getLastColumn();
+    if (totalRows < 2 || totalCols < 1) {
+      throw Error('Invalid User ID or Password');
+    }
+
+    const allValues = s.getRange(1, 1, totalRows, totalCols).getValues();
+    const headers = allValues[0].map(h => String(h || '').trim());
+    const idNoIdx = headers.indexOf('idNo');
+    const idIdx = headers.indexOf('id');
+    const passIdx = headers.indexOf('password');
+    const passHashIdx = headers.indexOf('passwordHash');
+    const nameIdx = headers.indexOf('name');
+    const phoneIdx = headers.indexOf('phone');
+    const roleIdx = headers.indexOf('role');
+    const statusIdx = headers.indexOf('status');
+    const desigIdx = headers.indexOf('designation');
+    const badgeIdx = headers.indexOf('badgeNo');
+
+    for (let i = 1; i < totalRows; i++) {
+      const row = allValues[i];
+      const rowIdNo = idNoIdx >= 0 ? String(row[idNoIdx] || '').trim().toLowerCase() : '';
+      const rowId = idIdx >= 0 ? String(row[idIdx] || '').trim().toLowerCase() : '';
+
+      if (rowIdNo === cleanId || rowId === cleanId) {
+        user = {
+          id: idIdx >= 0 ? String(row[idIdx] || '') : ('usr_' + cleanId),
+          idNo: idNoIdx >= 0 ? String(row[idNoIdx] || '') : cleanId,
+          password: passIdx >= 0 ? String(row[passIdx] || '') : '',
+          passwordHash: passHashIdx >= 0 ? String(row[passHashIdx] || '') : '',
+          name: nameIdx >= 0 ? String(row[nameIdx] || '') : cleanId,
+          phone: phoneIdx >= 0 ? String(row[phoneIdx] || '') : '',
+          role: roleIdx >= 0 ? String(row[roleIdx] || 'worker') : 'worker',
+          status: statusIdx >= 0 ? String(row[statusIdx] || 'active') : 'active',
+          designation: desigIdx >= 0 ? String(row[desigIdx] || '') : '',
+          badgeNo: badgeIdx >= 0 ? String(row[badgeIdx] || '') : ''
+        };
+        break;
+      }
+    }
+
+    if (user) {
+      try {
+        cache.put(cacheKey, JSON.stringify(user), 1800); // 30 mins TTL
+      } catch (e) {}
+    }
+  }
 
   if (!user) throw Error('Invalid User ID or Password');
   if (user.status === 'hold') throw Error('This user account is currently ON HOLD. Contact Admin.');
@@ -400,11 +590,16 @@ function authenticateUser(idNo, password) {
     loggedInAt: now()
   };
 
-  logActivity(user.id, user.idNo, user.name, user.role, 'LOGIN', 'Successful login');
+  // Asynchronous activity logging: do NOT block or delay the login response
+  try {
+    const sAct = getSheet('USER_ACTIVITY');
+    sAct.appendRow([generateId('ACT'), user.id, user.idNo, user.name, user.role, 'LOGIN', 'Successful login', now()]);
+  } catch (e) {}
+
   return session;
 }
 
-// Entry Operations with Strict LockService & Idempotency Protection
+// Entry Operations with Strict LockService, Category-Wise Storage & Idempotency Protection
 function saveEntry(d) {
   const lock = LockService.getScriptLock();
   // Wait for up to 30 seconds to guarantee atomic execution under concurrent load
@@ -414,59 +609,122 @@ function saveEntry(d) {
   }
 
   try {
-    const submissionId = String(d.submissionId || '').trim();
-    const entryId = String(d.id || '').trim() || ('PWR-' + Date.now().toString().slice(-6));
+    // Step 1: Validate request
+    if (!d || typeof d !== 'object') {
+      throw Error('Invalid payload: Entry data object is required.');
+    }
 
-    // 1. Check by Submission ID in MASTER_DATA (Strict Idempotency)
-    if (submissionId) {
-      const existingBySubIdx = findRowIndex('MASTER_DATA', 'submissionId', submissionId);
-      if (existingBySubIdx > 0) {
-        const existingRow = getRowByIndex('MASTER_DATA', existingBySubIdx);
+    // Step 2 & 3: Identify & Normalize category
+    const rawCat = d.category || d.Category;
+    if (!rawCat) {
+      throw Error('Category is required. Allowed categories: NSC, DISCONNECTION, POLE CASE, METER REPLESMENT, DTR REPLESMENT.');
+    }
+    const canonicalCat = normalizeCategory(rawCat);
+    if (!canonicalCat) {
+      throw Error('Unrecognized work category: "' + rawCat + '". Allowed: NSC, DISCONNECTION, POLE CASE, METER REPLESMENT, DTR REPLESMENT.');
+    }
+
+    // Step 4 & 5: Find the correct destination sheet & verify existence
+    const destSheet = getCategorySheet(canonicalCat);
+    if (!destSheet) {
+      throw Error('Could not open or initialize Google Sheet tab for category: ' + canonicalCat);
+    }
+    const destSheetName = destSheet.getName();
+
+    // Step 6: Validate and construct verified new entry with complete worker identity
+    const submissionId = String(d.submissionId || d.SubmissionID || '').trim();
+    const entryId = String(d.id || '').trim() || ('PWR-' + Date.now().toString().slice(-6));
+    const finalSubmissionId = submissionId || ('SUB-' + Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
+
+    const workerId = String(d.workerId || d.WorkerID || d.idNo || '').trim();
+    const workerName = String(d.workerName || d.WorkerName || 'Field Worker').trim();
+    const role = String(d.role || d.Role || 'worker').trim();
+    const submittedBy = String(d.submittedBy || d.SubmittedBy || (workerId ? (workerName + ' (' + workerId + ')') : workerName)).trim();
+    const dateVal = d.date || now();
+    const createdAtVal = d.createdAt || d.date || now();
+
+    const newEntry = Object.assign({}, d, {
+      submissionId: finalSubmissionId,
+      id: entryId,
+      category: canonicalCat,
+      workerId: workerId,
+      workerName: workerName,
+      role: role,
+      submittedBy: submittedBy,
+      date: dateVal,
+      createdAt: createdAtVal,
+      status: d.status || 'Completed',
+      updatedAt: now()
+    });
+
+    // Step 7: Check duplicate SubmissionID (in category sheet first, then MASTER_DATA)
+    if (finalSubmissionId) {
+      const existingInCat = findRowIndex(destSheet, 'submissionId', finalSubmissionId);
+      if (existingInCat > 0) {
+        const existingRow = getRowByIndex(destSheet, existingInCat);
         return {
           success: true,
           duplicate: true,
-          message: 'Record already saved with this Submission ID',
+          message: 'Record already saved with this Submission ID in ' + destSheetName,
+          destinationSheet: destSheetName,
+          category: canonicalCat,
           recordId: existingRow.id || entryId,
-          submissionId: submissionId,
-          entry: existingRow
+          submissionId: finalSubmissionId,
+          entry: existingRow,
+          data: existingRow
+        };
+      }
+
+      const existingInMaster = findRowIndex('MASTER_DATA', 'submissionId', finalSubmissionId);
+      if (existingInMaster > 0) {
+        const existingRow = getRowByIndex('MASTER_DATA', existingInMaster);
+        return {
+          success: true,
+          duplicate: true,
+          message: 'Record already saved with this Submission ID in MASTER_DATA',
+          destinationSheet: destSheetName,
+          category: canonicalCat,
+          recordId: existingRow.id || entryId,
+          submissionId: finalSubmissionId,
+          entry: existingRow,
+          data: existingRow
         };
       }
     }
 
-    // 2. Check by Record ID in MASTER_DATA
-    if (entryId) {
-      const existingByIdIdx = findRowIndex('MASTER_DATA', 'id', entryId);
-      if (existingByIdIdx > 0) {
-        const existingRow = getRowByIndex('MASTER_DATA', existingByIdIdx);
-        if (!d._isExplicitUpdate) {
-          return {
-            success: true,
-            duplicate: true,
-            message: 'Record already saved with this ID',
-            recordId: existingRow.id || entryId,
-            submissionId: existingRow.submissionId || submissionId,
-            entry: existingRow
-          };
-        }
+    // Check by Record ID if not an explicit update
+    if (entryId && !d._isExplicitUpdate) {
+      const existingById = findRowIndex(destSheet, 'id', entryId);
+      if (existingById > 0) {
+        const existingRow = getRowByIndex(destSheet, existingById);
+        return {
+          success: true,
+          duplicate: true,
+          message: 'Record already saved with this ID in ' + destSheetName,
+          destinationSheet: destSheetName,
+          category: canonicalCat,
+          recordId: existingRow.id || entryId,
+          submissionId: existingRow.submissionId || finalSubmissionId,
+          entry: existingRow,
+          data: existingRow
+        };
       }
     }
 
-    // 3. Semantic Deduplication Guard: Check if identical record was submitted within last 3 minutes
-    if (d.consumerId && d.meterNo && d.category) {
-      const recentRows = getRows('MASTER_DATA').slice(-30);
+    // Semantic Deduplication Guard: Check if identical record was submitted within last 3 minutes
+    if (d.consumerId && d.meterNo) {
+      const recentRows = getRowsFromSheet(destSheet).slice(-30);
       const cleanConsumer = String(d.consumerId).trim().toLowerCase();
       const cleanMeter = String(d.meterNo).trim().toLowerCase();
-      const cleanCat = String(d.category).trim().toUpperCase();
-      const cleanWorker = String(d.workerName || '').trim().toLowerCase();
+      const cleanWorker = String(workerName).trim().toLowerCase();
 
       const matched = recentRows.find(r => {
-        const sameCat = String(r.category || '').toUpperCase() === cleanCat || CATEGORY_MAP[String(r.category || '').toUpperCase()] === CATEGORY_MAP[cleanCat];
         const sameConsumer = String(r.consumerId || '').trim().toLowerCase() === cleanConsumer;
         const sameMeter = String(r.meterNo || '').trim().toLowerCase() === cleanMeter;
         const sameWorker = cleanWorker ? String(r.workerName || '').trim().toLowerCase() === cleanWorker : true;
-        if (sameCat && sameConsumer && sameMeter && sameWorker) {
+        if (sameConsumer && sameMeter && sameWorker) {
           const recTime = new Date(r.createdAt || r.date || 0).getTime();
-          const currTime = new Date(d.createdAt || d.date || Date.now()).getTime();
+          const currTime = new Date(createdAtVal).getTime();
           return Math.abs(currTime - recTime) < 180000; // 3 minutes window
         }
         return false;
@@ -476,50 +734,44 @@ function saveEntry(d) {
         return {
           success: true,
           duplicate: true,
-          message: 'Identical record already saved recently',
+          message: 'Identical record already saved recently in ' + destSheetName,
+          destinationSheet: destSheetName,
+          category: canonicalCat,
           recordId: matched.id,
-          submissionId: matched.submissionId || submissionId,
-          entry: matched
+          submissionId: matched.submissionId || finalSubmissionId,
+          entry: matched,
+          data: matched
         };
       }
     }
 
-    // 4. Form the verified new entry
-    const finalSubmissionId = submissionId || ('SUB-' + Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
-    const newEntry = Object.assign({}, d, {
-      submissionId: finalSubmissionId,
-      id: entryId,
-      date: d.date || now(),
-      createdAt: d.createdAt || d.date || now(),
-      status: d.status || 'Completed',
-      updatedAt: now()
-    });
+    // Step 8: Save data only in the matching category sheet (PRIMARY DESTINATION)
+    appendRowDynamic(destSheet, newEntry, headersFor(canonicalCat));
 
-    // 5. Append to MASTER_DATA
-    appendRow('MASTER_DATA', newEntry);
-
-    // 6. Also sync to canonical category sheet if not already present
-    const rawCat = String(newEntry.category || '').toUpperCase();
-    const canonicalCat = CATEGORY_MAP[rawCat];
-    if (canonicalCat) {
-      try {
-        const catSheet = getSheet(canonicalCat);
-        const catIdx = findRowIndex(canonicalCat, 'submissionId', finalSubmissionId);
-        if (catIdx <= 0) {
-          appendRow(canonicalCat, newEntry);
-        }
-      } catch (e) {
-        Logger.log('Category sheet append warning: ' + e);
+    // Also mirror to MASTER_DATA index layer
+    try {
+      const masterSheet = getSheet('MASTER_DATA');
+      const masterIdx = findRowIndex(masterSheet, 'submissionId', finalSubmissionId);
+      if (masterIdx <= 0) {
+        appendRowDynamic(masterSheet, newEntry, COMMON_ENTRY_HEADERS);
       }
+    } catch (e) {
+      Logger.log('MASTER_DATA mirror warning: ' + e);
     }
 
+    try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
+
+    // Step 9: Return valid success response
     return {
       success: true,
       duplicate: false,
-      message: 'Record saved successfully',
+      message: 'Data saved successfully in ' + destSheetName,
+      destinationSheet: destSheetName,
+      category: canonicalCat,
       recordId: newEntry.id,
       submissionId: newEntry.submissionId,
-      entry: newEntry
+      entry: newEntry,
+      data: newEntry
     };
   } finally {
     lock.releaseLock();
@@ -623,25 +875,163 @@ function cleanupDuplicateRecords(targetSheetName) {
   }
 }
 
-function removeEntry(id) {
-  deleteRow('MASTER_DATA', 'id', id);
-  // Also remove from category sheets
-  Object.keys(SHEET_ALIASES).forEach(k => {
-    if (k.indexOf('CONNECTION') >= 0 || k.indexOf('DISCONNECTION') >= 0 || k.indexOf('POLE') >= 0 || k.indexOf('METER') >= 0 || k.indexOf('DTR') >= 0) {
-      try { deleteRow(k, 'id', id); } catch (e) {}
+function removeEntry(id, submissionId, category) {
+  const targetId = id || submissionId;
+  if (!targetId) return false;
+
+  // 1. Remove from category sheet
+  if (category) {
+    const canonicalCat = normalizeCategory(category);
+    if (canonicalCat) {
+      try {
+        const catSheet = getCategorySheet(canonicalCat);
+        if (id) {
+          try { deleteRow(catSheet, 'id', id); } catch (e) {}
+        }
+        if (submissionId) {
+          try { deleteRow(catSheet, 'submissionId', submissionId); } catch (e) {}
+        }
+      } catch (e) {}
     }
-  });
+  } else {
+    // Check all category sheets if category not passed
+    const categorySheets = ['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'];
+    categorySheets.forEach(cat => {
+      try {
+        const catSheet = getCategorySheet(cat);
+        if (id) {
+          try { deleteRow(catSheet, 'id', id); } catch (e) {}
+        }
+        if (submissionId) {
+          try { deleteRow(catSheet, 'submissionId', submissionId); } catch (e) {}
+        }
+      } catch (e) {}
+    });
+  }
+
+  // 2. Remove from MASTER_DATA
+  try {
+    if (id) {
+      try { deleteRow('MASTER_DATA', 'id', id); } catch (e) {}
+    }
+    if (submissionId) {
+      try { deleteRow('MASTER_DATA', 'submissionId', submissionId); } catch (e) {}
+    }
+  } catch (e) {}
+
+  try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
   return true;
 }
 
+function updateEntryRecord(data, id) {
+  const targetId = id || data.id || data.submissionId;
+  if (!targetId) throw Error('ID or submissionId is required to update entry');
+
+  const rawCat = data.category || data.Category;
+  const canonicalCat = normalizeCategory(rawCat);
+  let updatedRecord = null;
+
+  if (canonicalCat) {
+    try {
+      const catSheet = getCategorySheet(canonicalCat);
+      const rowById = findRowIndex(catSheet, 'id', targetId);
+      const rowBySub = findRowIndex(catSheet, 'submissionId', targetId);
+      if (rowById > 0) {
+        updatedRecord = updateRow(catSheet, 'id', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
+      } else if (rowBySub > 0) {
+        updatedRecord = updateRow(catSheet, 'submissionId', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
+      }
+    } catch (e) {
+      Logger.log('Category update error: ' + e);
+    }
+  }
+
+  // Also update in MASTER_DATA
+  try {
+    const rowById = findRowIndex('MASTER_DATA', 'id', targetId);
+    const rowBySub = findRowIndex('MASTER_DATA', 'submissionId', targetId);
+    if (rowById > 0) {
+      const mUpdated = updateRow('MASTER_DATA', 'id', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
+      if (!updatedRecord) updatedRecord = mUpdated;
+    } else if (rowBySub > 0) {
+      const mUpdated = updateRow('MASTER_DATA', 'submissionId', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
+      if (!updatedRecord) updatedRecord = mUpdated;
+    }
+  } catch (e) {
+    Logger.log('MASTER_DATA update error: ' + e);
+  }
+
+  try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
+  return updatedRecord || data;
+}
+
 function queryEntries(params) {
-  let list = getRows('MASTER_DATA');
+  let list = [];
+  const requestedCat = params.category ? String(params.category).trim() : '';
+
+  if (requestedCat && requestedCat.toUpperCase() !== 'ALL') {
+    const canonicalCat = normalizeCategory(requestedCat);
+    if (!canonicalCat) {
+      return [];
+    }
+    // Read directly from the category's Google Sheet tab
+    try {
+      const catSheet = getCategorySheet(canonicalCat);
+      list = getRowsFromSheet(catSheet);
+    } catch (e) {
+      Logger.log('Error reading category sheet ' + canonicalCat + ': ' + e);
+      list = [];
+    }
+
+    // Fallback: If category sheet was empty or new, check MASTER_DATA for any previously logged entries
+    if (!list || list.length === 0) {
+      try {
+        const masterRows = getRows('MASTER_DATA');
+        list = masterRows.filter(e => normalizeCategory(e.category) === canonicalCat);
+      } catch (e) {}
+    }
+  } else {
+    // Read from MASTER_DATA
+    try {
+      list = getRows('MASTER_DATA');
+    } catch (e) {
+      list = [];
+    }
+
+    // If MASTER_DATA is empty, compile across all 5 category sheets
+    if (!list || list.length === 0) {
+      const categories = ['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'];
+      const combined = [];
+      const seen = {};
+      categories.forEach(cat => {
+        try {
+          const s = getCategorySheet(cat);
+          const rows = getRowsFromSheet(s);
+          rows.forEach(r => {
+            const key = r.submissionId || r.id;
+            if (key && !seen[key]) {
+              seen[key] = true;
+              combined.push(r);
+            } else if (!key) {
+              combined.push(r);
+            }
+          });
+        } catch (e) {}
+      });
+      list = combined;
+    }
+  }
   
-  if (params.category && params.category !== 'ALL') {
-    const catQuery = String(params.category).toUpperCase();
+  if (params.workerId || params.workerName) {
+    const wId = String(params.workerId || '').toLowerCase().trim();
+    const wName = String(params.workerName || '').toLowerCase().trim();
     list = list.filter(e => {
-      const itemCat = String(e.category || '').toUpperCase();
-      return itemCat === catQuery || CATEGORY_MAP[itemCat] === CATEGORY_MAP[catQuery];
+      const eWId = String(e.workerId || e.idNo || '').toLowerCase().trim();
+      const eWName = String(e.workerName || '').toLowerCase().trim();
+      const eCreator = String(e.createdBy || e.submittedBy || '').toLowerCase().trim();
+      if (wId && (eWId === wId || eCreator.indexOf(wId) >= 0)) return true;
+      if (wName && eWName.indexOf(wName) >= 0) return true;
+      return false;
     });
   }
 
@@ -653,6 +1043,7 @@ function queryEntries(params) {
     const q = String(params.search).toLowerCase();
     list = list.filter(e => 
       (e.id && String(e.id).toLowerCase().indexOf(q) >= 0) ||
+      (e.submissionId && String(e.submissionId).toLowerCase().indexOf(q) >= 0) ||
       (e.consumerName && String(e.consumerName).toLowerCase().indexOf(q) >= 0) ||
       (e.consumerId && String(e.consumerId).toLowerCase().indexOf(q) >= 0) ||
       (e.meterNo && String(e.meterNo).toLowerCase().indexOf(q) >= 0) ||
@@ -666,6 +1057,12 @@ function queryEntries(params) {
 }
 
 function computeStats() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get('dashboard_stats');
+    if (cached) return JSON.parse(cached);
+  } catch (e) {}
+
   const entries = getRows('MASTER_DATA');
   const countCat = (catName) => {
     return entries.filter(e => {
@@ -674,17 +1071,17 @@ function computeStats() {
     }).length;
   };
 
-  return {
+  const result = {
     total: entries.length,
     categories: {
       NSC: countCat('NSC'),
       DISCONNECTION: countCat('DISCONNECTION'),
-      POLE_CASE: countCat('POLE_CASE'),
-      'POLE CASE': countCat('POLE CASE'),
-      METER_REPLESMENT: countCat('METER_REPLESMENT'),
-      METER_REPLACEMENT: countCat('METER_REPLACEMENT'),
-      DTR_REPLESMENT: countCat('DTR_REPLESMENT'),
-      DTR_REPLACEMENT: countCat('DTR_REPLACEMENT')
+      POLE_CASE: countCat('POLE_CASE') + countCat('POLE CASE'),
+      'POLE CASE': countCat('POLE_CASE') + countCat('POLE CASE'),
+      METER_REPLESMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
+      METER_REPLACEMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
+      DTR_REPLESMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT'),
+      DTR_REPLACEMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT')
     },
     status: {
       pending: entries.filter(e => String(e.status).toLowerCase() === 'pending').length,
@@ -692,6 +1089,12 @@ function computeStats() {
       approved: entries.filter(e => String(e.status).toLowerCase() === 'approved').length
     }
   };
+
+  try {
+    cache.put('dashboard_stats', JSON.stringify(result), 45); // 45s cache
+  } catch (e) {}
+
+  return result;
 }
 
 function bulkSyncEntries(items) {
@@ -964,12 +1367,14 @@ function doPost(e) {
     }
     if (action === 'updateUser') {
       const updated = updateRow('USERS', 'id', body.id, data);
+      invalidateUserCache(updated?.idNo || body?.idNo, body?.id);
       return out({ success: true, user: sanitizeUser(updated) });
     }
     if (action === 'updateUserStatus') {
       const targetId = body.id || body.idNo;
       const key = body.id ? 'id' : 'idNo';
       const updated = updateRow('USERS', key, targetId, { status: body.status });
+      invalidateUserCache(body.idNo, body.id);
       return out({ success: true, user: sanitizeUser(updated) });
     }
     if (action === 'deleteUser') {
@@ -979,6 +1384,7 @@ function doPost(e) {
       }
       const key = body.id ? 'id' : 'idNo';
       deleteRow('USERS', key, body.id || body.idNo);
+      invalidateUserCache(body.idNo, body.id);
       return out({ success: true, message: 'User deleted from Google Sheets' });
     }
     if (action === 'changePassword') {
@@ -990,6 +1396,7 @@ function doPost(e) {
         (u.passwordHash && u.passwordHash === sha(body.currentPassword));
       if (!match) throw Error('Current password is incorrect');
       updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
+      invalidateUserCache(u.idNo, u.id);
       return out({ success: true, message: 'Password updated successfully in Google Sheets' });
     }
     if (action === 'resetPassword') {
@@ -1005,6 +1412,7 @@ function doPost(e) {
       });
       if (!u) throw Error('User verification failed in Google Sheets');
       updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
+      invalidateUserCache(u.idNo, u.id);
       return out({ success: true, message: 'Password reset successfully in Google Sheets' });
     }
 
@@ -1025,6 +1433,11 @@ function doPost(e) {
       action === 'createMeterReplacement' ||
       action === 'createDTRReplacement'
     ) {
+      if (action === 'createNSC' || action === 'createNewConnection') data.category = data.category || 'NSC';
+      if (action === 'createDisconnection') data.category = data.category || 'DISCONNECTION';
+      if (action === 'createPoleCase') data.category = data.category || 'POLE CASE';
+      if (action === 'createMeterReplacement') data.category = data.category || 'METER REPLESMENT';
+      if (action === 'createDTRReplacement') data.category = data.category || 'DTR REPLESMENT';
       return out(saveEntry(data));
     }
     if (
@@ -1036,8 +1449,13 @@ function doPost(e) {
       action === 'updateMeterReplacement' ||
       action === 'updateDTRReplacement'
     ) {
-      const targetId = body.id || data.id;
-      const updated = updateRow('MASTER_DATA', 'id', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
+      const targetId = body.id || data.id || body.submissionId || data.submissionId;
+      if (action === 'updateNSC' || action === 'updateNewConnection') data.category = data.category || 'NSC';
+      if (action === 'updateDisconnection') data.category = data.category || 'DISCONNECTION';
+      if (action === 'updatePoleCase') data.category = data.category || 'POLE CASE';
+      if (action === 'updateMeterReplacement') data.category = data.category || 'METER REPLESMENT';
+      if (action === 'updateDTRReplacement') data.category = data.category || 'DTR REPLESMENT';
+      const updated = updateEntryRecord(data, targetId);
       return out({ success: true, entry: updated });
     }
     if (
@@ -1050,7 +1468,14 @@ function doPost(e) {
       action === 'deleteDTRReplacement'
     ) {
       const targetId = body.id || data.id;
-      removeEntry(targetId);
+      const subId = body.submissionId || data.submissionId;
+      let cat = body.category || data.category;
+      if (action === 'deleteNSC' || action === 'deleteNewConnection') cat = cat || 'NSC';
+      if (action === 'deleteDisconnection') cat = cat || 'DISCONNECTION';
+      if (action === 'deletePoleCase') cat = cat || 'POLE CASE';
+      if (action === 'deleteMeterReplacement') cat = cat || 'METER REPLESMENT';
+      if (action === 'deleteDTRReplacement') cat = cat || 'DTR REPLESMENT';
+      removeEntry(targetId, subId, cat);
       return out({ success: true, message: 'Entry deleted successfully from Google Sheets' });
     }
     if (action === 'cleanupDuplicates' || action === 'deduplicateSheets') {

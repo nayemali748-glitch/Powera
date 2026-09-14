@@ -27,9 +27,9 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
   entries,
   categoryCounts,
   onSelectCategory,
-  currentLanguage = 'bn',
+  currentLanguage = 'en',
 }) => {
-  const t = translations[currentLanguage] || translations.bn;
+  const t = translations[currentLanguage] || translations.en;
 
   const totalEntries = entries.length;
   const completedEntries = entries.filter(e => e.status === 'Completed' || e.status === 'Approved').length;

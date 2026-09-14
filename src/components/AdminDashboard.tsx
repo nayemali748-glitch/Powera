@@ -75,7 +75,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onOpenLanguageModal,
   syncMode = 'auto',
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');

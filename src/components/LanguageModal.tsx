@@ -11,20 +11,20 @@ interface LanguageModalProps {
 
 const languages: { code: Language; name: string; nativeName: string; flag: string; region: string; scriptExample: string }[] = [
   { 
+    code: 'en', 
+    name: 'English', 
+    nativeName: 'English (Primary / Default)', 
+    flag: '🌐', 
+    region: 'Official Field Standard • Primary',
+    scriptExample: 'New Service Connection & Utility Ops'
+  },
+  { 
     code: 'bn', 
     name: 'Bengali', 
     nativeName: 'বাংলা (পশ্চিমবঙ্গ)', 
     flag: '🇮🇳', 
     region: 'WBSEDCL West Bengal Official',
     scriptExample: 'নতুন বিদ্যুৎ সংযোগ ও ফিল্ড সার্ভিস'
-  },
-  { 
-    code: 'en', 
-    name: 'English', 
-    nativeName: 'English (India/WBSEDCL)', 
-    flag: '🌐', 
-    region: 'Official Field Standard',
-    scriptExample: 'New Service Connection & Utility Ops'
   },
   { 
     code: 'hi', 
@@ -54,7 +54,7 @@ export const LanguageModal: React.FC<LanguageModalProps> = ({
   
   if (!isOpen) return null;
 
-  const t = translations[selected] || translations.bn;
+  const t = translations[selected] || translations.en;
 
   const handleDone = () => {
     onSelectLanguage(selected);

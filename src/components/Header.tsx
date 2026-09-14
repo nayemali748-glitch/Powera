@@ -49,10 +49,10 @@ export const Header: React.FC<HeaderProps> = ({
   onLogoutUser,
   totalEntriesCount,
   onToggleSidebar,
-  currentLanguage = 'bn',
+  currentLanguage = 'en',
   onOpenLanguageModal,
 }) => {
-  const t = translations[currentLanguage] || translations.bn;
+  const t = translations[currentLanguage] || translations.en;
   const [menuOpen, setMenuOpen] = useState(false);
   const [editingWorker, setEditingWorker] = useState(false);
   const [tempWorkerName, setTempWorkerName] = useState(workerName);
@@ -78,7 +78,7 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  const getLangBadge = (code: Language) => {
+  const getLangBadge = (code?: string) => {
     switch (code) {
       case 'en': return 'EN';
       case 'hi': return 'HI';
@@ -245,6 +245,19 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
         </div>
+
+        {/* Language Quick Switcher */}
+        {onOpenLanguageModal && (
+          <button
+            id="header-lang-btn"
+            onClick={onOpenLanguageModal}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 border border-slate-200 hover:border-blue-300 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 cursor-pointer shadow-xs"
+            title="Select Language / ভাষা পরিবর্তন করুন"
+          >
+            <Globe className="w-3.5 h-3.5 text-blue-600" />
+            <span className="font-semibold">{getLangBadge(currentLanguage)}</span>
+          </button>
+        )}
 
         {/* Home Button with House Symbol */}
         <button

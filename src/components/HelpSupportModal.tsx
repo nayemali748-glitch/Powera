@@ -34,9 +34,9 @@ export const HelpSupportModal: React.FC<HelpSupportModalProps> = ({
   isOpen,
   onClose,
   currentUser,
-  lang = 'bn',
+  lang = 'en',
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
   const [activeTab, setActiveTab] = useState<'chat' | 'email'>('chat');
   const [copiedEmail, setCopiedEmail] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);

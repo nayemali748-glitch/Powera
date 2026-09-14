@@ -44,10 +44,10 @@ interface UserManagementModalProps {
 export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   isOpen,
   onClose,
-  lang = 'bn',
+  lang = 'en',
   initialTab = 'create'
 }) => {
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
   // Load users exclusively from Google Sheets backend
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(false);

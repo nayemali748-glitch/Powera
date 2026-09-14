@@ -56,7 +56,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
     onProceedSession(session);
   };
-  const t = translations[lang] || translations.bn;
+  const t = translations[lang] || translations.en;
   // Screen mode: 'login' | 'register' | 'forgot'
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
 
@@ -345,9 +345,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             App Developed By Nayem
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {mode === 'login' && 'এডমিন বা কর্মী User ID ও পাসওয়ার্ড দিয়ে প্রবেশ করুন'}
-            {mode === 'register' && 'নতুন এডমিন / কর্মী User ID তৈরি (সার্ভার সিন্ক)'}
-            {mode === 'forgot' && 'পাসওয়ার্ড রিসেট ও পরিবর্তন পোর্টাল'}
+            {mode === 'login' && (lang === 'bn' ? 'এডমিন বা কর্মী User ID ও পাসওয়ার্ড দিয়ে প্রবেশ করুন' : 'Sign in with Admin or Worker User ID & Password')}
+            {mode === 'register' && (lang === 'bn' ? 'নতুন এডমিন / কর্মী User ID তৈরি (সার্ভার সিন্ক)' : 'Create new Admin / Worker User ID')}
+            {mode === 'forgot' && (lang === 'bn' ? 'পাসওয়ার্ড রিসেট ও পরিবর্তন পোর্টাল' : 'Password Reset & Recovery Portal')}
           </p>
         </div>
 
