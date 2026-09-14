@@ -307,8 +307,9 @@ export async function createEntry(
 
     // 1. Send exactly one canonical submission request to Google Apps Script / Google Sheets
     try {
+      const actionName = getCreateActionForCategory(cleanEntry.category);
       res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-        'createEntry',
+        actionName,
         { data: cleanEntry },
         'POST',
         35000
@@ -363,7 +364,12 @@ export async function cleanupDuplicatesApi(sheetName?: string): Promise<{ succes
 
 export async function updateEntry(id: string, updates: Partial<PowerEntry>): Promise<PowerEntry> {
   try {
-    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('updateEntry', { id, data: updates }, 'POST');
+    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('updateEntry', { 
+      id, 
+      category: updates.category, 
+      submissionId: updates.submissionId, 
+      data: updates 
+    }, 'POST');
     const updated = res.entry || { id, ...updates } as PowerEntry;
     const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
     const idx = list.findIndex(e => e.id === id);
@@ -384,9 +390,9 @@ export async function updateEntry(id: string, updates: Partial<PowerEntry>): Pro
   }
 }
 
-export async function deleteEntry(id: string): Promise<boolean> {
+export async function deleteEntry(id: string, category?: string, submissionId?: string): Promise<boolean> {
   try {
-    await callGasApi('deleteEntry', { id }, 'POST');
+    await callGasApi('deleteEntry', { id, category, submissionId }, 'POST');
   } catch (e) {
     console.warn('Delete entry notice:', e);
   }
