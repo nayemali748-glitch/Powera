@@ -73,6 +73,214 @@ const COMMON_ENTRY_HEADERS = [
   'workOrderNoticeTitle', 'workOrderNoticeDate', 'notes', 'updatedAt'
 ];
 
+// ============================================================================
+// NSC (NEW SERVICE CONNECTION) FIELD DEFINITIONS & GOOGLE SHEET HEADER MAPPINGS
+// Matches the exact fields from the application's NSC EntryForm.tsx
+// ============================================================================
+const NSC_FIELD_SPECS = [
+  // 1. System & Submission Tracking Fields
+  { key: 'submissionId', header: 'Submission ID', normalized: 'submissionid', aliases: ['submissionId', 'SubmissionID', 'submission_id', 'Submission Id'] },
+  { key: 'id', header: 'Record ID', normalized: 'recordid', aliases: ['id', 'ID', 'recordId', 'RecordID', 'record_id', 'pwrId'] },
+  { key: 'category', header: 'Category', normalized: 'category', aliases: ['category', 'Category', 'workCategory'] },
+  { key: 'status', header: 'Status', normalized: 'status', aliases: ['status', 'Status', 'workStatus'] },
+  { key: 'date', header: 'Date', normalized: 'date', aliases: ['date', 'Date', 'entryDate'] },
+  { key: 'createdAt', header: 'Created At', normalized: 'createdat', aliases: ['createdAt', 'CreatedAt', 'created_at', 'CreatedDate'] },
+  { key: 'updatedAt', header: 'Updated At', normalized: 'updatedat', aliases: ['updatedAt', 'UpdatedAt', 'updated_at', 'ModifiedAt'] },
+
+  // 2. Worker Information Fields
+  { key: 'workerId', header: 'Worker ID', normalized: 'workerid', aliases: ['workerId', 'WorkerID', 'worker_id', 'idNo', 'Lineman ID', 'linemanId'] },
+  { key: 'workerName', header: 'Worker Name', normalized: 'workername', aliases: ['workerName', 'WorkerName', 'worker_name', 'Lineman Name', 'linemanName', 'nscWorkerName'] },
+  { key: 'role', header: 'Role', normalized: 'role', aliases: ['role', 'Role', 'userRole'] },
+  { key: 'submittedBy', header: 'Submitted By', normalized: 'submittedby', aliases: ['submittedBy', 'SubmittedBy', 'submitted_by'] },
+  { key: 'workerPhone', header: 'Worker Phone', normalized: 'workerphone', aliases: ['workerPhone', 'WorkerPhone', 'worker_phone', 'linemanPhone', 'Lineman Phone'] },
+
+  // 3. Office, Agency & Substation Fields
+  { key: 'agencyName', header: 'Agency Name', normalized: 'agencyname', aliases: ['agencyName', 'AgencyName', 'agency_name', 'Contractor Name', 'contractorName'] },
+  { key: 'cccName', header: 'CCC Name', normalized: 'cccname', aliases: ['cccName', 'CCCName', 'ccc_name', 'Customer Care Center', 'cccOffice', 'CCC Office'] },
+  { key: 'substation', header: 'Substation', normalized: 'substation', aliases: ['substation', 'Substation', 'substation_name', 'subStation'] },
+  { key: 'feederName', header: 'Feeder Name', normalized: 'feedername', aliases: ['feederName', 'FeederName', 'feeder_name', 'feeder'] },
+
+  // 4. Work Order Details
+  { key: 'workOrderNo', header: 'Work Order No', normalized: 'workorderno', aliases: ['workOrderNo', 'WorkOrderNo', 'work_order_no', 'Work Order Number', 'WO Number', 'woNo'] },
+  { key: 'workOrderDate', header: 'Work Order Date', normalized: 'workorderdate', aliases: ['workOrderDate', 'WorkOrderDate', 'work_order_date', 'WO Date'] },
+  { key: 'workOrderNoticeId', header: 'Work Order Notice ID', normalized: 'workordernoticeid', aliases: ['workOrderNoticeId', 'WorkOrderNoticeId', 'work_order_notice_id'] },
+  { key: 'workOrderNoticeTitle', header: 'Work Order Notice Title', normalized: 'workordernoticetitle', aliases: ['workOrderNoticeTitle', 'WorkOrderNoticeTitle', 'work_order_notice_title'] },
+  { key: 'workOrderNoticeDate', header: 'Work Order Notice Date', normalized: 'workordernoticedate', aliases: ['workOrderNoticeDate', 'WorkOrderNoticeDate', 'work_order_notice_date'] },
+  { key: 'workOrderPhoto', header: 'Work Order Photo', normalized: 'workorderphoto', aliases: ['workOrderPhoto', 'WorkOrderPhoto', 'work_order_photo', 'khataPhoto', 'Notice Photo'] },
+
+  // 5. Consumer Information Fields
+  { key: 'applicationNo', header: 'Application No', normalized: 'applicationno', aliases: ['applicationNo', 'ApplicationNo', 'application_no', 'App No', 'appNo', 'Application Number'] },
+  { key: 'consumerId', header: 'Consumer ID', normalized: 'consumerid', aliases: ['consumerId', 'ConsumerID', 'consumer_id', 'Consumer Number', 'consumerNo', 'Consumer No', 'Con Id', 'conId'] },
+  { key: 'consumerName', header: 'Consumer Name', normalized: 'consumername', aliases: ['consumerName', 'ConsumerName', 'consumer_name', 'Customer Name', 'customerName', 'Name'] },
+  { key: 'fatherName', header: 'Father Name', normalized: 'fathername', aliases: ['fatherName', 'FatherName', 'father_name', 'Father / Husband Name', 'Father/Husband Name', 'husbandName', 'FatherHusbandName'] },
+  { key: 'mobile', header: 'Mobile No', normalized: 'mobileno', aliases: ['mobile', 'Mobile', 'mobile_no', 'Mobile No', 'phone', 'Phone', 'consumerMobile', 'Mobile Number'] },
+  { key: 'address', header: 'Address', normalized: 'address', aliases: ['address', 'Address', 'premisesAddress', 'Location', 'villageAddress'] },
+
+  // 6. Electrical & Tariff Specifications
+  { key: 'appliedLoad', header: 'Applied Load', normalized: 'appliedload', aliases: ['appliedLoad', 'AppliedLoad', 'applied_load', 'Sanctioned Load', 'load', 'Load (kW)', 'Applied Load (kW)'] },
+  { key: 'phase', header: 'Supply Phase', normalized: 'supplyphase', aliases: ['phase', 'Phase', 'supplyPhase', 'Supply Phase', 'Phase Supply'] },
+  { key: 'tariffCategory', header: 'Tariff Category', normalized: 'tariffcategory', aliases: ['tariffCategory', 'TariffCategory', 'tariff_category', 'Tariff Class', 'tariff'] },
+  { key: 'serviceCableLength', header: 'Service Cable Length', normalized: 'servicecablelength', aliases: ['serviceCableLength', 'ServiceCableLength', 'service_cable_length', 'Cable Length', 'serviceCable'] },
+  { key: 'poleNo', header: 'Pole No', normalized: 'poleno', aliases: ['poleNo', 'PoleNo', 'pole_no', 'Pole Number'] },
+  { key: 'earthResistance', header: 'Earth Resistance', normalized: 'earthresistance', aliases: ['earthResistance', 'EarthResistance', 'earth_resistance', 'Earth Pit Resistance'] },
+
+  // 7. Meter Details
+  { key: 'meterNo', header: 'Meter No', normalized: 'meterno', aliases: ['meterNo', 'MeterNo', 'meter_no', 'Meter Number', 'newMeterNo'] },
+  { key: 'meterMake', header: 'Meter Make', normalized: 'metermake', aliases: ['meterMake', 'MeterMake', 'meter_make', 'Meter Make Brand', 'meterBrand'] },
+  { key: 'initialReading', header: 'Initial Reading', normalized: 'initialreading', aliases: ['initialReading', 'InitialReading', 'initial_reading', 'Initial Meter Reading', 'meterReading', 'startReading'] },
+  { key: 'sealNo', header: 'Meter Seal No', normalized: 'metersealno', aliases: ['sealNo', 'SealNo', 'seal_no', 'Meter Seal No', 'Seal Number'] },
+  { key: 'meterInstallDate', header: 'Meter Install Date', normalized: 'meterinstalldate', aliases: ['meterInstallDate', 'MeterInstallDate', 'meter_install_date', 'Installation Date'] },
+  { key: 'inspectionAgencyName', header: 'Inspection Agency Name', normalized: 'inspectionagencyname', aliases: ['inspectionAgencyName', 'InspectionAgencyName', 'inspection_agency_name', 'Inspection Agency'] },
+
+  // 8. Site Evidence & Remarks
+  { key: 'locationGps', header: 'GPS Location', normalized: 'gpslocation', aliases: ['locationGps', 'LocationGPS', 'location_gps', 'gps', 'GPS', 'Coordinates', 'location'] },
+  { key: 'photoUrl', header: 'Photo Evidence', normalized: 'photoevidence', aliases: ['photoUrl', 'PhotoUrl', 'photo_url', 'Photo Evidence', 'directImageUrl', 'driveViewUrl', 'photo'] },
+  { key: 'notes', header: 'Notes', normalized: 'notes', aliases: ['notes', 'Notes', 'remarks', 'Remarks', 'comment', 'comments'] }
+];
+
+// Canonical headers array for NSC sheet tab
+const NSC_HEADERS = NSC_FIELD_SPECS.map(function(s) { return s.header; });
+
+// Normalizes header names for case, space, and symbol-insensitive matching
+function normalizeHeaderName(name) {
+  if (!name) return '';
+  return String(name).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Finds the matching field spec for any given header string (key, header, alias, or normalized)
+function findSpecForHeader(headerStr) {
+  if (!headerStr) return null;
+  const raw = String(headerStr).trim();
+  const norm = normalizeHeaderName(raw);
+  if (!norm) return null;
+
+  for (let i = 0; i < NSC_FIELD_SPECS.length; i++) {
+    const spec = NSC_FIELD_SPECS[i];
+    if (spec.key.toLowerCase() === raw.toLowerCase()) return spec;
+    if (spec.header.toLowerCase() === raw.toLowerCase()) return spec;
+    if (spec.normalized === norm) return spec;
+    if (spec.aliases) {
+      for (let j = 0; j < spec.aliases.length; j++) {
+        if (spec.aliases[j].toLowerCase() === raw.toLowerCase() || normalizeHeaderName(spec.aliases[j]) === norm) {
+          return spec;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Finds the column index in a headers array matching a key, display header, or alias
+function findColumnIndex(headers, keyOrHeader) {
+  if (!headers || !headers.length || !keyOrHeader) return -1;
+  const targetRaw = String(keyOrHeader).trim();
+  const targetNorm = normalizeHeaderName(targetRaw);
+  if (!targetNorm) return -1;
+
+  // 1. Direct exact match (case-insensitive)
+  for (let i = 0; i < headers.length; i++) {
+    const h = String(headers[i] || '').trim();
+    if (h.toLowerCase() === targetRaw.toLowerCase()) return i;
+  }
+
+  // 2. Spec-based match (match by spec key, spec header, or any alias)
+  const spec = findSpecForHeader(targetRaw);
+  if (spec) {
+    for (let i = 0; i < headers.length; i++) {
+      const h = String(headers[i] || '').trim();
+      const hNorm = normalizeHeaderName(h);
+      if (hNorm === spec.normalized) return i;
+      if (h.toLowerCase() === spec.key.toLowerCase()) return i;
+      if (h.toLowerCase() === spec.header.toLowerCase()) return i;
+      if (spec.aliases) {
+        for (let j = 0; j < spec.aliases.length; j++) {
+          if (h.toLowerCase() === spec.aliases[j].toLowerCase() || normalizeHeaderName(spec.aliases[j]) === hNorm) {
+            return i;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Normalized string match
+  for (let i = 0; i < headers.length; i++) {
+    if (normalizeHeaderName(headers[i]) === targetNorm) return i;
+  }
+
+  return -1;
+}
+
+// Extracts the correct field value from an incoming data object for a given sheet header
+function getValueForHeader(obj, headerStr, destSheetName) {
+  if (!obj || typeof obj !== 'object') return '';
+  const h = String(headerStr || '').trim();
+  if (!h) return '';
+
+  // 1. Exact match on raw header
+  if (obj[h] !== undefined && obj[h] !== null) return obj[h];
+
+  // 2. Match via field specs
+  const spec = findSpecForHeader(h);
+  if (spec) {
+    if (obj[spec.key] !== undefined && obj[spec.key] !== null) return obj[spec.key];
+    if (obj[spec.header] !== undefined && obj[spec.header] !== null) return obj[spec.header];
+    if (spec.aliases) {
+      for (let i = 0; i < spec.aliases.length; i++) {
+        const alias = spec.aliases[i];
+        if (obj[alias] !== undefined && obj[alias] !== null) return obj[alias];
+      }
+    }
+  }
+
+  // 3. Normalized key check across all obj keys
+  const hNorm = normalizeHeaderName(h);
+  const objKeys = Object.keys(obj);
+  for (let i = 0; i < objKeys.length; i++) {
+    const ok = objKeys[i];
+    if (normalizeHeaderName(ok) === hNorm) {
+      if (obj[ok] !== undefined && obj[ok] !== null) return obj[ok];
+    }
+  }
+
+  // 4. Aliases & System Field Fallbacks
+  if (hNorm === 'submissionid') return obj.submissionId || obj.SubmissionID || '';
+  if (hNorm === 'recordid' || hNorm === 'id') return obj.id || obj.ID || '';
+  if (hNorm === 'workerid') return obj.workerId || obj.WorkerID || obj.idNo || '';
+  if (hNorm === 'workername') return obj.workerName || obj.WorkerName || obj.nscWorkerName || '';
+  if (hNorm === 'role') return obj.role || obj.Role || 'worker';
+  if (hNorm === 'submittedby') return obj.submittedBy || obj.SubmittedBy || obj.workerName || '';
+  if (hNorm === 'createdat') return obj.createdAt || obj.CreatedAt || obj.date || now();
+  if (hNorm === 'updatedat') return obj.updatedAt || obj.UpdatedAt || now();
+  if (hNorm === 'status') return obj.status || obj.Status || 'Completed';
+  if (hNorm === 'category') return obj.category || obj.Category || 'NSC';
+  if (hNorm === 'photourl' || hNorm === 'photoevidence') return obj.photoUrl || obj.directImageUrl || obj.driveViewUrl || '';
+  if (hNorm === 'workorderphoto') return obj.workOrderPhoto || '';
+  if (hNorm === 'workorderno') return obj.workOrderNo || '';
+  if (hNorm === 'workorderdate') return obj.workOrderDate || '';
+  if (hNorm === 'applicationno') return obj.applicationNo || '';
+  if (hNorm === 'consumerid') return obj.consumerId || '';
+  if (hNorm === 'consumername') return obj.consumerName || '';
+  if (hNorm === 'fathername') return obj.fatherName || '';
+  if (hNorm === 'mobileno' || hNorm === 'mobile') return obj.mobile || '';
+  if (hNorm === 'address') return obj.address || '';
+  if (hNorm === 'appliedload') return obj.appliedLoad || '';
+  if (hNorm === 'supplyphase' || hNorm === 'phase') return obj.phase || '';
+  if (hNorm === 'tariffcategory') return obj.tariffCategory || '';
+  if (hNorm === 'servicecablelength') return obj.serviceCableLength || '';
+  if (hNorm === 'meterno') return obj.meterNo || '';
+  if (hNorm === 'metermake') return obj.meterMake || '';
+  if (hNorm === 'initialreading') return obj.initialReading || '';
+  if (hNorm === 'metersealno' || hNorm === 'sealno') return obj.sealNo || '';
+  if (hNorm === 'meterinstalldate') return obj.meterInstallDate || '';
+  if (hNorm === 'inspectionagencyname') return obj.inspectionAgencyName || '';
+  if (hNorm === 'poleno') return obj.poleNo || '';
+  if (hNorm === 'earthresistance') return obj.earthResistance || '';
+  if (hNorm === 'gpslocation' || hNorm === 'locationgps') return obj.locationGps || '';
+  if (hNorm === 'notes') return obj.notes || '';
+
+  return '';
+}
+
 const USER_HEADERS = [
   'id', 'idNo', 'password', 'name', 'phone', 'role', 'status', 'designation', 'badgeNo',
   'securityQuestion', 'securityAnswerHash', 'createdAt', 'updatedAt'
@@ -149,13 +357,35 @@ function getCategorySheet(canonicalCategory) {
 }
 
 function ensureHeaders(s, headers) {
-  if (s.getLastRow() === 0) {
+  if (!s) return;
+  const lastRow = s.getLastRow();
+  const lastCol = s.getLastColumn();
+
+  if (lastRow === 0 || lastCol === 0) {
     s.getRange(1, 1, 1, headers.length).setValues([headers]);
     s.setFrozenRows(1);
     return;
   }
-  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
-  const missingHeaders = headers.filter(h => currentHeaders.indexOf(h) === -1);
+
+  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, lastCol)).getValues()[0].map(h => String(h || '').trim());
+  const missingHeaders = [];
+
+  headers.forEach(h => {
+    const trimmed = String(h || '').trim();
+    if (!trimmed) return;
+    // Check if this header already exists or matches a known field/alias in the sheet
+    if (findColumnIndex(currentHeaders, trimmed) === -1) {
+      const spec = findSpecForHeader(trimmed);
+      const alreadyAdding = missingHeaders.some(m => {
+        if (spec && findSpecForHeader(m) && findSpecForHeader(m).key === spec.key) return true;
+        return normalizeHeaderName(m) === normalizeHeaderName(trimmed);
+      });
+      if (!alreadyAdding) {
+        missingHeaders.push(trimmed);
+      }
+    }
+  });
+
   if (missingHeaders.length > 0) {
     const startCol = currentHeaders.length + 1;
     s.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
@@ -164,11 +394,13 @@ function ensureHeaders(s, headers) {
 }
 
 function headersFor(name) {
-  if (name === 'USERS' || name === 'Users') return USER_HEADERS;
-  if (name === 'USER_ACTIVITY') return ACTIVITY_HEADERS;
-  if (name === 'SETTINGS') return SETTINGS_HEADERS;
-  if (name === 'WORK_ORDERS' || name === 'WorkOrders') return WORK_ORDER_HEADERS;
-  if (name === 'CHAT' || name === 'Chat') return CHAT_HEADERS;
+  const norm = String(name || '').trim().toUpperCase().replace(/[\s_\-]/g, '');
+  if (norm === 'USERS') return USER_HEADERS;
+  if (norm === 'USERACTIVITY') return ACTIVITY_HEADERS;
+  if (norm === 'SETTINGS') return SETTINGS_HEADERS;
+  if (norm === 'WORKORDERS') return WORK_ORDER_HEADERS;
+  if (norm === 'CHAT') return CHAT_HEADERS;
+  if (norm === 'NSC' || norm === 'NEWCONNECTION') return NSC_HEADERS;
   return COMMON_ENTRY_HEADERS;
 }
 
@@ -277,7 +509,18 @@ function getRowsFromSheet(s) {
   return data.map(r => {
     const item = {};
     headers.forEach((h, i) => {
-      if (h) item[h] = r[i];
+      if (h) {
+        item[h] = r[i];
+        const spec = findSpecForHeader(h);
+        if (spec) {
+          if (item[spec.key] === undefined || item[spec.key] === '') {
+            item[spec.key] = r[i];
+          }
+          if (item[spec.header] === undefined || item[spec.header] === '') {
+            item[spec.header] = r[i];
+          }
+        }
+      }
     });
     return item;
   });
@@ -287,20 +530,29 @@ function appendRowDynamic(sheetOrName, obj, defaultHeaders) {
   const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
   if (!s) throw Error('Target sheet not found: ' + sheetOrName);
   
+  const sheetName = s.getName();
+  const canonicalHeaders = defaultHeaders || headersFor(sheetName);
+
   if (s.getLastRow() === 0) {
-    const headers = defaultHeaders || headersFor(s.getName());
-    s.getRange(1, 1, 1, headers.length).setValues([headers]);
+    s.getRange(1, 1, 1, canonicalHeaders.length).setValues([canonicalHeaders]);
     s.setFrozenRows(1);
   }
 
+  // Ensure all canonical/required headers exist safely without duplication
+  ensureHeaders(s, canonicalHeaders);
+
   let currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
 
-  // Dynamic Header Detection: Automatically append new columns at the end if new fields arrive
+  // Dynamic Header Detection: Automatically append new columns at the end if completely unknown fields arrive
   const missingHeaders = [];
   Object.keys(obj).forEach(k => {
     const trimmed = String(k || '').trim();
-    if (trimmed && !trimmed.startsWith('_') && currentHeaders.indexOf(trimmed) === -1) {
-      missingHeaders.push(trimmed);
+    if (trimmed && !trimmed.startsWith('_') && findColumnIndex(currentHeaders, trimmed) === -1) {
+      const spec = findSpecForHeader(trimmed);
+      const colToAdd = spec ? spec.header : trimmed;
+      if (findColumnIndex(currentHeaders, colToAdd) === -1 && missingHeaders.indexOf(colToAdd) === -1) {
+        missingHeaders.push(colToAdd);
+      }
     }
   });
 
@@ -310,34 +562,8 @@ function appendRowDynamic(sheetOrName, obj, defaultHeaders) {
     currentHeaders = currentHeaders.concat(missingHeaders);
   }
 
-  const rowValues = currentHeaders.map(h => {
-    const k = String(h || '').trim();
-    if (!k) return '';
-    if (obj[k] !== undefined && obj[k] !== null) return obj[k];
-
-    // Aliases and field fallbacks
-    if (k === 'workerId') return obj.workerId || obj.WorkerID || obj.idNo || '';
-    if (k === 'workerName') return obj.workerName || obj.WorkerName || '';
-    if (k === 'role') return obj.role || obj.Role || '';
-    if (k === 'submittedBy') return obj.submittedBy || obj.SubmittedBy || obj.workerName || '';
-    if (k === 'submissionId') return obj.submissionId || obj.SubmissionID || '';
-    if (k === 'createdAt') return obj.createdAt || obj.CreatedAt || obj.date || '';
-    if (k === 'updatedAt') return obj.updatedAt || obj.UpdatedAt || '';
-    if (k === 'status') return obj.status || obj.Status || 'Completed';
-    if (k === 'category') return obj.category || obj.Category || '';
-    if (k === 'photoUrl') return obj.photoUrl || obj.directImageUrl || obj.driveViewUrl || '';
-    if (k === 'description') {
-      if (currentHeaders.indexOf('photoUrl') === -1) {
-        return obj.photoUrl || obj.directImageUrl || obj.description || '';
-      }
-      return obj.description || '';
-    }
-    if (k === 'date') return obj.uploadDate || obj.date || '';
-    if (k === 'createdBy') return obj.uploadedBy || obj.adminName || obj.createdBy || '';
-    if (k === 'visible') return obj.isHidden !== undefined ? !obj.isHidden : true;
-    if (k === 'directImageUrl') return obj.directImageUrl || obj.photoUrl || '';
-    return '';
-  });
+  // Header-based mapping: Extract correct value for each column header
+  const rowValues = currentHeaders.map(h => getValueForHeader(obj, h, sheetName));
 
   s.appendRow(rowValues);
   return obj;
@@ -355,7 +581,7 @@ function findRowIndex(sheetOrName, key, value) {
   if (totalRows < 2 || totalCols < 1) return -1;
 
   const currentHeaders = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
-  const colIndex = currentHeaders.indexOf(key);
+  const colIndex = findColumnIndex(currentHeaders, key);
   if (colIndex < 0) return -1;
 
   const vals = s.getRange(2, colIndex + 1, totalRows - 1, 1).getValues();
@@ -400,7 +626,7 @@ function updateRow(sheetOrName, key, value, updates) {
   const newRowValues = currentHeaders.map(h => {
     const k = String(h || '').trim();
     if (!k) return '';
-    return updatedObj[k] !== undefined ? updatedObj[k] : '';
+    return getValueForHeader(updatedObj, k, s.getName());
   });
 
   s.getRange(rowIdx, 1, 1, totalCols).setValues([newRowValues]);
@@ -1326,6 +1552,12 @@ function doGet(e) {
     }
 
     // Specific category read shortcuts
+    if (action === 'getNscHeaders' || action === 'nscHeaders') {
+      const s = getCategorySheet('NSC');
+      ensureHeaders(s, NSC_HEADERS);
+      const headers = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
+      return out({ success: true, sheet: s.getName(), headers: headers, requiredHeaders: NSC_HEADERS });
+    }
     if (action === 'getNewConnections') return out({ success: true, entries: queryEntries({ category: 'NSC' }) });
     if (action === 'getDisconnections') return out({ success: true, entries: queryEntries({ category: 'DISCONNECTION' }) });
     if (action === 'getPoleCases') return out({ success: true, entries: queryEntries({ category: 'POLE CASE' }) });
@@ -1480,6 +1712,12 @@ function doPost(e) {
     }
     if (action === 'cleanupDuplicates' || action === 'deduplicateSheets') {
       return out(cleanupDuplicateRecords(body.sheetName));
+    }
+    if (action === 'syncNscHeaders' || action === 'ensureNscHeaders') {
+      const s = getCategorySheet('NSC');
+      ensureHeaders(s, NSC_HEADERS);
+      const headers = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
+      return out({ success: true, message: 'NSC headers synchronized successfully', sheet: s.getName(), headers: headers, requiredHeaders: NSC_HEADERS });
     }
     if (action === 'clearEntries') {
       const s = getSheet('MASTER_DATA');

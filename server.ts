@@ -249,9 +249,62 @@ app.get(['/health', '/healthz', '/api/health'], (req, res) => {
   res.status(200).json({ status: 'ok', app: 'POWER Utility Management' });
 });
 
-// Normalizer for Google Sheets column shifts
-function normalizeServerEntry(raw: any): any {
-  if (!raw || typeof raw !== 'object') return raw;
+// Normalizer for Google Sheets column shifts and display headers
+function normalizeServerEntry(entry: any): any {
+  if (!entry || typeof entry !== 'object') return entry;
+  const raw: any = { ...entry };
+
+  // Map Google Sheet display headers and alternative keys into canonical camelCase properties
+  raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || '';
+  raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || '';
+  raw.category = raw.category || raw['Category'] || 'NSC';
+  raw.status = raw.status || raw['Status'] || 'Completed';
+  raw.date = raw.date || raw['Date'] || raw.createdAt || '';
+  raw.createdAt = raw.createdAt || raw['Created At'] || raw.date || '';
+  raw.updatedAt = raw.updatedAt || raw['Updated At'] || '';
+
+  raw.workerId = raw.workerId || raw['Worker ID'] || raw['Lineman ID'] || '';
+  raw.workerName = raw.workerName || raw['Worker Name'] || raw['Lineman Name'] || raw['NSC Worker Name'] || '';
+  raw.role = raw.role || raw['Role'] || '';
+  raw.submittedBy = raw.submittedBy || raw['Submitted By'] || raw.workerName || '';
+  raw.workerPhone = raw.workerPhone || raw['Worker Phone'] || '';
+
+  raw.agencyName = raw.agencyName || raw['Agency Name'] || '';
+  raw.cccName = raw.cccName || raw['CCC Name'] || '';
+  raw.substation = raw.substation || raw['Substation'] || '';
+  raw.feederName = raw.feederName || raw['Feeder Name'] || '';
+
+  raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
+  raw.workOrderDate = raw.workOrderDate || raw['Work Order Date'] || '';
+  raw.workOrderNoticeId = raw.workOrderNoticeId || raw['Work Order Notice ID'] || '';
+  raw.workOrderNoticeTitle = raw.workOrderNoticeTitle || raw['Work Order Notice Title'] || '';
+  raw.workOrderNoticeDate = raw.workOrderNoticeDate || raw['Work Order Notice Date'] || '';
+  raw.workOrderPhoto = raw.workOrderPhoto || raw['Work Order Photo'] || '';
+
+  raw.applicationNo = raw.applicationNo || raw['Application No'] || raw['Application Number'] || '';
+  raw.consumerId = raw.consumerId || raw['Consumer ID'] || raw['Consumer Number'] || raw['Consumer No'] || '';
+  raw.consumerName = raw.consumerName || raw['Consumer Name'] || raw['Customer Name'] || '';
+  raw.fatherName = raw.fatherName || raw['Father Name'] || raw['Father / Husband Name'] || '';
+  raw.mobile = raw.mobile || raw['Mobile No'] || raw['Mobile'] || '';
+  raw.address = raw.address || raw['Address'] || '';
+
+  raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
+  raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || '';
+  raw.tariffCategory = raw.tariffCategory || raw['Tariff Category'] || '';
+  raw.serviceCableLength = raw.serviceCableLength || raw['Service Cable Length'] || '';
+  raw.poleNo = raw.poleNo || raw['Pole No'] || '';
+  raw.earthResistance = raw.earthResistance || raw['Earth Resistance'] || '';
+
+  raw.meterNo = raw.meterNo || raw['Meter No'] || raw['Meter Number'] || '';
+  raw.meterMake = raw.meterMake || raw['Meter Make'] || '';
+  raw.initialReading = raw.initialReading || raw['Initial Reading'] || '';
+  raw.sealNo = raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
+  raw.meterInstallDate = raw.meterInstallDate || raw['Meter Install Date'] || '';
+  raw.inspectionAgencyName = raw.inspectionAgencyName || raw['Inspection Agency Name'] || '';
+
+  raw.locationGps = raw.locationGps || raw['GPS Location'] || raw['Location GPS'] || '';
+  raw.photoUrl = raw.photoUrl || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
+  raw.notes = raw.notes || raw['Notes'] || '';
 
   const cName = String(raw.consumerName || '').trim();
   const cId = String(raw.consumerId || '').trim();
@@ -518,6 +571,27 @@ app.delete('/api/entries', async (req, res) => {
   }
 
   res.json({ success: true, message: 'All entries deleted successfully' });
+});
+
+// Sync and inspect NSC headers in Google Sheets
+app.get('/api/nsc-headers', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('getNscHeaders', {}, 'GET');
+    return res.json(result || { success: true });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/sync-nsc-headers', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('syncNscHeaders', {}, 'POST');
+    return res.json(result || { success: true, message: 'NSC headers verified' });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: e.message || String(e) });
+  }
 });
 
 // User Authentication & Management Endpoints (Persisted in Google Sheets via Google Apps Script)
