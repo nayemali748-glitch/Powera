@@ -31,18 +31,6 @@ async function callGoogleAppsScript(
     let finalAction = action;
     let finalPayload = { ...payload };
 
-    // Canonical action normalization for Google Apps Script
-    const catCreateActions = ['createNSC', 'createNewConnection', 'createDisconnection', 'createPoleCase', 'createMeterReplacement', 'createDTRReplacement', 'saveEntry'];
-    if (catCreateActions.includes(action)) {
-      finalAction = 'createEntry';
-      if (!finalPayload.data) finalPayload.data = {};
-      if (action === 'createNSC' || action === 'createNewConnection') finalPayload.data.category = finalPayload.data.category || 'NSC';
-      if (action === 'createDisconnection') finalPayload.data.category = finalPayload.data.category || 'DISCONNECTION';
-      if (action === 'createPoleCase') finalPayload.data.category = finalPayload.data.category || 'POLE CASE';
-      if (action === 'createMeterReplacement') finalPayload.data.category = finalPayload.data.category || 'METER REPLESMENT';
-      if (action === 'createDTRReplacement') finalPayload.data.category = finalPayload.data.category || 'DTR REPLESMENT';
-    }
-
     if (method === 'GET') {
       const sep = url.includes('?') ? '&' : '?';
       const queryParams: Record<string, string> = { action: finalAction };
@@ -65,16 +53,9 @@ async function callGoogleAppsScript(
       try {
         return JSON.parse(text);
       } catch {
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-          if (text.includes('unable to open the file')) {
-            throw new Error('Google Sheets is temporarily unavailable or locked. Please try again in a few seconds.');
-          }
-          throw new Error('Google Apps Script returned an HTML error page instead of JSON.');
-        }
         throw new Error(`Google Apps Script GET returned non-JSON response: ${text.slice(0, 150)}`);
       }
     } else {
-      // POST: Send to clean GOOGLE_APPS_SCRIPT_URL with manual redirect handling
       const body = JSON.stringify({ action: finalAction, ...finalPayload });
       const res = await fetch(url, {
         method: 'POST',
@@ -106,12 +87,6 @@ async function callGoogleAppsScript(
       try {
         return JSON.parse(text);
       } catch {
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-          if (text.includes('unable to open the file')) {
-            throw new Error('Google Sheets is temporarily unavailable or locked. Please try again in a few seconds.');
-          }
-          throw new Error('Google Apps Script returned an HTML error page instead of JSON.');
-        }
         throw new Error(`Google Apps Script POST returned non-JSON response: ${text.slice(0, 150)}`);
       }
     }
