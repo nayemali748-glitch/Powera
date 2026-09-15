@@ -82,9 +82,9 @@ export async function callGasApi<T = any>(
   method: 'GET' | 'POST' = 'GET',
   timeoutMs = 45000
 ): Promise<T> {
-  const isServerHost = typeof window !== 'undefined' && window.location && window.location.port === '3000';
+  const isBrowser = typeof window !== 'undefined';
 
-  if (isServerHost) {
+  if (isBrowser) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       try { controller.abort(); } catch {}
@@ -158,6 +158,12 @@ export async function callGasApi<T = any>(
     try {
       data = JSON.parse(text);
     } catch {
+      if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+        if (text.includes('unable to open the file')) {
+          throw new Error('Google Sheets is temporarily unavailable or locked. Please try again in a few seconds.');
+        }
+        throw new Error('Google Apps Script returned an HTML page instead of JSON. The backend connection will retry.');
+      }
       throw new Error(`Google Apps Script returned invalid response: ${text.slice(0, 150)}`);
     }
 
@@ -259,14 +265,8 @@ export async function fetchEntries(filters?: {
   }
 }
 
-// Map category to explicit Apps Script action
-export function getCreateActionForCategory(cat?: string): string {
-  const c = String(cat || '').toUpperCase();
-  if (c === 'NSC') return 'createNSC';
-  if (c === 'DISCONNECTION') return 'createDisconnection';
-  if (c === 'POLE CASE' || c === 'POLE_CASE') return 'createPoleCase';
-  if (c === 'METER REPLESMENT' || c === 'METER_REPLACEMENT') return 'createMeterReplacement';
-  if (c === 'DTR REPLESMENT' || c === 'DTR_REPLACEMENT') return 'createDTRReplacement';
+// Map category to explicit Apps Script action (canonical action is createEntry, which routes per category)
+export function getCreateActionForCategory(_cat?: string): string {
   return 'createEntry';
 }
 
@@ -305,27 +305,57 @@ export async function createEntry(
     let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
     let backendError: any = null;
 
-    // 1. Send exactly one canonical submission request to Google Apps Script / Google Sheets
-    try {
-      const actionName = getCreateActionForCategory(cleanEntry.category);
-      res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-        actionName,
-        { data: cleanEntry },
-        'POST',
-        35000
-      );
-    } catch (err: any) {
-      backendError = err;
+    // 1. Primary Save Flow: Send to /api/entries on the Express server (handles Google Sheets write with 302 redirects)
+    if (typeof window !== 'undefined') {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          try { controller.abort(); } catch {}
+        }, 45000);
+
+        const serverRes = await fetch('/api/entries', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cleanEntry)
+        });
+        clearTimeout(timeoutId);
+
+        if (serverRes.ok) {
+          const json = await serverRes.json().catch(() => ({}));
+          if (json && json.success !== false) {
+            res = json;
+          } else if (json && json.error) {
+            backendError = new Error(json.error);
+          }
+        }
+      } catch (err: any) {
+        console.warn('/api/entries primary save failed, trying fallback:', err);
+      }
     }
 
-    // 2. Strict Backend Save Confirmation check
+    // 2. Secondary Save Flow: Fallback via callGasApi with canonical action 'createEntry'
+    if (!res || res.success === false) {
+      try {
+        res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
+          'createEntry',
+          { data: cleanEntry },
+          'POST',
+          45000
+        );
+      } catch (err: any) {
+        backendError = err;
+      }
+    }
+
+    // 3. Strict Backend Save Confirmation check
     if (!res || res.success === false) {
       const detailMsg = res?.message || (backendError ? (backendError.message || String(backendError)) : 'Google Sheets backend failed to save the entry.');
       console.error('Google Sheets Backend Save Failed:', detailMsg);
       throw new Error(`Google Sheets save error: ${detailMsg}`);
     }
 
-    // 3. Data successfully saved and confirmed by Google Sheets!
+    // 4. Data successfully saved and confirmed by Google Sheets!
     const confirmedEntry: PowerEntry = normalizeEntry(res.entry || res.data || cleanEntry);
 
     // Update local cache for instant read synchronization in the Admin Panel and Worker Recent Submissions
@@ -554,8 +584,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
     throw new Error('User ID No and Password are required');
   }
 
-  const isServerHost = typeof window !== 'undefined' && window.location && window.location.port === '3000';
-  if (isServerHost) {
+  if (typeof window !== 'undefined') {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
