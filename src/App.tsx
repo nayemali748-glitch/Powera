@@ -213,12 +213,12 @@ export default function App() {
       return;
     }
 
-    // Real-time background sync every 8 seconds, only when tab is visible
+    // Real-time background sync every 15 seconds, only when tab is visible
     const interval = setInterval(() => {
       if (!document.hidden) {
         loadData(true);
       }
-    }, 8000);
+    }, 15000);
 
     const onFocus = () => loadData(true);
     const onVisibilityChange = () => {

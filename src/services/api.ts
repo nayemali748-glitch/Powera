@@ -82,9 +82,8 @@ export async function callGasApi<T = any>(
   method: 'GET' | 'POST' = 'GET',
   timeoutMs = 45000
 ): Promise<T> {
-  const isServerHost = typeof window !== 'undefined' && window.location && window.location.port === '3000';
-
-  if (isServerHost) {
+  // 1. In browser environment, always route through the Express /api/gas-proxy
+  if (typeof window !== 'undefined') {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       try { controller.abort(); } catch {}
@@ -97,28 +96,33 @@ export async function callGasApi<T = any>(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, payload, method })
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data && data.success !== false) {
-        return data as T;
+
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
+          throw new Error('Google Sheets backend is currently busy. Please try again in a few seconds.');
+        }
+        throw new Error('Unexpected response format from Google Sheets service.');
       }
-      if (data && data.error) {
+
+      if (data && data.success === false && data.error) {
         throw new Error(data.error);
       }
+      return data as T;
     } catch (err: any) {
       if (err && err.name === 'AbortError') {
         throw new Error(`Request timed out for action "${action}". Please try again.`);
       }
-      // If error is explicit user/business error (like wrong password or hold), rethrow immediately
-      if (err?.message && (err.message.includes('ভুল') || err.message.includes('Invalid') || err.message.includes('Hold') || err.message.includes('Password'))) {
-        throw err;
-      }
-      console.warn(`Local proxy for "${action}" failed, trying direct Google Apps Script:`, err);
+      throw err;
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  // Direct Google Apps Script call
+  // 2. Server-side or Node direct execution
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     try { controller.abort(); } catch {}
@@ -128,7 +132,7 @@ export async function callGasApi<T = any>(
     let url = GOOGLE_SCRIPT_WEB_APP_URL;
     const options: RequestInit = {
       signal: controller.signal,
-      redirect: 'follow',
+      redirect: 'manual',
     };
 
     if (method === 'GET') {
@@ -143,22 +147,35 @@ export async function callGasApi<T = any>(
       const params = new URLSearchParams(queryParams);
       url = `${url}${sep}${params.toString()}`;
       options.method = 'GET';
+      options.headers = { 'Accept': 'application/json' };
     } else {
       options.method = 'POST';
-      // Use text/plain to prevent browser CORS preflight OPTIONS request
       options.headers = {
-        'Content-Type': 'text/plain;charset=utf-8'
+        'Content-Type': 'text/plain;charset=utf-8',
+        'Accept': 'application/json'
       };
       options.body = JSON.stringify({ action, ...payload });
     }
 
     const res = await fetch(url, options);
-    const text = await res.text();
+    let finalRes = res;
+    if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
+      const loc = res.headers.get('location');
+      if (loc) {
+        finalRes = await fetch(loc, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
+      }
+    }
+
+    const text = await finalRes.text();
+    if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
+      throw new Error('Google Sheets is temporarily locked or busy. Please try again.');
+    }
+
     let data: any;
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error(`Google Apps Script returned invalid response: ${text.slice(0, 150)}`);
+      throw new Error('Invalid JSON received from Google Sheets backend.');
     }
 
     if (data && data.success === false && data.error) {
@@ -260,13 +277,8 @@ export async function fetchEntries(filters?: {
 }
 
 // Map category to explicit Apps Script action
-export function getCreateActionForCategory(cat?: string): string {
-  const c = String(cat || '').toUpperCase();
-  if (c === 'NSC') return 'createNSC';
-  if (c === 'DISCONNECTION') return 'createDisconnection';
-  if (c === 'POLE CASE' || c === 'POLE_CASE') return 'createPoleCase';
-  if (c === 'METER REPLESMENT' || c === 'METER_REPLACEMENT') return 'createMeterReplacement';
-  if (c === 'DTR REPLESMENT' || c === 'DTR_REPLACEMENT') return 'createDTRReplacement';
+// Map category to explicit Apps Script action - 'createEntry' is the canonical GAS action
+export function getCreateActionForCategory(_cat?: string): string {
   return 'createEntry';
 }
 
@@ -307,12 +319,11 @@ export async function createEntry(
 
     // 1. Send exactly one canonical submission request to Google Apps Script / Google Sheets
     try {
-      const actionName = getCreateActionForCategory(cleanEntry.category);
       res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-        actionName,
+        'createEntry',
         { data: cleanEntry },
         'POST',
-        35000
+        40000
       );
     } catch (err: any) {
       backendError = err;

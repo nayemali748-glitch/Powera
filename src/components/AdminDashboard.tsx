@@ -467,16 +467,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Auto-refresh entries when Admin Dashboard is active to immediately reflect worker submissions (respects manual sync to conserve mobile data)
+  // Initial refresh when Admin Dashboard is opened (ongoing sync is centrally managed by App.tsx)
   React.useEffect(() => {
     onRefresh();
-    if (syncMode === 'auto') {
-      const interval = setInterval(() => {
-        onRefresh();
-      }, 8000);
-      return () => clearInterval(interval);
-    }
-  }, [syncMode]);
+  }, []);
 
   // Filter calculations
   const filteredEntries = entries.filter((item) => {

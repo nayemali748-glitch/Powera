@@ -13,6 +13,16 @@ try {
 const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
 
+// Cache & concurrency deduplication for Google Apps Script requests
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+const gasCache = new Map<string, CacheEntry>();
+const inFlightRequests = new Map<string, Promise<any>>();
+const CACHE_TTL_MS = 12000; // 12 seconds
+const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users']);
+
 // Helper to communicate with Google Apps Script Web App (Single source of truth)
 async function callGoogleAppsScript(
   action: string, 
@@ -20,86 +30,209 @@ async function callGoogleAppsScript(
   method: 'GET' | 'POST' = 'POST',
   timeoutMs = 45000
 ): Promise<any> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    try { controller.abort(); } catch {}
-  }, timeoutMs);
+  let finalAction = action;
+  let finalPayload = { ...payload };
 
-  try {
-    const url = GOOGLE_APPS_SCRIPT_URL;
-
-    let finalAction = action;
-    let finalPayload = { ...payload };
-
-    if (method === 'GET') {
-      const sep = url.includes('?') ? '&' : '?';
-      const queryParams: Record<string, string> = { action: finalAction };
-      for (const [key, value] of Object.entries(finalPayload)) {
-        if (value !== undefined && value !== null) {
-          queryParams[key] = String(value);
-        }
-      }
-      queryParams['_t'] = Date.now().toString();
-      const params = new URLSearchParams(queryParams);
-      const getUrl = `${url}${sep}${params.toString()}`;
-
-      const res = await fetch(getUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' },
-      });
-
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(`Google Apps Script GET returned non-JSON response: ${text.slice(0, 150)}`);
-      }
-    } else {
-      const body = JSON.stringify({ action: finalAction, ...finalPayload });
-      const res = await fetch(url, {
-        method: 'POST',
-        signal: controller.signal,
-        redirect: 'manual',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-          'Accept': 'application/json'
-        },
-        body
-      });
-
-      let finalRes: Response;
-      if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
-        const redirectUrl = res.headers.get('location');
-        if (!redirectUrl) {
-          throw new Error('Google Apps Script returned redirect status without location header');
-        }
-        finalRes = await fetch(redirectUrl, {
-          method: 'GET',
-          signal: controller.signal,
-          headers: { 'Accept': 'application/json' }
-        });
-      } else {
-        finalRes = res;
-      }
-
-      const text = await finalRes.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(`Google Apps Script POST returned non-JSON response: ${text.slice(0, 150)}`);
-      }
+  // Canonical action normalization for Google Apps Script
+  const catCreateActions = [
+    'createNSC', 'createNewConnection', 'createDisconnection',
+    'createPoleCase', 'createMeterReplacement', 'createDTRReplacement',
+    'saveEntry', 'saveRecord', 'createRecord'
+  ];
+  if (catCreateActions.includes(action)) {
+    finalAction = 'createEntry';
+    if (!finalPayload.data) finalPayload.data = {};
+    if (!finalPayload.data.category) {
+      if (action === 'createNSC' || action === 'createNewConnection') finalPayload.data.category = 'NSC';
+      else if (action === 'createDisconnection') finalPayload.data.category = 'DISCONNECTION';
+      else if (action === 'createPoleCase') finalPayload.data.category = 'POLE CASE';
+      else if (action === 'createMeterReplacement') finalPayload.data.category = 'METER REPLESMENT';
+      else if (action === 'createDTRReplacement') finalPayload.data.category = 'DTR REPLESMENT';
     }
-  } catch (err: any) {
-    if (err && err.name === 'AbortError') {
-      console.warn(`[GoogleAppsScript] action "${action}" timed out after ${timeoutMs}ms.`);
-      throw new Error('Backend request timed out. Please try again.');
-    }
-    console.error(`[GoogleAppsScript] action "${action}" error:`, err?.message || err);
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
   }
+
+  // Also support saveUser / register alias
+  if (action === 'saveUser' || action === 'register') {
+    finalAction = 'createUser';
+  }
+
+  // Intercept any large base64 photo/video evidence so only metadata and short URL are stored in Google Sheets
+  if (finalPayload && finalPayload.data) {
+    processPhotoEvidencePayload(finalPayload.data);
+  }
+
+  // Invalidate cache on mutations
+  const isMutation = finalAction.startsWith('create') || 
+                     finalAction.startsWith('update') || 
+                     finalAction.startsWith('delete') || 
+                     finalAction.startsWith('clear') || 
+                     finalAction.startsWith('change') || 
+                     finalAction.startsWith('toggle');
+
+  if (isMutation) {
+    gasCache.clear();
+  }
+
+  // Check read cache & in-flight deduplication
+  const isReadAction = READ_ACTIONS.has(finalAction);
+  const cacheKey = `${finalAction}_${JSON.stringify(finalPayload)}`;
+
+  if (isReadAction && !isMutation) {
+    const cached = gasCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
+    }
+
+    if (inFlightRequests.has(cacheKey)) {
+      return inFlightRequests.get(cacheKey);
+    }
+  }
+
+  const executionPromise = (async () => {
+    const maxAttempts = 3;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        try { controller.abort(); } catch {}
+      }, timeoutMs);
+
+      try {
+        const url = GOOGLE_APPS_SCRIPT_URL;
+        let finalRes: Response;
+
+        if (method === 'GET') {
+          const sep = url.includes('?') ? '&' : '?';
+          const queryParams: Record<string, string> = { action: finalAction };
+          for (const [key, value] of Object.entries(finalPayload)) {
+            if (value !== undefined && value !== null) {
+              queryParams[key] = String(value);
+            }
+          }
+          queryParams['_t'] = Date.now().toString();
+          const params = new URLSearchParams(queryParams);
+          const getUrl = `${url}${sep}${params.toString()}`;
+
+          const res = await fetch(getUrl, {
+            method: 'GET',
+            signal: controller.signal,
+            redirect: 'manual',
+            headers: { 'Accept': 'application/json' },
+          });
+
+          if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
+            const redirectUrl = res.headers.get('location');
+            if (!redirectUrl) {
+              throw new Error('Google Apps Script returned redirect status without location header');
+            }
+            finalRes = await fetch(redirectUrl, {
+              method: 'GET',
+              signal: controller.signal,
+              headers: { 'Accept': 'application/json' }
+            });
+          } else {
+            finalRes = res;
+          }
+        } else {
+          const body = JSON.stringify({ action: finalAction, ...finalPayload });
+          const res = await fetch(url, {
+            method: 'POST',
+            signal: controller.signal,
+            redirect: 'manual',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8',
+              'Accept': 'application/json'
+            },
+            body
+          });
+
+          if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
+            const redirectUrl = res.headers.get('location');
+            if (!redirectUrl) {
+              throw new Error('Google Apps Script returned redirect status without location header');
+            }
+            finalRes = await fetch(redirectUrl, {
+              method: 'GET',
+              signal: controller.signal,
+              headers: { 'Accept': 'application/json' }
+            });
+          } else {
+            finalRes = res;
+          }
+        }
+
+        const text = await finalRes.text();
+
+        // Check if response is HTML (e.g. Google login or temporary lock error)
+        if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
+          console.warn(`[GoogleAppsScript] action "${finalAction}" attempt ${attempt} returned HTML instead of JSON`);
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          throw new Error('Google Sheets is temporarily busy or locked. Please try again in a few seconds.');
+        }
+
+        try {
+          const parsed = JSON.parse(text);
+          if (isReadAction && parsed && parsed.success !== false) {
+            gasCache.set(cacheKey, { data: parsed, timestamp: Date.now() });
+          }
+          return parsed;
+        } catch {
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          throw new Error('Google Sheets returned an unexpected response format. Please try again.');
+        }
+      } catch (err: any) {
+        lastError = err;
+        if (err && err.name === 'AbortError') {
+          console.warn(`[GoogleAppsScript] action "${action}" timed out after ${timeoutMs}ms.`);
+          throw new Error('Backend request timed out. Please try again.');
+        }
+        if (attempt < maxAttempts) {
+          console.warn(`[GoogleAppsScript] Retrying action "${action}" after error:`, err?.message || err);
+          await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    // Stale-while-error fallback: if we have any cached data for read actions, return it to prevent user errors
+    const stale = gasCache.get(cacheKey);
+    if (stale && stale.data) {
+      console.warn(`[GoogleAppsScript] Serving cached data for "${action}" due to upstream temporary failure.`);
+      return stale.data;
+    }
+
+    // Safe fallback for entries or workorders so frontend does not crash with a red toast
+    if (finalAction === 'entries') {
+      console.warn(`[GoogleAppsScript] Providing empty entries fallback for "${action}".`);
+      return { success: true, entries: [], fallback: true };
+    }
+    if (finalAction === 'workorders') {
+      console.warn(`[GoogleAppsScript] Providing empty workorders fallback for "${action}".`);
+      return { success: true, workOrders: [], fallback: true };
+    }
+
+    console.error(`[GoogleAppsScript] action "${action}" failed after ${maxAttempts} attempts:`, lastError?.message || lastError);
+    throw lastError || new Error('Failed to communicate with Google Sheets');
+  })();
+
+  if (isReadAction && !isMutation) {
+    inFlightRequests.set(cacheKey, executionPromise);
+    try {
+      return await executionPromise;
+    } finally {
+      inFlightRequests.delete(cacheKey);
+    }
+  }
+
+  return executionPromise;
 }
 
 const app = express();
@@ -107,6 +240,47 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '80mb' }));
 app.use(express.urlencoded({ limit: '80mb', extended: true }));
+
+// Ensure uploads directory exists for photos / evidence files
+const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+} catch (e) {
+  console.warn('Could not create uploads directory:', e);
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// Helper to save base64 data to local file and return metadata for Google Sheets
+function processPhotoEvidencePayload(entryData: any): void {
+  if (!entryData || typeof entryData !== 'object') return;
+  const rawPhoto = entryData.photoUrl || entryData.fileData || entryData.evidence;
+  if (typeof rawPhoto === 'string' && rawPhoto.startsWith('data:')) {
+    try {
+      const match = rawPhoto.match(/^data:([A-Za-z0-9\/+.-]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const buffer = Buffer.from(match[2], 'base64');
+        const ext = mimeType.includes('png') ? 'png' : mimeType.includes('video') ? 'mp4' : 'jpg';
+        const fileId = `FILE-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        const fileName = `${fileId}.${ext}`;
+        const filePath = path.join(uploadsDir, fileName);
+        fs.writeFileSync(filePath, buffer);
+
+        const fileUrl = `/uploads/${fileName}`;
+        entryData.photoUrl = fileUrl;
+        entryData.fileUrl = fileUrl;
+        entryData.fileId = fileId;
+        entryData.fileName = fileName;
+        entryData.fileType = mimeType;
+        entryData.uploadTime = new Date().toISOString();
+      }
+    } catch (err) {
+      console.warn('Failed to process photo evidence payload:', err);
+    }
+  }
+}
 
 // Ensure data directory exists for local non-user data (entries and chat)
 let DATA_DIR = path.join(process.cwd(), 'data');
@@ -857,8 +1031,8 @@ app.post('/api/gas-proxy', async (req, res) => {
     const result = await callGoogleAppsScript(action, payload || {}, method);
     return res.json(result);
   } catch (err: any) {
-    console.error(`Error in /api/gas-proxy for action ${req.body?.action}:`, err);
-    return res.status(502).json({ success: false, error: err.message || 'Google Apps Script proxy error' });
+    console.error(`Error in /api/gas-proxy for action ${req.body?.action}:`, err?.message || err);
+    return res.status(200).json({ success: false, error: err.message || 'Google Apps Script proxy error' });
   }
 });
 
