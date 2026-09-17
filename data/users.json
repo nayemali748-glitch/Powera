@@ -13,7 +13,7 @@
     "securityAnswerHash": "a684782a56f686a541de9a3748f1167632e070dadf17d3629d2405d4973add42",
     "createdAt": "2026-09-03T13:03:06.898Z",
     "updatedAt": "",
-    "loggedInAt": "2026-09-17T09:05:10.941Z"
+    "loggedInAt": "2026-09-17T09:15:59.385Z"
   },
   {
     "id": "worker_default_0000",
@@ -29,7 +29,7 @@
     "securityAnswerHash": "a684782a56f686a541de9a3748f1167632e070dadf17d3629d2405d4973add42",
     "createdAt": "2026-09-03T13:03:07.556Z",
     "updatedAt": "2026-09-07T13:13:44.999Z",
-    "loggedInAt": "2026-09-17T09:05:10.936Z"
+    "loggedInAt": "2026-09-17T09:15:30.050Z"
   },
   {
     "id": "USR-1788884093846-ary2u9",
@@ -45,7 +45,7 @@
     "securityAnswerHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "createdAt": "2026-09-08T16:14:53.848Z",
     "updatedAt": "2026-09-08T16:58:27.566Z",
-    "loggedInAt": "2026-09-17T09:05:10.917Z"
+    "loggedInAt": "2026-09-17T09:15:30.041Z"
   },
   {
     "id": "USR-1789238067456-4l60bn",
@@ -61,6 +61,21 @@
     "securityAnswerHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "createdAt": "2026-09-12T18:34:27.458Z",
     "updatedAt": "",
-    "loggedInAt": "2026-09-17T09:05:10.923Z"
+    "loggedInAt": "2026-09-17T09:15:30.036Z"
+  },
+  {
+    "id": "USR-1789635563533-r6aegx",
+    "idNo": "TESTUSER99",
+    "password": "testpassword",
+    "name": "Test User",
+    "phone": "",
+    "role": "worker",
+    "status": "active",
+    "designation": "",
+    "badgeNo": "TESTUSER99",
+    "securityQuestion": "",
+    "securityAnswerHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "createdAt": "2026-09-17T08:59:23.539Z",
+    "updatedAt": ""
   }
 ]

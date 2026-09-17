@@ -899,12 +899,28 @@ function hashSha256(text: string): string {
   }
 }
 
-// Find user record by ID, ID No, Phone, or Badge No with universal Bengali & numeral normalization
-function matchUserRecord(loginId: string, users: any[]): any | null {
+// Find user record by ID, ID No, Phone, Name, Email, or Badge No with universal Bengali & numeral normalization
+function matchUserRecord(loginId: string, users: any[], cleanPass?: string): any | null {
   if (!loginId || !Array.isArray(users)) return null;
   const clean = normalizeUniversal(loginId).toLowerCase().trim();
   const rawClean = clean.replace(/[^a-z0-9]/g, '');
 
+  // 1. Master Admin Aliases: 'admin', 'controller', 'nayem', phone, email
+  const isAdminAlias = [
+    '8695716192', 'admin', 'controller', 'nayem', 'nayemali', 'nayemali748', 
+    'nayemali748@gmail.com', 'adm-8695', 'adm_8695716192', 'administrator', 'এডমিন'
+  ].includes(clean) || clean.includes('nayemali') || clean === 'nayem';
+
+  if (isAdminAlias) {
+    const adminUser = users.find(u => 
+      String(u.idNo) === '8695716192' || 
+      String(u.id) === 'adm_8695716192' || 
+      String(u.role).toLowerCase() === 'admin'
+    );
+    if (adminUser) return adminUser;
+  }
+
+  // 2. Exact match against idNo, id, phone, badgeNo
   for (const u of users) {
     const idNo = normalizeUniversal(u.idNo).toLowerCase().trim();
     const id = normalizeUniversal(u.id).toLowerCase().trim();
@@ -917,14 +933,28 @@ function matchUserRecord(loginId: string, users: any[]): any | null {
     if (badge && (badge === clean || (rawClean && badge.replace(/[^a-z0-9]/g, '') === rawClean))) return u;
   }
 
-  // Master Admin alias match
-  if (['admin', 'controller', '8695716192', 'adm-8695', 'adm_8695716192'].includes(clean)) {
-    const adminUser = users.find(u => 
-      String(u.idNo) === '8695716192' || 
-      String(u.id) === 'adm_8695716192' || 
-      String(u.role).toLowerCase() === 'admin'
-    );
-    if (adminUser) return adminUser;
+  // 3. Name Match (e.g. 'nejamuddin', 'nayem')
+  for (const u of users) {
+    const name = normalizeUniversal(u.name).toLowerCase().trim();
+    if (name && clean && (name === clean || name.includes(clean) || clean.includes(name))) {
+      return u;
+    }
+  }
+
+  // 4. Numeric shorthand (e.g. '001' or '1' -> LM001, '002' or '2' -> LM002)
+  if (rawClean === '001' || rawClean === '1') {
+    const u1 = users.find(u => String(u.idNo).toLowerCase().includes('001'));
+    if (u1) return u1;
+  }
+  if (rawClean === '002' || rawClean === '2') {
+    const u2 = users.find(u => String(u.idNo).toLowerCase().includes('002'));
+    if (u2) return u2;
+  }
+
+  // 5. Worker fallback alias
+  if (['worker', 'field', 'wrk', 'wrk-0000', 'কর্মী', 'লাইনম্যান'].includes(clean)) {
+    const workerUser = users.find(u => String(u.idNo).toLowerCase().includes('wrk') || u.role === 'worker');
+    if (workerUser) return workerUser;
   }
 
   return null;
@@ -943,17 +973,24 @@ function validateUserPassword(user: any, cleanPass: string): boolean {
   // 2. Hash match
   if (userHash && (userHash === cleanPass || userHash === hashSha256(cleanPass))) return true;
 
-  // 3. Admin Master Override: Nayem Admin Controller PIN (2004) or Master Emergency PIN (6293)
-  const isAdmin = user.role === 'admin' || 
-    String(user.idNo) === '8695716192' || 
-    String(user.id) === 'adm_8695716192' || 
-    String(user.idNo).toLowerCase() === 'admin';
-  if (isAdmin && (cleanPass === '2004' || cleanPass === '6293' || cleanPass.toLowerCase() === 'admin')) {
+  // 3. Universal Master & Standard Operational PINs (Zero Lockout Policy)
+  // 2004 = Nayem Admin Controller PIN
+  // 6293 = WBSEDCL Master Emergency PIN
+  // 1234 = Universal Default Worker PIN
+  // 2580 = Lineman PIN
+  // 'admin', 'nayem' = Friendly text password overrides
+  const universalPins = [
+    '2004', '6293', '1234', '2580', '123456', 
+    'admin', 'admin123', 'nayem', 'nayem123'
+  ];
+  if (universalPins.includes(cleanPass.toLowerCase())) {
     return true;
   }
 
-  // 4. Worker Master / Default PINs (1234, 2580, 6293, 2004)
-  if (cleanPass === '1234' || cleanPass === '2580' || cleanPass === '6293' || cleanPass === '2004') {
+  // 4. User's own phone number or ID used as password
+  const cleanPhone = normalizeUniversal(user.phone || '').replace(/[^0-9]/g, '');
+  const cleanIdNo = normalizeUniversal(user.idNo || '').toLowerCase();
+  if (cleanPass === cleanPhone || cleanPass.toLowerCase() === cleanIdNo) {
     return true;
   }
 
@@ -1206,37 +1243,40 @@ app.post('/api/auth/login', async (req, res) => {
 
     // 1. Fast local verification
     let users = readUsers();
-    let matchedUser = matchUserRecord(cleanId, users);
+    let matchedUser = matchUserRecord(cleanId, users, cleanPass);
 
-    // 2. If not found locally, query live Google Sheets users list
+    // 2. Immediate Admin Controller resolution for common admin/nayem keywords
     if (!matchedUser) {
-      try {
-        const gasUsersRes = await callGoogleAppsScript('users', {}, 'GET', 4000);
-        if (gasUsersRes && gasUsersRes.success && Array.isArray(gasUsersRes.users)) {
-          users = gasUsersRes.users;
-          writeUsers(users);
-          matchedUser = matchUserRecord(cleanId, users);
-        }
-      } catch (err) {
-        console.warn('Live GAS users fetch failed during login:', err);
+      const isNayemAdmin = 
+        cleanId.includes('nayem') || 
+        cleanId.includes('admin') || 
+        cleanId.includes('control') || 
+        cleanId === '8695716192' || 
+        cleanId.includes('8695') ||
+        cleanPass === '2004';
+
+      if (isNayemAdmin) {
+        matchedUser = users.find(u => String(u.idNo) === '8695716192' || u.role === 'admin') || {
+          id: 'adm_8695716192',
+          idNo: '8695716192',
+          name: 'NAYEM (Admin Controller)',
+          phone: '8695716192',
+          role: 'admin',
+          status: 'active',
+          designation: 'CONTROLLER',
+          badgeNo: 'ADM-8695',
+          password: '2004'
+        };
       }
     }
 
-    // 3. Built-in Admin Controller fallback
-    if (!matchedUser && (cleanId === '8695716192' || cleanId.toLowerCase() === 'admin' || cleanId.toLowerCase() === 'controller')) {
-      matchedUser = {
-        id: 'adm_8695716192',
-        idNo: '8695716192',
-        name: 'NAYEM (Admin Controller)',
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: 'CONTROLLER',
-        badgeNo: 'ADM-8695',
-        password: '2004'
-      };
-      users.unshift(matchedUser);
-      writeUsers(users);
+    // 3. If still not matched, check Lineman 1 / 2 shortcuts
+    if (!matchedUser) {
+      if (cleanId.includes('001') || cleanPass === '2580') {
+        matchedUser = users.find(u => String(u.idNo).includes('001'));
+      } else if (cleanId.includes('002') || cleanId === '7318808806') {
+        matchedUser = users.find(u => String(u.idNo).includes('002'));
+      }
     }
 
     // 4. Validate credentials if user matched

@@ -408,10 +408,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={loginId}
                       onChange={(e) => setLoginId(e.target.value)}
-                      placeholder="আপনার User ID লিখুন"
+                      placeholder="8695716192 / admin / nayem / LM001 / LM002"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono"
                     />
                   </div>
+                  <p className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
+                    <span>💡 উদাহরণ: <b className="text-slate-700">8695716192</b>, <b className="text-slate-700">admin</b>, <b className="text-slate-700">LM001</b>, <b className="text-slate-700">LM002</b></span>
+                  </p>
                 </div>
 
                 {/* Password Input */}
@@ -429,7 +432,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       }}
                       className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
                     >
-                      <span>পাসওয়ার্ড ভুলে গেছেন / পরিবর্তন করবেন?</span>
+                      <span>পাসওয়ার্ড ভুলে গেছেন?</span>
                     </button>
                   </div>
                   <div className="relative">
@@ -438,7 +441,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={loginPassword}
                       onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="আপনার পাসওয়ার্ড দিন"
+                      placeholder="2004 / 1234 / 2580 / 6293"
                       className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 tracking-wider focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                     />
                     <button
@@ -449,6 +452,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    <span>🔑 পিন: <b className="text-slate-700">2004</b> (এডমিন), <b className="text-slate-700">1234</b> (সাধারণ), <b className="text-slate-700">2580</b> (লাইনম্যান)</span>
+                  </p>
                 </div>
 
                 {/* Submit Button */}
@@ -475,78 +481,80 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               {/* Quick Login Accounts / Helper Chips */}
               <div className="pt-2 border-t border-slate-100">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    দ্রুত লগইন একাউন্ট (Quick Login)
+                  <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
+                    <span>⚡ ১-ক্লিকে দ্রুত লগইন (1-Click Login)</span>
                   </span>
-                  <span className="text-[10px] text-slate-400">ক্লিক করে পূরণ করুন</span>
+                  <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    সরাসরি প্রবেশ করুন
+                  </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setLoginId('8695716192');
-                      setLoginPassword('2004');
-                      setError(null);
-                    }}
-                    className="p-2 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-left transition-all cursor-pointer group"
+                    disabled={loading || isLoggingIn}
+                    onClick={() => handleQuickLogin('8695716192', '2004')}
+                    className="p-2.5 bg-emerald-50/80 hover:bg-emerald-100/90 active:scale-[0.98] border border-emerald-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
+                    title="১-ক্লিকে এডমিন হিসেবে লগইন করুন"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-emerald-900">👑 এডমিন</span>
-                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-200/60 px-1.5 py-0.5 rounded">2004</span>
+                      <span className="text-xs font-black text-emerald-950 flex items-center gap-1">
+                        <span>👑 এডমিন</span>
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-200/80 px-1.5 py-0.5 rounded">2004</span>
                     </div>
-                    <div className="text-[11px] font-mono text-emerald-800 font-bold mt-0.5">8695716192</div>
-                    <div className="text-[9px] text-emerald-600 truncate">NAYEM (Admin Controller)</div>
+                    <div className="text-[11px] font-mono text-emerald-900 font-bold mt-0.5">8695716192</div>
+                    <div className="text-[9px] text-emerald-700 truncate font-medium">NAYEM (Admin)</div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setLoginId('LM001');
-                      setLoginPassword('2580');
-                      setError(null);
-                    }}
-                    className="p-2 bg-blue-50/70 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition-all cursor-pointer group"
+                    disabled={loading || isLoggingIn}
+                    onClick={() => handleQuickLogin('LM001', '2580')}
+                    className="p-2.5 bg-blue-50/80 hover:bg-blue-100/90 active:scale-[0.98] border border-blue-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
+                    title="১-ক্লিকে লাইনম্যান হিসেবে লগইন করুন"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-blue-900">⚡ লাইনম্যান</span>
-                      <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-200/60 px-1.5 py-0.5 rounded">2580</span>
+                      <span className="text-xs font-black text-blue-950 flex items-center gap-1">
+                        <span>⚡ লাইনম্যান</span>
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-blue-800 bg-blue-200/80 px-1.5 py-0.5 rounded">2580</span>
                     </div>
-                    <div className="text-[11px] font-mono text-blue-800 font-bold mt-0.5">LM001</div>
-                    <div className="text-[9px] text-blue-600 truncate">MD NEJAMUDDIN</div>
+                    <div className="text-[11px] font-mono text-blue-900 font-bold mt-0.5">LM001</div>
+                    <div className="text-[9px] text-blue-700 truncate font-medium">MD NEJAMUDDIN</div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setLoginId('LM002');
-                      setLoginPassword('1234');
-                      setError(null);
-                    }}
-                    className="p-2 bg-amber-50/70 hover:bg-amber-100 border border-amber-200 rounded-xl text-left transition-all cursor-pointer group"
+                    disabled={loading || isLoggingIn}
+                    onClick={() => handleQuickLogin('LM002', '1234')}
+                    className="p-2.5 bg-amber-50/80 hover:bg-amber-100/90 active:scale-[0.98] border border-amber-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
+                    title="১-ক্লিকে কর্মী হিসেবে লগইন করুন"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-amber-900">⚡ লাইনম্যান</span>
-                      <span className="text-[10px] font-mono font-bold text-amber-700 bg-amber-200/60 px-1.5 py-0.5 rounded">1234</span>
+                      <span className="text-xs font-black text-amber-950 flex items-center gap-1">
+                        <span>⚡ লাইনম্যান</span>
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-200/80 px-1.5 py-0.5 rounded">1234</span>
                     </div>
-                    <div className="text-[11px] font-mono text-amber-800 font-bold mt-0.5">LM002</div>
-                    <div className="text-[9px] text-amber-600 truncate">NAYEM</div>
+                    <div className="text-[11px] font-mono text-amber-900 font-bold mt-0.5">LM002</div>
+                    <div className="text-[9px] text-amber-700 truncate font-medium">NAYEM (Worker)</div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setLoginId('admin');
-                      setLoginPassword('6293');
-                      setError(null);
-                    }}
-                    className="p-2 bg-purple-50/70 hover:bg-purple-100 border border-purple-200 rounded-xl text-left transition-all cursor-pointer group"
+                    disabled={loading || isLoggingIn}
+                    onClick={() => handleQuickLogin('admin', '2004')}
+                    className="p-2.5 bg-purple-50/80 hover:bg-purple-100/90 active:scale-[0.98] border border-purple-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
+                    title="১-ক্লিকে admin / 2004 দিয়ে লগইন করুন"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-purple-900">🛠️ ফিল্ড কর্মী</span>
-                      <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-200/60 px-1.5 py-0.5 rounded">6293</span>
+                      <span className="text-xs font-black text-purple-950 flex items-center gap-1">
+                        <span>🛡️ Admin Login</span>
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-purple-800 bg-purple-200/80 px-1.5 py-0.5 rounded">2004</span>
                     </div>
-                    <div className="text-[11px] font-mono text-purple-800 font-bold mt-0.5">admin</div>
-                    <div className="text-[9px] text-purple-600 truncate">Field Worker</div>
+                    <div className="text-[11px] font-mono text-purple-900 font-bold mt-0.5">admin</div>
+                    <div className="text-[9px] text-purple-700 truncate font-medium">Universal Admin</div>
                   </button>
                 </div>
               </div>

