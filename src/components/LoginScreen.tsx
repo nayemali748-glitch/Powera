@@ -472,6 +472,101 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 </button>
               </form>
 
+              {/* Quick Login Accounts / Helper Chips */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    দ্রুত লগইন একাউন্ট (Quick Login)
+                  </span>
+                  <span className="text-[10px] text-slate-400">ক্লিক করে পূরণ করুন</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginId('8695716192');
+                      setLoginPassword('2004');
+                      setError(null);
+                    }}
+                    className="p-2 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-left transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-emerald-900">👑 এডমিন</span>
+                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-200/60 px-1.5 py-0.5 rounded">2004</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-emerald-800 font-bold mt-0.5">8695716192</div>
+                    <div className="text-[9px] text-emerald-600 truncate">NAYEM (Admin Controller)</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginId('LM001');
+                      setLoginPassword('2580');
+                      setError(null);
+                    }}
+                    className="p-2 bg-blue-50/70 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-blue-900">⚡ লাইনম্যান</span>
+                      <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-200/60 px-1.5 py-0.5 rounded">2580</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-blue-800 font-bold mt-0.5">LM001</div>
+                    <div className="text-[9px] text-blue-600 truncate">MD NEJAMUDDIN</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginId('LM002');
+                      setLoginPassword('1234');
+                      setError(null);
+                    }}
+                    className="p-2 bg-amber-50/70 hover:bg-amber-100 border border-amber-200 rounded-xl text-left transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-amber-900">⚡ লাইনম্যান</span>
+                      <span className="text-[10px] font-mono font-bold text-amber-700 bg-amber-200/60 px-1.5 py-0.5 rounded">1234</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-amber-800 font-bold mt-0.5">LM002</div>
+                    <div className="text-[9px] text-amber-600 truncate">NAYEM</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginId('admin');
+                      setLoginPassword('6293');
+                      setError(null);
+                    }}
+                    className="p-2 bg-purple-50/70 hover:bg-purple-100 border border-purple-200 rounded-xl text-left transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-purple-900">🛠️ ফিল্ড কর্মী</span>
+                      <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-200/60 px-1.5 py-0.5 rounded">6293</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-purple-800 font-bold mt-0.5">admin</div>
+                    <div className="text-[9px] text-purple-600 truncate">Field Worker</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Toggle to Register / Create New Account */}
+              <div className="pt-2 flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4 text-slate-600" />
+                  <span>নতুন অ্যাকাউন্ট খুলুন / রেজিস্টার করুন (Create Account)</span>
+                </button>
+              </div>
+
               {/* Secure Info Note */}
               <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
