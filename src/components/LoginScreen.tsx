@@ -1,33 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import appLogo from '../assets/images/power_round_logo_1787860440979.jpg';
 import { 
-  Zap, 
   ShieldCheck, 
   Lock, 
   User, 
   Phone, 
-  HardHat, 
   CheckCircle2, 
   ArrowRight, 
   KeyRound, 
-  Sparkles,
   AlertCircle,
-  Clock,
-  Shield,
-  Eye,
-  EyeOff,
-  UserPlus,
-  HelpCircle,
-  ArrowLeft,
-  Check,
-  BadgeAlert,
-  UserCheck,
-  Globe
+  Eye, 
+  EyeOff, 
+  HelpCircle, 
+  ArrowLeft, 
+  Check, 
+  Globe 
 } from 'lucide-react';
 import { UserSession, UserAccount } from '../types';
-import { fetchUsers, createUserAccount, loginUser, resetUserPassword } from '../services/api';
+import { fetchUsers, loginUser, resetUserPassword } from '../services/api';
 import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
-import { Language, translations } from '../utils/translations';
+import { Language } from '../utils/translations';
 
 interface LoginScreenProps {
   onLogin?: (session: UserSession) => void;
@@ -39,7 +31,7 @@ interface LoginScreenProps {
 export const LoginScreen: React.FC<LoginScreenProps> = ({ 
   onLogin, 
   onLoginSuccess, 
-  lang = 'bn',
+  lang = 'en',
   onOpenLanguageModal 
 }) => {
   const onProceedSession = onLoginSuccess || onLogin || (() => {});
@@ -56,38 +48,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
     onProceedSession(session);
   };
-  const t = translations[lang] || translations.en;
-  // Screen mode: 'login' | 'register' | 'forgot'
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
 
-  // Accounts list (lazy-loaded if user registers or resets password)
-  const [accounts, setAccounts] = useState<UserAccount[]>([]);
+  // Screen mode: 'login' | 'forgot' (Create account removed as per request)
+  const [mode, setMode] = useState<'login' | 'forgot'>('login');
 
   // --- LOGIN STATE ---
-  // Default to empty strings so credentials remain private and secret
   const [loginId, setLoginId] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const isLoggingInRef = useRef(false);
 
-  // --- REGISTER (CREATE ACCOUNT) STATE ---
-  const [regRole, setRegRole] = useState<'admin' | 'worker'>('worker');
-  const [regIdNo, setRegIdNo] = useState(() => `LM-${Math.floor(1000 + Math.random() * 9000)}`);
-  const [regName, setRegName] = useState('');
-  const [regPhone, setRegPhone] = useState('');
-  const [regDesignation, setRegDesignation] = useState('লাইনম্যান (WBSEDCL)');
-  const [regPassword, setRegPassword] = useState('1234');
-  const [regConfirmPassword, setRegConfirmPassword] = useState('1234');
-  const [regSecurityQuestion, setRegSecurityQuestion] = useState('আপনার প্রিয় বিদ্যুৎ সাবস্টেশন?');
-  const [regSecurityAnswer, setRegSecurityAnswer] = useState('Vidyut Bhavan');
-  const [showRegPassword, setShowRegPassword] = useState(false);
-
   // --- FORGOT PASSWORD STATE ---
   const [forgotStep, setForgotStep] = useState<1 | 2>(1);
   const [forgotId, setForgotId] = useState('');
   const [forgotPhone, setForgotPhone] = useState('');
-  const [forgotSecurityAnswer, setForgotSecurityAnswer] = useState('');
   const [targetAccount, setTargetAccount] = useState<UserAccount | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setNewConfirmPassword] = useState('');
@@ -104,7 +79,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setSuccessMsg(null);
   }, [mode]);
 
-  // Handle Login Submit - STRICT 1 CLICK = 1 REQUEST WITH SUBMISSION LOCK
+  // Handle Login Submit - 1 Request with Submission Lock
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoggingInRef.current || isLoggingIn || loading) {
@@ -116,12 +91,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanPass = normalizePassword(loginPassword);
 
     if (!cleanId) {
-      setError('অনুগ্রহ করে আপনার User ID প্রবেশ করান');
+      setError('Please enter your User ID');
       return;
     }
 
     if (!cleanPass) {
-      setError('পাসওয়ার্ড প্রবেশ করান');
+      setError('Please enter your Password');
       return;
     }
 
@@ -133,98 +108,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       const session = await loginUser(cleanId, cleanPass);
       handleSuccess(session);
     } catch (err: any) {
-      setError(err.message || 'ভুল আইডি বা পাসওয়ার্ড! সঠিক এডমিন / কর্মী আইডি প্রবেশ করান।');
+      setError(err.message || 'Invalid User ID or Password. Please try again.');
     } finally {
       isLoggingInRef.current = false;
       setIsLoggingIn(false);
-      setLoading(false);
-    }
-  };
-
-  // Handle Quick 1-Click Login
-  const handleQuickLogin = async (accIdNo: string, accPass: string) => {
-    if (isLoggingInRef.current || isLoggingIn || loading) {
-      return;
-    }
-    setError(null);
-    const cleanId = normalizeUniversalText(accIdNo);
-    const cleanPass = normalizePassword(accPass);
-    setLoginId(cleanId);
-    setLoginPassword(cleanPass);
-
-    isLoggingInRef.current = true;
-    setIsLoggingIn(true);
-    setLoading(true);
-    try {
-      const session = await loginUser(cleanId, cleanPass);
-      handleSuccess(session);
-    } catch (err: any) {
-      setError(err.message || 'লগইন ব্যর্থ হয়েছে');
-    } finally {
-      isLoggingInRef.current = false;
-      setIsLoggingIn(false);
-      setLoading(false);
-    }
-  };
-
-  // Handle Register (Create Account) Submit
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMsg(null);
-
-    const cleanId = normalizeUniversalText(regIdNo);
-    const cleanName = regName.trim();
-    const cleanPhone = normalizeUniversalText(regPhone).replace(/[^0-9]/g, '');
-    const cleanPass = normalizePassword(regPassword);
-    const cleanConfirm = normalizePassword(regConfirmPassword);
-
-    if (!cleanId) {
-      setError('একটি User ID লিখুন');
-      return;
-    }
-
-    if (!cleanName) {
-      setError('ব্যবহারকারীর পূর্ণ নাম লিখুন');
-      return;
-    }
-
-    if (!cleanPass || cleanPass.length < 4) {
-      setError('পাসওয়ার্ড কমপক্ষে ৪ ডিজিট বা অক্ষরের হতে হবে');
-      return;
-    }
-
-    if (cleanPass !== cleanConfirm) {
-      setError('কনফার্ম পাসওয়ার্ড মিলছে না! পুনরায় টাইপ করুন।');
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const newUser = await createUserAccount({
-        idNo: cleanId,
-        name: cleanName,
-        phone: cleanPhone || '9830000000',
-        role: regRole,
-        designation: regDesignation || (regRole === 'admin' ? 'সহকারী প্রকৌশলী (WBSEDCL)' : 'লাইনম্যান (WBSEDCL)'),
-        badgeNo: cleanId,
-        password: cleanPass,
-        status: 'active',
-        securityQuestion: regSecurityQuestion,
-        securityAnswer: normalizeUniversalText(regSecurityAnswer) || 'Vidyut Bhavan'
-      });
-
-      // Update accounts list
-      setAccounts(prev => [newUser, ...prev]);
-
-      setSuccessMsg(`নতুন ${regRole === 'admin' ? 'এডমিন' : 'কর্মী'} আইডি "${cleanId}" তৈরি হয়েছে! এই আইডি ও পাসওয়ার্ড দিয়ে এখন যেকোনো ডিভাইস বা ফোন থেকে লগইন করা যাবে।`);
-      setLoginId(cleanId);
-      setLoginPassword(cleanPass);
-      setMode('login');
-    } catch (err: any) {
-      setError(err.message || 'একউন্ট তৈরি ব্যর্থ হয়েছে');
-    } finally {
       setLoading(false);
     }
   };
@@ -236,25 +123,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanForgotId = normalizeUniversalText(forgotId);
 
     if (!cleanForgotId) {
-      setError('আপনার Login ID No প্রবেশ করান');
+      setError('Please enter your Login User ID');
       return;
     }
 
     setLoading(true);
     try {
       const latestUsers = await fetchUsers();
-      setAccounts(latestUsers);
       const found = latestUsers.find((a) => a && isUserMatch(cleanForgotId, a));
 
       if (!found) {
-        setError('আইডি পাওয়া যায়নি! অনুগ্রহ করে সঠিক Login ID No লিখুন।');
+        setError('User ID not found! Please check and enter a valid Login ID.');
         return;
       }
 
       setTargetAccount(found);
       setForgotStep(2);
     } catch (err: any) {
-      setError(err.message || 'ইউজার যাচাই করতে সমস্যা হয়েছে');
+      setError(err.message || 'Error verifying user ID');
     } finally {
       setLoading(false);
     }
@@ -271,12 +157,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const cleanConfirm = normalizePassword(confirmNewPassword);
 
     if (!cleanNewPass || cleanNewPass.length < 4) {
-      setError('নতুন পাসওয়ার্ড কমপক্ষে ৪ ডিজিট বা অক্ষরের হতে হবে');
+      setError('New password must be at least 4 characters/digits');
       return;
     }
 
     if (cleanNewPass !== cleanConfirm) {
-      setError('কনফার্ম পাসওয়ার্ড মিলছে না!');
+      setError('Passwords do not match! Please re-type.');
       return;
     }
 
@@ -285,7 +171,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     try {
       await resetUserPassword(targetAccount.idNo, cleanNewPass, targetAccount.phone);
 
-      setSuccessMsg(`পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে! নতুন পাসওয়ার্ড "${cleanNewPass}" দিয়ে লগইন করুন।`);
+      setSuccessMsg(`Password successfully changed! Please sign in with your new password.`);
       setLoginId(targetAccount.idNo);
       setLoginPassword(cleanNewPass);
       setForgotStep(1);
@@ -293,11 +179,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setNewPassword('');
       setNewConfirmPassword('');
       setMode('login');
-
-      // Refresh accounts list
-      fetchUsers().then(setAccounts).catch(() => {});
     } catch (err: any) {
-      setError(err.message || 'পাসওয়ার্ড রিসেট ব্যর্থ হয়েছে');
+      setError(err.message || 'Failed to reset password');
     } finally {
       setLoading(false);
     }
@@ -321,7 +204,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               type="button"
               onClick={onOpenLanguageModal}
               className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-blue-300 hover:text-white border border-blue-500/30 flex items-center gap-1.5 text-xs font-bold transition-all shadow-xs cursor-pointer z-20"
-              title="Change Language / ভাষা পরিবর্তন"
+              title="Change Language"
             >
               <Globe className="w-3.5 h-3.5 text-blue-400" />
               <span className="uppercase text-[10px]">{lang}</span>
@@ -344,14 +227,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <p className="text-xs text-amber-400 font-bold tracking-wider mt-1">
             App Developed By Nayem
           </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {mode === 'login' && (lang === 'bn' ? 'এডমিন বা কর্মী User ID ও পাসওয়ার্ড দিয়ে প্রবেশ করুন' : 'Sign in with Admin or Worker User ID & Password')}
-            {mode === 'register' && (lang === 'bn' ? 'নতুন এডমিন / কর্মী User ID তৈরি (সার্ভার সিন্ক)' : 'Create new Admin / Worker User ID')}
-            {mode === 'forgot' && (lang === 'bn' ? 'পাসওয়ার্ড রিসেট ও পরিবর্তন পোর্টাল' : 'Password Reset & Recovery Portal')}
+          <p className="text-xs text-slate-400 mt-1.5">
+            {mode === 'login' && 'Sign in with your User ID & Password'}
+            {mode === 'forgot' && 'Password Reset & Account Recovery'}
           </p>
         </div>
 
-        {/* Dynamic Navigation Header Tabs if mode is not login */}
+        {/* Dynamic Navigation Header if mode is forgot */}
         {mode !== 'login' && (
           <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
             <button
@@ -363,10 +245,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               className="text-xs font-bold text-slate-600 hover:text-blue-600 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>লগইনে ফিরে যান</span>
+              <span>Back to Sign In</span>
             </button>
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              {mode === 'register' ? 'New Account Registration' : 'Password Reset'}
+              Password Recovery
             </span>
           </div>
         )}
@@ -394,12 +276,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           {mode === 'login' && (
             <>
               <form onSubmit={handleLoginSubmit} className="space-y-4">
-                {/* ID No Input */}
+                {/* User ID Input */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-500" />
-                      <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
+                      <span>User ID <span className="text-red-500">*</span></span>
                     </span>
                   </label>
                   <div className="relative">
@@ -408,13 +290,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={loginId}
                       onChange={(e) => setLoginId(e.target.value)}
-                      placeholder="8695716192 / admin / nayem / LM001 / LM002"
+                      placeholder="Enter your User ID"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono"
                     />
                   </div>
-                  <p className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
-                    <span>💡 উদাহরণ: <b className="text-slate-700">8695716192</b>, <b className="text-slate-700">admin</b>, <b className="text-slate-700">LM001</b>, <b className="text-slate-700">LM002</b></span>
-                  </p>
                 </div>
 
                 {/* Password Input */}
@@ -422,7 +301,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                       <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                      <span>পাসওয়ার্ড (Password) <span className="text-red-500">*</span></span>
+                      <span>Password <span className="text-red-500">*</span></span>
                     </label>
                     <button
                       type="button"
@@ -432,7 +311,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       }}
                       className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
                     >
-                      <span>পাসওয়ার্ড ভুলে গেছেন?</span>
+                      <span>Forgot Password?</span>
                     </button>
                   </div>
                   <div className="relative">
@@ -441,7 +320,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={loginPassword}
                       onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="2004 / 1234 / 2580 / 6293"
+                      placeholder="Enter your password"
                       className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 tracking-wider focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                     />
                     <button
@@ -452,339 +331,39 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    <span>🔑 পিন: <b className="text-slate-700">2004</b> (এডমিন), <b className="text-slate-700">1234</b> (সাধারণ), <b className="text-slate-700">2580</b> (লাইনম্যান)</span>
-                  </p>
                 </div>
 
                 {/* Submit Button */}
                 <button
                   type="submit"
                   disabled={loading || isLoggingIn}
-                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
+                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed mt-2"
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">
                       <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                      <span>যাচাই হচ্ছে...</span>
+                      <span>Signing In...</span>
                     </span>
                   ) : (
                     <>
                       <Lock className="w-4 h-4" />
-                      <span>লগইন করুন (Sign In)</span>
+                      <span>Sign In</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
                 </button>
               </form>
 
-              {/* Quick Login Accounts / Helper Chips */}
-              <div className="pt-2 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
-                    <span>⚡ ১-ক্লিকে দ্রুত লগইন (1-Click Login)</span>
-                  </span>
-                  <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                    সরাসরি প্রবেশ করুন
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    disabled={loading || isLoggingIn}
-                    onClick={() => handleQuickLogin('8695716192', '2004')}
-                    className="p-2.5 bg-emerald-50/80 hover:bg-emerald-100/90 active:scale-[0.98] border border-emerald-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                    title="১-ক্লিকে এডমিন হিসেবে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-emerald-950 flex items-center gap-1">
-                        <span>👑 এডমিন</span>
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-200/80 px-1.5 py-0.5 rounded">2004</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-emerald-900 font-bold mt-0.5">8695716192</div>
-                    <div className="text-[9px] text-emerald-700 truncate font-medium">NAYEM (Admin)</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={loading || isLoggingIn}
-                    onClick={() => handleQuickLogin('LM001', '2580')}
-                    className="p-2.5 bg-blue-50/80 hover:bg-blue-100/90 active:scale-[0.98] border border-blue-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                    title="১-ক্লিকে লাইনম্যান হিসেবে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-blue-950 flex items-center gap-1">
-                        <span>⚡ লাইনম্যান</span>
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-blue-800 bg-blue-200/80 px-1.5 py-0.5 rounded">2580</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-blue-900 font-bold mt-0.5">LM001</div>
-                    <div className="text-[9px] text-blue-700 truncate font-medium">MD NEJAMUDDIN</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={loading || isLoggingIn}
-                    onClick={() => handleQuickLogin('LM002', '1234')}
-                    className="p-2.5 bg-amber-50/80 hover:bg-amber-100/90 active:scale-[0.98] border border-amber-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                    title="১-ক্লিকে কর্মী হিসেবে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-amber-950 flex items-center gap-1">
-                        <span>⚡ লাইনম্যান</span>
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-200/80 px-1.5 py-0.5 rounded">1234</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-amber-900 font-bold mt-0.5">LM002</div>
-                    <div className="text-[9px] text-amber-700 truncate font-medium">NAYEM (Worker)</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={loading || isLoggingIn}
-                    onClick={() => handleQuickLogin('admin', '2004')}
-                    className="p-2.5 bg-purple-50/80 hover:bg-purple-100/90 active:scale-[0.98] border border-purple-300/80 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                    title="১-ক্লিকে admin / 2004 দিয়ে লগইন করুন"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-purple-950 flex items-center gap-1">
-                        <span>🛡️ Admin Login</span>
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-purple-800 bg-purple-200/80 px-1.5 py-0.5 rounded">2004</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-purple-900 font-bold mt-0.5">admin</div>
-                    <div className="text-[9px] text-purple-700 truncate font-medium">Universal Admin</div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Toggle to Register / Create New Account */}
-              <div className="pt-2 flex flex-col items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode('register');
-                    setError(null);
-                    setSuccessMsg(null);
-                  }}
-                  className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <UserPlus className="w-4 h-4 text-slate-600" />
-                  <span>নতুন অ্যাকাউন্ট খুলুন / রেজিস্টার করুন (Create Account)</span>
-                </button>
-              </div>
-
               {/* Secure Info Note */}
-              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>নিরাপদ এনক্রিপ্টেড সংযোগ • অনুমোদিত কর্মী ও এডমিনদের জন্য</span>
+                <span>Secure Encrypted Connection • Authorized WBSEDCL Personnel</span>
               </div>
             </>
           )}
 
           {/* ========================================================= */}
-          {/* 2. REGISTER MODE (CREATE ID & PASSWORD) */}
-          {/* ========================================================= */}
-          {mode === 'register' && (
-            <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
-              {/* Role Selection */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  একাউন্ট টাইপ (Role) <span className="text-red-500">*</span>
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRegRole('admin');
-                      setRegDesignation('সহকারী প্রকৌশলী (WBSEDCL)');
-                      if (!regIdNo || regIdNo.startsWith('LM-')) {
-                        setRegIdNo(`ADM-${Math.floor(100 + Math.random() * 900)}`);
-                      }
-                    }}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                      regRole === 'admin'
-                        ? 'bg-emerald-50 border-emerald-500 text-emerald-800 ring-2 ring-emerald-500/20'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
-                    }`}
-                  >
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    <span>এডমিন / অফিসার</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRegRole('worker');
-                      setRegDesignation('লাইনম্যান (WBSEDCL)');
-                      if (!regIdNo || regIdNo.startsWith('ADM-')) {
-                        setRegIdNo(`LM-${Math.floor(1000 + Math.random() * 9000)}`);
-                      }
-                    }}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                      regRole === 'worker'
-                        ? 'bg-blue-50 border-blue-500 text-blue-800 ring-2 ring-blue-500/20'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
-                    }`}
-                  >
-                    <HardHat className="w-4 h-4 text-amber-500" />
-                    <span>ফিল্ড কর্মী / লাইনম্যান</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Login ID No */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
-                  <span className="text-[10px] text-slate-400 font-mono">ইউনিক আইডি</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={regIdNo}
-                  onChange={(e) => setRegIdNo(e.target.value)}
-                  placeholder="আপনার User ID লিখুন"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono"
-                />
-              </div>
-
-              {/* Name & Phone */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    পূর্ণ নাম <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="নাম লিখুন"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    মোবাইল নম্বর
-                  </label>
-                  <input
-                    type="tel"
-                    value={regPhone}
-                    onChange={(e) => setRegPhone(e.target.value)}
-                    placeholder="98300XXXXX"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Designation */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  পদবী / পদমর্যাদা (WBSEDCL)
-                </label>
-                <select
-                  value={regDesignation}
-                  onChange={(e) => setRegDesignation(e.target.value)}
-                  className={
-                    "w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  }
-                >
-                  {regRole === 'admin' ? (
-                    <>
-                      <option value="ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)">ডিভিশনাল ম্যানেজার / XEN (WBSEDCL)</option>
-                      <option value="সহকারী প্রকৌশলী / AE (WBSEDCL)">সহকারী প্রকৌশলী / AE (WBSEDCL)</option>
-                      <option value="স্টেশন ম্যানেজার / SM (CCC WBSEDCL)">স্টেশন ম্যানেজার / SM (CCC WBSEDCL)</option>
-                      <option value="জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)">জুনিয়র ইঞ্জিনিয়ার / JE (WBSEDCL)</option>
-                      <option value="এডমিন কন্ট্রোলার (WBSEDCL)">এডমিন কন্ট্রোলার (WBSEDCL)</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="লাইনম্যান (Lineman WBSEDCL)">লাইনম্যান (Lineman WBSEDCL)</option>
-                      <option value="সিনিয়র লাইনম্যান (WBSEDCL CCC)">সিনিয়র লাইনম্যান (WBSEDCL CCC)</option>
-                      <option value="টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)">টেকনিক্যাল অ্যাসিস্ট্যান্ট (TA)</option>
-                      <option value="মিটার রিডার / টেকনিশিয়ান (WBSEDCL)">মিটার রিডার / টেকনিশিয়ান (WBSEDCL)</option>
-                      <option value="সাবস্টেশন অপারেটর (33/11kV)">সাবস্টেশন অপারেটর (33/11kV)</option>
-                    </>
-                  )}
-                </select>
-              </div>
-
-              {/* Password & Confirm Password */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>পাসওয়ার্ড <span className="text-red-500">*</span></span>
-                    <button
-                      type="button"
-                      onClick={() => setShowRegPassword(!showRegPassword)}
-                      className="text-[10px] text-slate-400 hover:text-slate-600"
-                    >
-                      {showRegPassword ? 'লুকান' : 'দেখান'}
-                    </button>
-                  </label>
-                  <input
-                    type={showRegPassword ? 'text' : 'password'}
-                    required
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="পাসওয়ার্ড দিন"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    পাসওয়ার্ড নিশ্চিত করুন <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type={showRegPassword ? 'text' : 'password'}
-                    required
-                    value={regConfirmPassword}
-                    onChange={(e) => setRegConfirmPassword(e.target.value)}
-                    placeholder="পুনরায় পাসওয়ার্ড দিন"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Security Question (for password reset) */}
-              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2">
-                <p className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
-                  <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
-                  <span>পাসওয়ার্ড রিকভারি সিকিউরিটি উত্তর (WBSEDCL)</span>
-                </p>
-                <input
-                  type="text"
-                  value={regSecurityAnswer}
-                  onChange={(e) => setRegSecurityAnswer(e.target.value)}
-                  placeholder="আপনার সাবস্টেশন / অঞ্চল (যেমন: Vidyut Bhavan / Bidhannagar)"
-                  className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-              </div>
-
-              {/* Register Submit Button */}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
-              >
-                {loading ? (
-                  <span>তৈরি হচ্ছে...</span>
-                ) : (
-                  <>
-                    <UserCheck className="w-4 h-4" />
-                    <span>একাউন্ট তৈরি করুন (Create Account)</span>
-                  </>
-                )}
-              </button>
-            </form>
-          )}
-
-          {/* ========================================================= */}
-          {/* 3. FORGOT / RESET PASSWORD MODE */}
+          {/* 2. FORGOT / RESET PASSWORD MODE */}
           {/* ========================================================= */}
           {mode === 'forgot' && (
             <div className="space-y-4">
@@ -793,16 +372,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
                     <p className="font-bold flex items-center gap-1.5 mb-1">
                       <HelpCircle className="w-4 h-4 text-blue-600" />
-                      <span>পাসওয়ার্ড পরিবর্তন ও রিকভারি পদ্ধতি</span>
+                      <span>Password Recovery</span>
                     </p>
-                    <p>আপনার <strong>User ID</strong> দিন। এরপর সরাসরি নতুন পাসওয়ার্ড সেট করতে পারবেন।</p>
+                    <p>Enter your registered <strong>User ID</strong> to verify your account and set a new password.</p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <User className="w-3.5 h-3.5 text-slate-500" />
-                        <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
+                        <span>User ID <span className="text-red-500">*</span></span>
                       </span>
                     </label>
                     <input
@@ -810,7 +389,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={forgotId}
                       onChange={(e) => setForgotId(e.target.value)}
-                      placeholder="আপনার User ID লিখুন"
+                      placeholder="Enter your User ID"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
                     />
                   </div>
@@ -818,13 +397,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
                       <Phone className="w-3.5 h-3.5 text-slate-500" />
-                      <span>রেজিস্টার্ড মোবাইল নম্বর (ঐচ্ছিক)</span>
+                      <span>Registered Mobile Number (Optional)</span>
                     </label>
                     <input
                       type="tel"
                       value={forgotPhone}
                       onChange={(e) => setForgotPhone(e.target.value)}
-                      placeholder="আপনার রেজিস্টার্ড মোবাইল নম্বর লিখুন"
+                      placeholder="Enter registered mobile number"
                       className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
@@ -833,29 +412,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     type="submit"
                     className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>আইডি যাচাই ও পাসওয়ার্ড পরিবর্তন করুন</span>
+                    <span>Verify ID & Proceed</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
               ) : (
                 <form onSubmit={handleForgotResetPassword} className="space-y-4 animate-in fade-in">
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-                    <p className="font-bold">আইডি যাচাই সম্পন্ন হয়েছে</p>
-                    <p className="text-[11px] text-emerald-700 mt-0.5">এখন এই একাউন্টের জন্য আপনার নতুন পাসওয়ার্ড লিখুন।</p>
+                    <p className="font-bold">Account Verified</p>
+                    <p className="text-[11px] text-emerald-700 mt-0.5">Please set a new password for this account.</p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                        <span>নতুন পাসওয়ার্ড (New Password) <span className="text-red-500">*</span></span>
+                        <span>New Password <span className="text-red-500">*</span></span>
                       </span>
                       <button
                         type="button"
                         onClick={() => setShowNewPassword(!showNewPassword)}
                         className="text-[10px] text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
-                        {showNewPassword ? 'লুকান' : 'দেখান'}
+                        {showNewPassword ? 'Hide' : 'Show'}
                       </button>
                     </label>
                     <input
@@ -863,21 +442,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="কমপক্ষে ৪ ডিজিটের নতুন পাসওয়ার্ড লিখুন"
+                      placeholder="Minimum 4 characters/digits"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      নতুন পাসওয়ার্ড নিশ্চিত করুন (Confirm Password) <span className="text-red-500">*</span>
+                      Confirm New Password <span className="text-red-500">*</span>
                     </label>
                     <input
                       type={showNewPassword ? 'text' : 'password'}
                       required
                       value={confirmNewPassword}
                       onChange={(e) => setNewConfirmPassword(e.target.value)}
-                      placeholder="পুনরায় নতুন পাসওয়ার্ড লিখুন"
+                      placeholder="Re-enter your new password"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
@@ -888,11 +467,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {loading ? (
-                      <span>সংরক্ষণ হচ্ছে...</span>
+                      <span>Saving...</span>
                     ) : (
                       <>
                         <Check className="w-4 h-4" />
-                        <span>পাসওয়ার্ড আপডেট ও সংরক্ষণ করুন</span>
+                        <span>Update & Save Password</span>
                       </>
                     )}
                   </button>

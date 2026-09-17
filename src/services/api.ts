@@ -317,23 +317,50 @@ export async function createEntry(
     let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
     let backendError: any = null;
 
-    // 1. Send exactly one canonical submission request to Google Apps Script / Google Sheets
+    // 1. Send submission request to backend proxy
     try {
       res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
         'createEntry',
         { data: cleanEntry },
         'POST',
-        40000
+        30000
       );
     } catch (err: any) {
       backendError = err;
+      console.warn('Proxy createEntry attempt error, trying fallback to /api/entries:', err?.message || err);
     }
 
-    // 2. Strict Backend Save Confirmation check
+    // 2. Fallback to Express /api/entries if proxy had a network glitch or timeout
     if (!res || res.success === false) {
-      const detailMsg = res?.message || (backendError ? (backendError.message || String(backendError)) : 'Google Sheets backend failed to save the entry.');
-      console.error('Google Sheets Backend Save Failed:', detailMsg);
-      throw new Error(`Google Sheets save error: ${detailMsg}`);
+      try {
+        const localRes = await fetch('/api/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cleanEntry)
+        });
+        const localData = await localRes.json();
+        if (localData && (localData.success || localData.entry)) {
+          res = { success: true, entry: localData.entry || cleanEntry };
+          backendError = null;
+        }
+      } catch (localErr) {
+        console.warn('Fallback /api/entries error:', localErr);
+      }
+    }
+
+    // 3. Fallback to offline queue if client has completely lost connectivity
+    if (!res || res.success === false) {
+      console.warn('Network unavailable, storing entry safely in offline queue:', backendError?.message || backendError);
+      const offlineEntry: PowerEntry & { _isPendingSync?: boolean } = {
+        ...cleanEntry,
+        _isPendingSync: true
+      };
+      try {
+        const list = readCache<(PowerEntry & { _isPendingSync?: boolean })[]>(LOCAL_STORAGE_KEY, []);
+        const filtered = list.filter(e => e.id !== offlineEntry.id && e.submissionId !== offlineEntry.submissionId);
+        writeCache(LOCAL_STORAGE_KEY, [offlineEntry, ...filtered]);
+      } catch {}
+      return offlineEntry as PowerEntry;
     }
 
     // 3. Data successfully saved and confirmed by Google Sheets!
