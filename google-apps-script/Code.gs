@@ -1,95 +1,141 @@
 // ============================================================================
-// POWER - Field Worker & Utility Management System
-// Google Apps Script Web App Backend & Google Sheets Database
-// Single Source of Truth for all application data
+// POWER - Field Worker & Utility Management System (WBSEDCL)
+// Google Apps Script Web App Backend & Single Source of Truth
+// Fully Production-Hardened Google Sheets & Google Drive Integration
 // ============================================================================
 
 const SPREADSHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
+const WORK_ORDERS_FOLDER_NAME = 'WBSEDCL_Work_Orders_Khata_Files';
 
-// Sheet aliases for 100% backward compatibility & exact user naming
+// Canonical Sheet Aliases
 const SHEET_ALIASES = {
-  'USERS': ['USERS', 'Users', 'users'],
-  'USER_ACTIVITY': ['USER_ACTIVITY', 'UserActivity', 'ActivityLogs'],
-  'MASTER_DATA': ['MASTER_DATA', 'Entries', 'master_data', 'entries'],
-  'NSC': ['NSC', 'NEW_CONNECTION', 'NewConnection', 'NEW CONNECTION', 'New Connection'],
-  'NEW_CONNECTION': ['NSC', 'NEW_CONNECTION', 'NewConnection', 'NEW CONNECTION', 'New Connection'],
-  'DISCONNECTION': ['DISCONNECTION', 'Disconnection', 'DISCONNECT', 'Disconnect'],
-  'POLE CASE': ['POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case', 'CALL CASE', 'CALL_CASE', 'CallCase', 'Call Case'],
-  'POLE_CASE': ['POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case', 'CALL CASE', 'CALL_CASE', 'CallCase', 'Call Case'],
-  'METER REPLESMENT': ['METER REPLESMENT', 'METER_REPLESMENT', 'METER REPLACEMENT', 'METER_REPLACEMENT', 'MeterReplacement', 'Meter Replacement', 'Meter Replesment'],
-  'METER_REPLACEMENT': ['METER REPLESMENT', 'METER_REPLESMENT', 'METER REPLACEMENT', 'METER_REPLACEMENT', 'MeterReplacement', 'Meter Replacement', 'Meter Replesment'],
-  'DTR REPLESMENT': ['DTR REPLESMENT', 'DTR_REPLESMENT', 'DTR REPLACEMENT', 'DTR_REPLACEMENT', 'DtrReplacement', 'Dtr Replacement', 'Dtr Replesment'],
-  'DTR_REPLACEMENT': ['DTR REPLESMENT', 'DTR_REPLESMENT', 'DTR REPLACEMENT', 'DTR_REPLACEMENT', 'DtrReplacement', 'Dtr Replacement', 'Dtr Replesment'],
-  'SETTINGS': ['SETTINGS', 'Settings'],
-  'WORK_ORDERS': ['WORK_ORDERS', 'WorkOrders', 'workorders'],
-  'CHAT': ['CHAT', 'Chat', 'chat']
+  'Users': ['Users', 'USERS', 'users', 'User'],
+  'NSC': ['NSC', 'NewConnection', 'NEW_CONNECTION', 'New Connection', 'NEW CONNECTION'],
+  'Disconnection': ['Disconnection', 'DISCONNECTION', 'Disconnect', 'DISCONNECT'],
+  'Broken': ['Broken', 'BROKEN', 'POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case'],
+  'Meter Replacement': ['Meter Replacement', 'METER REPLACEMENT', 'METER REPLESMENT', 'METER_REPLESMENT', 'MeterReplacement'],
+  'DTR Replacement': ['DTR Replacement', 'DTR REPLACEMENT', 'DTR REPLESMENT', 'DTR_REPLESMENT', 'DtrReplacement'],
+  'Call Case': ['Call Case', 'CALL CASE', 'CALL_CASE', 'CallCase'],
+  'Work Orders': ['Work Orders', 'WORK_ORDERS', 'WorkOrders', 'workorders'],
+  'System Logs': ['System Logs', 'SYSTEM_LOGS', 'SystemLogs', 'USER_ACTIVITY', 'ActivityLogs'],
+  'Settings': ['Settings', 'SETTINGS'],
+  'Chat': ['Chat', 'CHAT']
 };
 
+// Canonical Category Normalization
 const CATEGORY_MAP = {
   'NSC': 'NSC',
   'NEW_CONNECTION': 'NSC',
   'NEW CONNECTION': 'NSC',
-  'DISCONNECTION': 'DISCONNECTION',
-  'POLE CASE': 'POLE CASE',
-  'POLE_CASE': 'POLE CASE',
-  'POLECASE': 'POLE CASE',
-  'CALL CASE': 'POLE CASE',
-  'CALL_CASE': 'POLE CASE',
-  'CALLCASE': 'POLE CASE',
-  'METER REPLESMENT': 'METER REPLESMENT',
-  'METER_REPLESMENT': 'METER REPLESMENT',
-  'METER REPLACEMENT': 'METER REPLESMENT',
-  'METER_REPLACEMENT': 'METER REPLESMENT',
-  'DTR REPLESMENT': 'DTR REPLESMENT',
-  'DTR_REPLESMENT': 'DTR REPLESMENT',
-  'DTR REPLACEMENT': 'DTR REPLESMENT',
-  'DTR_REPLACEMENT': 'DTR REPLESMENT'
+  'NEWCONNECTION': 'NSC',
+  'DISCONNECTION': 'Disconnection',
+  'DISCONNECT': 'Disconnection',
+  'POLE CASE': 'Broken',
+  'POLE_CASE': 'Broken',
+  'POLECASE': 'Broken',
+  'BROKEN': 'Broken',
+  'BROKEN CASE': 'Broken',
+  'METER REPLESMENT': 'Meter Replacement',
+  'METER_REPLESMENT': 'Meter Replacement',
+  'METER REPLACEMENT': 'Meter Replacement',
+  'METER_REPLACEMENT': 'Meter Replacement',
+  'METERREPLACEMENT': 'Meter Replacement',
+  'DTR REPLESMENT': 'DTR Replacement',
+  'DTR_REPLESMENT': 'DTR Replacement',
+  'DTR REPLACEMENT': 'DTR Replacement',
+  'DTR_REPLACEMENT': 'DTR Replacement',
+  'DTRREPLACEMENT': 'DTR Replacement',
+  'CALL CASE': 'Call Case',
+  'CALL_CASE': 'Call Case',
+  'CALLCASE': 'Call Case'
 };
 
 function normalizeCategory(cat) {
   if (!cat) return null;
-  const raw = String(cat).trim().toUpperCase();
-  if (CATEGORY_MAP[raw]) return CATEGORY_MAP[raw];
-  const cleaned = raw.replace(/[\s_\-]/g, '');
-  if (cleaned === 'NSC' || cleaned === 'NEWCONNECTION') return 'NSC';
-  if (cleaned === 'DISCONNECTION' || cleaned === 'DISCONNECT') return 'DISCONNECTION';
-  if (cleaned === 'POLECASE' || cleaned === 'CALLCASE') return 'POLE CASE';
-  if (cleaned === 'METERREPLESMENT' || cleaned === 'METERREPLACEMENT') return 'METER REPLESMENT';
-  if (cleaned === 'DTRREPLESMENT' || cleaned === 'DTRREPLACEMENT') return 'DTR REPLESMENT';
-  return null;
+  const raw = String(cat).trim();
+  const upper = raw.toUpperCase();
+  if (CATEGORY_MAP[upper]) return CATEGORY_MAP[upper];
+  const cleaned = upper.replace(/[\s_\-]/g, '');
+  if (CATEGORY_MAP[cleaned]) return CATEGORY_MAP[cleaned];
+  if (cleaned.includes('NSC') || cleaned.includes('NEWCON')) return 'NSC';
+  if (cleaned.includes('DISCON')) return 'Disconnection';
+  if (cleaned.includes('POLE') || cleaned.includes('BROKEN')) return 'Broken';
+  if (cleaned.includes('METER')) return 'Meter Replacement';
+  if (cleaned.includes('DTR')) return 'DTR Replacement';
+  if (cleaned.includes('CALL')) return 'Call Case';
+  return raw;
 }
 
-const COMMON_ENTRY_HEADERS = [
-  'submissionId', 'id', 'category', 'status', 'date', 'createdAt', 'workerId', 'workerName', 'role', 'submittedBy', 'workerPhone', 'substation',
-  'feederName', 'consumerId', 'consumerName', 'fatherName', 'applicationNo', 'agencyName', 'cccName',
-  'mobile', 'address', 'poleNo', 'appliedLoad', 'phase', 'tariffCategory', 'meterNo', 'initialReading',
-  'sealNo', 'serviceCableLength', 'meterInstallDate', 'inspectionAgencyName', 'meterMake', 'workOrderNo',
-  'workOrderDate', 'arrearAmount', 'reason', 'finalReading', 'disconnectionType', 'cutoutSealed',
-  'issueType', 'priority', 'actionTaken', 'materialUsed', 'poleType', 'lineVoltage', 'conductorType',
-  'ptwShutdownRef', 'oldMeterNo', 'replacementReason', 'newMeterNo', 'newMeterSealNo', 'oldMeterSealNo',
-  'meterType', 'dtrName', 'existingCapacity', 'newCapacity', 'oldDtrSerial', 'newDtrSerial', 'failureReason',
-  'oilLevelChecked', 'earthResistance', 'dtrMakeBrand', 'hgFuseRating', 'ltMccbAmpere', 'lightningArrester',
-  'locationGps', 'photoUrl', 'photoBeforeUrl', 'photoAfterUrl', 'workOrderPhoto', 'workOrderNoticeId',
-  'workOrderNoticeTitle', 'workOrderNoticeDate', 'notes', 'updatedAt'
+// Canonical Headers by Sheet Name
+const USERS_HEADERS = [
+  'User ID', 'Role', 'Full Name', 'Phone', 'Password Hash', 'Status',
+  'Designation', 'Badge No', 'Security Question', 'Security Answer Hash',
+  'Created At', 'Updated At', 'Last Login', 'Created By'
 ];
 
-const USER_HEADERS = [
-  'id', 'idNo', 'password', 'name', 'phone', 'role', 'status', 'designation', 'badgeNo',
-  'securityQuestion', 'securityAnswerHash', 'createdAt', 'updatedAt'
+const NSC_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Agency Name', 'CCC Name', 'Substation', 'Feeder Name',
+  'Work Order No', 'Work Order Date', 'Work Order Notice ID', 'Work Order Notice Title', 'Work Order Notice Date', 'Work Order Photo',
+  'Application No', 'Consumer ID', 'Consumer Name', 'Father Name', 'Mobile No', 'Address',
+  'Applied Load', 'Supply Phase', 'Tariff Category', 'Service Cable Length', 'Pole No', 'Earth Resistance',
+  'Meter No', 'Meter Make', 'Initial Reading', 'Meter Seal No', 'Meter Install Date', 'Inspection Agency Name',
+  'GPS Location', 'Photo Evidence', 'Notes'
 ];
 
-const ACTIVITY_HEADERS = [
-  'id', 'userId', 'idNo', 'userName', 'role', 'action', 'details', 'ipAddress', 'timestamp', 'createdAt'
+const DISCONNECTION_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Substation', 'Feeder Name',
+  'Consumer ID', 'Consumer Name', 'Father Name', 'Mobile No', 'Address',
+  'Arrear Amount', 'Reason', 'Final Reading', 'Disconnection Type', 'Cutout Sealed',
+  'GPS Location', 'Photo Evidence', 'Notes'
 ];
 
-const SETTINGS_HEADERS = [
-  'key', 'value', 'description', 'updatedAt'
+const BROKEN_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Substation', 'Feeder Name', 'Pole No',
+  'Issue Type', 'Priority', 'Action Taken', 'Material Used', 'Pole Type', 'Line Voltage', 'Conductor Type', 'PTW Shutdown Ref',
+  'GPS Location', 'Photo Evidence', 'Photo Before', 'Photo After', 'Notes'
 ];
 
-const WORK_ORDER_HEADERS = [
+const METER_REPLACEMENT_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Substation', 'Feeder Name',
+  'Consumer ID', 'Consumer Name', 'Mobile No', 'Address',
+  'Old Meter No', 'Replacement Reason', 'New Meter No', 'New Meter Seal No', 'Old Meter Seal No', 'Meter Type',
+  'GPS Location', 'Photo Evidence', 'Photo Before', 'Photo After', 'Notes'
+];
+
+const DTR_REPLACEMENT_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Substation', 'Feeder Name',
+  'DTR Name', 'Existing Capacity', 'New Capacity', 'Old DTR Serial', 'New DTR Serial', 'Failure Reason',
+  'Oil Level Checked', 'Earth Resistance', 'DTR Make Brand', 'HG Fuse Rating', 'LT MCCB Ampere', 'Lightning Arrester',
+  'GPS Location', 'Photo Evidence', 'Notes'
+];
+
+const CALL_CASE_HEADERS = [
+  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
+  'Substation', 'Feeder Name',
+  'Consumer ID', 'Consumer Name', 'Mobile No', 'Address',
+  'Issue Type', 'Priority', 'Action Taken',
+  'GPS Location', 'Photo Evidence', 'Notes'
+];
+
+const WORK_ORDERS_HEADERS = [
   'id', 'category', 'title', 'photoUrl', 'fileId', 'fileName', 'fileType', 'fileSize',
   'driveViewUrl', 'driveDownloadUrl', 'directImageUrl', 'description', 'uploadedBy',
   'adminName', 'adminPhone', 'uploadDate', 'uploadTime', 'createdAt', 'isHidden'
+];
+
+const SYSTEM_LOGS_HEADERS = [
+  'id', 'userId', 'idNo', 'userName', 'role', 'action', 'details', 'ipAddress', 'timestamp', 'createdAt'
 ];
 
 const CHAT_HEADERS = [
@@ -97,1333 +143,1111 @@ const CHAT_HEADERS = [
   'message', 'timestamp', 'status', 'createdAt'
 ];
 
-var _ssInstance = null;
-function ss() {
-  if (!_ssInstance) {
-    _ssInstance = SpreadsheetApp.openById(SPREADSHEET_ID);
-  }
-  return _ssInstance;
+function getHeadersForSheet(name) {
+  const norm = String(name || '').trim();
+  if (norm === 'Users') return USERS_HEADERS;
+  if (norm === 'NSC') return NSC_HEADERS;
+  if (norm === 'Disconnection') return DISCONNECTION_HEADERS;
+  if (norm === 'Broken' || norm === 'POLE CASE') return BROKEN_HEADERS;
+  if (norm === 'Meter Replacement' || norm === 'METER REPLESMENT') return METER_REPLACEMENT_HEADERS;
+  if (norm === 'DTR Replacement' || norm === 'DTR REPLESMENT') return DTR_REPLACEMENT_HEADERS;
+  if (norm === 'Call Case') return CALL_CASE_HEADERS;
+  if (norm === 'Work Orders') return WORK_ORDERS_HEADERS;
+  if (norm === 'System Logs') return SYSTEM_LOGS_HEADERS;
+  if (norm === 'Chat') return CHAT_HEADERS;
+  return NSC_HEADERS;
 }
 
-var _sheetMemoryMap = {};
-function getExistingOrNewSheet(canonicalName, headers) {
-  if (_sheetMemoryMap[canonicalName]) {
-    return _sheetMemoryMap[canonicalName];
+// Spreadsheet Singleton
+var _ss = null;
+function ss() {
+  if (!_ss) {
+    _ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   }
+  return _ss;
+}
+
+// Find existing sheet by canonical name or any alias
+function getSheet(canonicalName) {
   const spreadsheet = ss();
   const aliases = SHEET_ALIASES[canonicalName] || [canonicalName];
-  
-  // 1. Direct match on alias names
+
   for (let i = 0; i < aliases.length; i++) {
-    const existing = spreadsheet.getSheetByName(aliases[i]);
-    if (existing) {
-      ensureHeaders(existing, headers);
-      _sheetMemoryMap[canonicalName] = existing;
-      return existing;
-    }
+    const s = spreadsheet.getSheetByName(aliases[i]);
+    if (s) return s;
   }
 
-  // 2. Case-insensitive and normalized match across all sheets
+  // Case-insensitive / normalized search
   const allSheets = spreadsheet.getSheets();
-  const normalizedAliases = aliases.map(a => a.toUpperCase().replace(/[\s_\-]/g, ''));
+  const normAliases = aliases.map(a => a.toUpperCase().replace(/[\s_\-]/g, ''));
   for (let i = 0; i < allSheets.length; i++) {
     const s = allSheets[i];
     const sNorm = s.getName().toUpperCase().replace(/[\s_\-]/g, '');
-    if (normalizedAliases.indexOf(sNorm) >= 0) {
-      ensureHeaders(s, headers);
-      _sheetMemoryMap[canonicalName] = s;
-      return s;
-    }
+    if (normAliases.indexOf(sNorm) >= 0) return s;
   }
 
-  // 3. Create destination sheet with canonical name if not found
+  // If not found, auto-create sheet with canonical name and default headers
   const newSheet = spreadsheet.insertSheet(canonicalName);
-  newSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  const defaultHeaders = getHeadersForSheet(canonicalName);
+  newSheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
   newSheet.setFrozenRows(1);
-  _sheetMemoryMap[canonicalName] = newSheet;
   return newSheet;
 }
 
-function getCategorySheet(canonicalCategory) {
-  return getExistingOrNewSheet(canonicalCategory, headersFor(canonicalCategory));
+// Utility: Normalize Header for loose matching
+function normHeader(h) {
+  return String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function ensureHeaders(s, headers) {
-  if (s.getLastRow() === 0) {
-    s.getRange(1, 1, 1, headers.length).setValues([headers]);
-    s.setFrozenRows(1);
-    return;
+// SHA-256 Password Hasher
+function hashPassword(pass) {
+  if (!pass) return '';
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(pass).trim(), Utilities.Charset.UTF_8);
+  let txt = '';
+  for (let i = 0; i < raw.length; i++) {
+    let byteVal = raw[i];
+    if (byteVal < 0) byteVal += 256;
+    let byteHex = byteVal.toString(16);
+    if (byteHex.length === 1) byteHex = '0' + byteHex;
+    txt += byteHex;
   }
-  const currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
-  const missingHeaders = headers.filter(h => currentHeaders.indexOf(h) === -1);
-  if (missingHeaders.length > 0) {
-    const startCol = currentHeaders.length + 1;
-    s.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
-  }
-  s.setFrozenRows(1);
-}
-
-function headersFor(name) {
-  if (name === 'USERS' || name === 'Users') return USER_HEADERS;
-  if (name === 'USER_ACTIVITY') return ACTIVITY_HEADERS;
-  if (name === 'SETTINGS') return SETTINGS_HEADERS;
-  if (name === 'WORK_ORDERS' || name === 'WorkOrders') return WORK_ORDER_HEADERS;
-  if (name === 'CHAT' || name === 'Chat') return CHAT_HEADERS;
-  return COMMON_ENTRY_HEADERS;
-}
-
-function getSheet(name) {
-  return getExistingOrNewSheet(name, headersFor(name));
-}
-
-function setupDatabase() {
-  const sheetsCreated = [];
-  const canonicalNames = [
-    'USERS', 'USER_ACTIVITY', 'MASTER_DATA', 'NSC', 'DISCONNECTION',
-    'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT', 'SETTINGS', 'WORK_ORDERS', 'CHAT'
-  ];
-
-  canonicalNames.forEach(name => {
-    const s = getSheet(name);
-    ensureHeaders(s, headersFor(name));
-    sheetsCreated.push(s.getName());
-  });
-
-  // Seed default admin if Users sheet is empty
-  const users = getRows('USERS');
-  if (users.length === 0) {
-    appendRow('USERS', {
-      id: 'adm_8695716192',
-      idNo: '8695716192',
-      password: '6293',
-      name: 'Engr. N. Ali (Admin Controller)',
-      phone: '8695716192',
-      role: 'admin',
-      status: 'active',
-      designation: 'Assistant Engineer / Divisional Admin (WBSEDCL)',
-      badgeNo: 'ADM-8695',
-      securityQuestion: 'Your Primary Power Substation?',
-      securityAnswerHash: sha('Vidyut Bhavan'),
-      createdAt: now(),
-      updatedAt: now()
-    });
-  }
-
-  // Seed default settings if empty
-  const settings = getRows('SETTINGS');
-  if (settings.length === 0) {
-    appendRow('SETTINGS', { key: 'app_name', value: 'POWER Management', description: 'WBSEDCL Field Utility App', updatedAt: now() });
-    appendRow('SETTINGS', { key: 'admin_phone', value: '8695716192', description: 'Primary Admin Phone', updatedAt: now() });
-    appendRow('SETTINGS', { key: 'primary_admin_id', value: '8695716192', description: 'Primary Admin Account', updatedAt: now() });
-  }
-
-  return {
-    success: true,
-    spreadsheetId: SPREADSHEET_ID,
-    spreadsheetUrl: ss().getUrl(),
-    sheets: sheetsCreated
-  };
-}
-
-function getRows(sheetName) {
-  const s = getSheet(sheetName);
-  const totalRows = s.getLastRow();
-  const totalCols = s.getLastColumn();
-  if (totalRows < 2 || totalCols < 1) return [];
-
-  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0];
-  const data = s.getRange(2, 1, totalRows - 1, totalCols).getValues();
-
-  return data.map(r => {
-    const item = {};
-    headers.forEach((h, i) => {
-      const col = String(h || '').trim();
-      if (col) item[col] = r[i];
-    });
-
-    if (sheetName === 'WORK_ORDERS' || sheetName === 'WorkOrders') {
-      let photo = item.photoUrl || item.directImageUrl || '';
-      if (!photo && item.description && (String(item.description).indexOf('http') === 0 || String(item.description).indexOf('data:') === 0)) {
-        photo = String(item.description);
-      }
-      if (!photo && item.fileId) {
-        photo = 'https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w2000';
-      }
-      item.photoUrl = photo;
-      if (!item.directImageUrl) item.directImageUrl = photo;
-      if (!item.uploadedBy && item.createdBy) item.uploadedBy = item.createdBy;
-      if (!item.uploadDate && item.date) item.uploadDate = item.date;
-      if (item.isHidden === undefined && item.visible !== undefined && item.visible !== '') {
-        item.isHidden = !item.visible;
-      }
-      if (item.description && (String(item.description).indexOf('http') === 0 || String(item.description).indexOf('data:') === 0)) {
-        item.description = '';
-      }
-    }
-
-    return item;
-  });
-}
-
-function getRowsFromSheet(s) {
-  if (!s) return [];
-  const totalRows = s.getLastRow();
-  const totalCols = s.getLastColumn();
-  if (totalRows < 2 || totalCols < 1) return [];
-
-  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
-  const data = s.getRange(2, 1, totalRows - 1, totalCols).getValues();
-
-  return data.map(r => {
-    const item = {};
-    headers.forEach((h, i) => {
-      if (h) item[h] = r[i];
-    });
-    return item;
-  });
-}
-
-function appendRowDynamic(sheetOrName, obj, defaultHeaders) {
-  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
-  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
-  
-  if (s.getLastRow() === 0) {
-    const headers = defaultHeaders || headersFor(s.getName());
-    s.getRange(1, 1, 1, headers.length).setValues([headers]);
-    s.setFrozenRows(1);
-  }
-
-  let currentHeaders = s.getRange(1, 1, 1, Math.max(1, s.getLastColumn())).getValues()[0].map(h => String(h || '').trim());
-
-  // Dynamic Header Detection: Automatically append new columns at the end if new fields arrive
-  const missingHeaders = [];
-  Object.keys(obj).forEach(k => {
-    const trimmed = String(k || '').trim();
-    if (trimmed && !trimmed.startsWith('_') && currentHeaders.indexOf(trimmed) === -1) {
-      missingHeaders.push(trimmed);
-    }
-  });
-
-  if (missingHeaders.length > 0) {
-    const startCol = currentHeaders.length + 1;
-    s.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
-    currentHeaders = currentHeaders.concat(missingHeaders);
-  }
-
-  const rowValues = currentHeaders.map(h => {
-    const k = String(h || '').trim();
-    if (!k) return '';
-    if (obj[k] !== undefined && obj[k] !== null) return obj[k];
-
-    // Aliases and field fallbacks
-    if (k === 'workerId') return obj.workerId || obj.WorkerID || obj.idNo || '';
-    if (k === 'workerName') return obj.workerName || obj.WorkerName || '';
-    if (k === 'role') return obj.role || obj.Role || '';
-    if (k === 'submittedBy') return obj.submittedBy || obj.SubmittedBy || obj.workerName || '';
-    if (k === 'submissionId') return obj.submissionId || obj.SubmissionID || '';
-    if (k === 'createdAt') return obj.createdAt || obj.CreatedAt || obj.date || '';
-    if (k === 'updatedAt') return obj.updatedAt || obj.UpdatedAt || '';
-    if (k === 'status') return obj.status || obj.Status || 'Completed';
-    if (k === 'category') return obj.category || obj.Category || '';
-    if (k === 'photoUrl') return obj.photoUrl || obj.directImageUrl || obj.driveViewUrl || '';
-    if (k === 'description') {
-      if (currentHeaders.indexOf('photoUrl') === -1) {
-        return obj.photoUrl || obj.directImageUrl || obj.description || '';
-      }
-      return obj.description || '';
-    }
-    if (k === 'date') return obj.uploadDate || obj.date || '';
-    if (k === 'createdBy') return obj.uploadedBy || obj.adminName || obj.createdBy || '';
-    if (k === 'visible') return obj.isHidden !== undefined ? !obj.isHidden : true;
-    if (k === 'directImageUrl') return obj.directImageUrl || obj.photoUrl || '';
-    return '';
-  });
-
-  s.appendRow(rowValues);
-  return obj;
-}
-
-function appendRow(sheetName, obj) {
-  return appendRowDynamic(sheetName, obj, headersFor(sheetName));
-}
-
-function findRowIndex(sheetOrName, key, value) {
-  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
-  if (!s) return -1;
-  const totalRows = s.getLastRow();
-  const totalCols = s.getLastColumn();
-  if (totalRows < 2 || totalCols < 1) return -1;
-
-  const currentHeaders = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
-  const colIndex = currentHeaders.indexOf(key);
-  if (colIndex < 0) return -1;
-
-  const vals = s.getRange(2, colIndex + 1, totalRows - 1, 1).getValues();
-  const target = String(value).trim().toLowerCase();
-  for (let i = 0; i < vals.length; i++) {
-    if (String(vals[i][0]).trim().toLowerCase() === target) {
-      return i + 2;
-    }
-  }
-  return -1;
-}
-
-function getRowByIndex(sheetOrName, rowIdx) {
-  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
-  if (!s) return {};
-  const totalCols = Math.max(1, s.getLastColumn());
-  const headers = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
-  const rowValues = s.getRange(rowIdx, 1, 1, totalCols).getValues()[0];
-  const item = {};
-  headers.forEach((h, i) => {
-    if (h) item[h] = rowValues[i];
-  });
-  return item;
-}
-
-function updateRow(sheetOrName, key, value, updates) {
-  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
-  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
-  const rowIdx = findRowIndex(s, key, value);
-  if (rowIdx < 0) throw Error('Record not found in ' + s.getName());
-
-  const totalCols = Math.max(1, s.getLastColumn());
-  const currentHeaders = s.getRange(1, 1, 1, totalCols).getValues()[0].map(h => String(h || '').trim());
-  const existingValues = s.getRange(rowIdx, 1, 1, totalCols).getValues()[0];
-
-  const existingRow = {};
-  currentHeaders.forEach((k, i) => {
-    if (k) existingRow[k] = existingValues[i];
-  });
-
-  const updatedObj = Object.assign({}, existingRow, updates, { updatedAt: now() });
-  const newRowValues = currentHeaders.map(h => {
-    const k = String(h || '').trim();
-    if (!k) return '';
-    return updatedObj[k] !== undefined ? updatedObj[k] : '';
-  });
-
-  s.getRange(rowIdx, 1, 1, totalCols).setValues([newRowValues]);
-  return updatedObj;
-}
-
-function deleteRow(sheetOrName, key, value) {
-  const s = typeof sheetOrName === 'string' ? getSheet(sheetOrName) : sheetOrName;
-  if (!s) throw Error('Target sheet not found: ' + sheetOrName);
-  const rowIdx = findRowIndex(s, key, value);
-  if (rowIdx < 0) throw Error('Record not found in ' + s.getName());
-  s.deleteRow(rowIdx);
-  return true;
-}
-
-function sha(v) {
-  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(v || ''), Utilities.Charset.UTF_8)
-    .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join('');
-}
-
-function generateId(prefix) {
-  return prefix + '-' + Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7);
+  return txt;
 }
 
 function now() {
   return new Date().toISOString();
 }
 
-function out(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+function generateId(prefix) {
+  return prefix + '-' + Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7);
 }
 
-function sanitizeUser(u) {
-  const clean = Object.assign({}, u);
-  delete clean.securityAnswerHash;
-  return clean;
-}
-
-function logActivity(userId, idNo, userName, role, action, details) {
-  try {
-    appendRow('USER_ACTIVITY', {
-      id: generateId('ACT'),
-      userId: userId || '',
-      idNo: idNo || '',
-      userName: userName || '',
-      role: role || '',
-      action: action || '',
-      details: typeof details === 'object' ? JSON.stringify(details) : String(details || ''),
-      timestamp: now(),
-      createdAt: now()
-    });
-  } catch (e) {
-    // Non-blocking log
-  }
-}
-
-// User Operations
-function createUser(d) {
-  const cleanId = String(d.idNo || '').trim();
-  if (!cleanId) throw Error('User ID No is required');
-  const users = getRows('USERS');
-  if (users.some(u => String(u.idNo).trim().toLowerCase() === cleanId.toLowerCase())) {
-    throw Error('User ID "' + cleanId + '" already exists in Google Sheets');
-  }
-
-  const assignedRole = d.role === 'admin' ? 'admin' : (d.role === 'supervisor' ? 'supervisor' : 'worker');
-  const user = {
-    id: d.id || ('usr_' + cleanId),
-    idNo: cleanId,
-    password: String(d.password || ''),
-    name: d.name || cleanId || 'কর্মী',
-    phone: d.phone ? String(d.phone).replace(/\D/g, '') : '',
-    role: assignedRole,
-    status: d.status === 'hold' ? 'hold' : 'active',
-    designation: d.designation || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-    badgeNo: d.badgeNo || cleanId,
-    securityQuestion: d.securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-    securityAnswerHash: sha(d.securityAnswer || 'Vidyut Bhavan'),
-    createdAt: now(),
-    updatedAt: now()
+// Standard Output Helpers
+function out(data, message, reqId) {
+  const payload = {
+    success: true,
+    data: data,
+    message: message || 'Success',
+    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
   };
-
-  appendRow('USERS', user);
-  invalidateUserCache(user.idNo, user.id);
-  logActivity(user.id, user.idNo, user.name, user.role, 'CREATE_USER', 'User account created');
-  return sanitizeUser(user);
+  // Also shallow attach common properties for full backward compatibility
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    if (data.session) payload.session = data.session;
+    if (data.users) payload.users = data.users;
+    if (data.user) payload.user = data.user;
+    if (data.entries) payload.entries = data.entries;
+    if (data.entry) payload.entry = data.entry;
+    if (data.stats) payload.stats = data.stats;
+    if (data.workOrders) payload.workOrders = data.workOrders;
+    if (data.workOrder) payload.workOrder = data.workOrder;
+    if (data.messages) payload.messages = data.messages;
+    if (data.duplicate !== undefined) payload.duplicate = data.duplicate;
+  } else if (Array.isArray(data)) {
+    payload.entries = data;
+    payload.items = data;
+  }
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function invalidateUserCache(idNo, id) {
+function errOut(code, message, reqId) {
+  const errMsg = message || 'An error occurred';
+  const errCode = code || 'ERROR';
+  const payload = {
+    success: false,
+    error: errMsg,
+    errorCode: errCode,
+    message: errMsg,
+    details: {
+      code: errCode,
+      message: errMsg
+    },
+    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
+  };
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// System Logging
+function logSystemActivity(userId, idNo, userName, role, action, details) {
   try {
-    const cache = CacheService.getScriptCache();
-    if (idNo) cache.remove('auth_usr_' + String(idNo).trim().toLowerCase());
-    if (id) cache.remove('auth_usr_' + String(id).trim().toLowerCase());
-  } catch (e) {}
+    const s = getSheet('System Logs');
+    s.appendRow([
+      generateId('LOG'),
+      userId || '',
+      idNo || '',
+      userName || '',
+      role || '',
+      action || '',
+      typeof details === 'object' ? JSON.stringify(details) : String(details || ''),
+      '',
+      now(),
+      now()
+    ]);
+  } catch (e) {
+    Logger.log('Error logging activity: ' + e);
+  }
 }
+
+// ============================================================================
+// DATABASE INITIALIZATION & HEALTH CHECK
+// ============================================================================
+
+function initializeDatabase() {
+  const requiredSheets = [
+    'Users',
+    'NSC',
+    'Disconnection',
+    'Broken',
+    'Meter Replacement',
+    'DTR Replacement',
+    'Call Case',
+    'Work Orders',
+    'System Logs',
+    'Settings',
+    'Chat'
+  ];
+
+  const createdOrVerified = [];
+  requiredSheets.forEach(name => {
+    const s = getSheet(name);
+    const expectedHeaders = getHeadersForSheet(name);
+    const lastRow = s.getLastRow();
+    const lastCol = s.getLastColumn();
+
+    if (lastRow === 0 || lastCol === 0) {
+      s.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+      s.setFrozenRows(1);
+    } else {
+      // Ensure missing headers are appended without altering existing columns
+      const existingHeaders = s.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+      const missing = [];
+      expectedHeaders.forEach(eh => {
+        const normEh = normHeader(eh);
+        const exists = existingHeaders.some(ex => normHeader(ex) === normEh);
+        if (!exists) missing.push(eh);
+      });
+      if (missing.length > 0) {
+        s.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]);
+      }
+    }
+    createdOrVerified.push(s.getName());
+  });
+
+  // Seed default admin if Users is empty
+  const users = getSheetRows('Users');
+  if (users.length === 0) {
+    const adminPassHash = hashPassword('2004');
+    appendSheetRecord('Users', {
+      'User ID': '8695716192',
+      'Role': 'admin',
+      'Full Name': 'NAYEM (Admin Controller)',
+      'Phone': '8695716192',
+      'Password Hash': adminPassHash,
+      'Status': 'active',
+      'Designation': 'CONTROLLER / Divisional Admin',
+      'Badge No': 'ADM-8695',
+      'Security Question': 'Primary Power Substation?',
+      'Security Answer Hash': hashPassword('Vidyut Bhavan'),
+      'Created At': now(),
+      'Updated At': now(),
+      'Last Login': '',
+      'Created By': 'system'
+    });
+  }
+
+  // Clear cache
+  try { CacheService.getScriptCache().removeAll(['users_cache', 'dashboard_stats']); } catch (e) {}
+
+  return {
+    status: 'ok',
+    spreadsheetId: SPREADSHEET_ID,
+    spreadsheetUrl: ss().getUrl(),
+    verifiedSheets: createdOrVerified
+  };
+}
+
+// Fast Single-Call Sheet Reader
+function getSheetRows(sheetName) {
+  const s = getSheet(sheetName);
+  const lastRow = s.getLastRow();
+  const lastCol = s.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return [];
+
+  const values = s.getRange(1, 1, lastRow, lastCol).getValues();
+  const headers = values[0].map(h => String(h || '').trim());
+  const rows = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    const item = { _rowIndex: i + 1 };
+    let hasData = false;
+    for (let j = 0; j < headers.length; j++) {
+      const h = headers[j];
+      if (h) {
+        const val = r[j];
+        item[h] = val;
+        // Standardized camelCase aliases for developer convenience
+        const nh = normHeader(h);
+        if (nh === 'userid' || nh === 'idno') item.idNo = val;
+        if (nh === 'fullname' || nh === 'name') item.name = val;
+        if (nh === 'passwordhash') item.passwordHash = val;
+        if (nh === 'role') item.role = val;
+        if (nh === 'status') item.status = val;
+        if (nh === 'phone') item.phone = val;
+        if (nh === 'submissionid') item.submissionId = val;
+        if (nh === 'recordid' || nh === 'id') item.id = val;
+        if (nh === 'category') item.category = val;
+        if (nh === 'consumername') item.consumerName = val;
+        if (nh === 'consumerid') item.consumerId = val;
+        if (nh === 'workername') item.workerName = val;
+        if (nh === 'workerid') item.workerId = val;
+        if (nh === 'meterno') item.meterNo = val;
+        if (nh === 'date') item.date = val;
+        if (nh === 'createdat') item.createdAt = val;
+        if (nh === 'updatedat') item.updatedAt = val;
+        if (nh === 'photourl' || nh === 'photoevidence') item.photoUrl = val;
+        if (nh === 'locationgps' || nh === 'gpslocation') item.locationGps = val;
+        if (nh === 'notes') item.notes = val;
+        if (val !== '' && val !== null && val !== undefined) hasData = true;
+      }
+    }
+    if (hasData) rows.push(item);
+  }
+  return rows;
+}
+
+// Field value extractor matching headers accurately
+function extractFieldValue(dataObj, headerName) {
+  if (!dataObj || typeof dataObj !== 'object') return '';
+  // 1. Direct exact match
+  if (dataObj[headerName] !== undefined && dataObj[headerName] !== null) return dataObj[headerName];
+
+  // 2. Normalized match across keys
+  const targetNorm = normHeader(headerName);
+  const keys = Object.keys(dataObj);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (normHeader(k) === targetNorm) {
+      if (dataObj[k] !== undefined && dataObj[k] !== null) return dataObj[k];
+    }
+  }
+
+  // 3. Known Field Aliases
+  if (targetNorm === 'submissionid') return dataObj.submissionId || dataObj.SubmissionID || '';
+  if (targetNorm === 'recordid' || targetNorm === 'id') return dataObj.id || dataObj.ID || '';
+  if (targetNorm === 'userid' || targetNorm === 'idno') return dataObj.idNo || dataObj.userId || dataObj.workerId || '';
+  if (targetNorm === 'fullname' || targetNorm === 'name') return dataObj.name || dataObj.fullName || dataObj.workerName || '';
+  if (targetNorm === 'role') return dataObj.role || 'worker';
+  if (targetNorm === 'status') return dataObj.status || 'Completed';
+  if (targetNorm === 'date') return dataObj.date || now();
+  if (targetNorm === 'createdat') return dataObj.createdAt || dataObj.date || now();
+  if (targetNorm === 'updatedat') return dataObj.updatedAt || now();
+  if (targetNorm === 'workerid') return dataObj.workerId || dataObj.idNo || '';
+  if (targetNorm === 'workername') return dataObj.workerName || dataObj.name || '';
+  if (targetNorm === 'submittedby') return dataObj.submittedBy || dataObj.workerName || '';
+  if (targetNorm === 'workerphone') return dataObj.workerPhone || dataObj.phone || '';
+  if (targetNorm === 'consumerid') return dataObj.consumerId || dataObj.consumerNo || '';
+  if (targetNorm === 'consumername') return dataObj.consumerName || dataObj.customerName || '';
+  if (targetNorm === 'fathername') return dataObj.fatherName || '';
+  if (targetNorm === 'mobileno' || targetNorm === 'phone') return dataObj.mobile || dataObj.phone || '';
+  if (targetNorm === 'address') return dataObj.address || '';
+  if (targetNorm === 'meterno') return dataObj.meterNo || '';
+  if (targetNorm === 'initialreading') return dataObj.initialReading || '';
+  if (targetNorm === 'metersealno') return dataObj.sealNo || dataObj.newMeterSealNo || '';
+  if (targetNorm === 'appliedload') return dataObj.appliedLoad || '';
+  if (targetNorm === 'supplyphase') return dataObj.phase || '';
+  if (targetNorm === 'tariffcategory') return dataObj.tariffCategory || '';
+  if (targetNorm === 'servicecablelength') return dataObj.serviceCableLength || '';
+  if (targetNorm === 'poleno') return dataObj.poleNo || '';
+  if (targetNorm === 'earthresistance') return dataObj.earthResistance || '';
+  if (targetNorm === 'workorderno') return dataObj.workOrderNo || '';
+  if (targetNorm === 'workorderdate') return dataObj.workOrderDate || '';
+  if (targetNorm === 'arrearamount') return dataObj.arrearAmount || '';
+  if (targetNorm === 'reason') return dataObj.reason || dataObj.replacementReason || '';
+  if (targetNorm === 'finalreading') return dataObj.finalReading || '';
+  if (targetNorm === 'disconnectiontype') return dataObj.disconnectionType || '';
+  if (targetNorm === 'cutoutsealed') return dataObj.cutoutSealed !== undefined ? dataObj.cutoutSealed : '';
+  if (targetNorm === 'issuetype') return dataObj.issueType || '';
+  if (targetNorm === 'priority') return dataObj.priority || '';
+  if (targetNorm === 'actiontaken') return dataObj.actionTaken || '';
+  if (targetNorm === 'materialused') return dataObj.materialUsed || '';
+  if (targetNorm === 'poletype') return dataObj.poleType || '';
+  if (targetNorm === 'linevoltage') return dataObj.lineVoltage || '';
+  if (targetNorm === 'conductortype') return dataObj.conductorType || '';
+  if (targetNorm === 'oldmeterno') return dataObj.oldMeterNo || '';
+  if (targetNorm === 'newmeterno') return dataObj.newMeterNo || '';
+  if (targetNorm === 'newmetersealno') return dataObj.newMeterSealNo || '';
+  if (targetNorm === 'oldmetersealno') return dataObj.oldMeterSealNo || '';
+  if (targetNorm === 'metertype') return dataObj.meterType || '';
+  if (targetNorm === 'dtrname') return dataObj.dtrName || '';
+  if (targetNorm === 'existingcapacity') return dataObj.existingCapacity || '';
+  if (targetNorm === 'newcapacity') return dataObj.newCapacity || '';
+  if (targetNorm === 'olddtrserial') return dataObj.oldDtrSerial || '';
+  if (targetNorm === 'newdtrserial') return dataObj.newDtrSerial || '';
+  if (targetNorm === 'failurereason') return dataObj.failureReason || '';
+  if (targetNorm === 'oillevelchecked') return dataObj.oilLevelChecked !== undefined ? dataObj.oilLevelChecked : '';
+  if (targetNorm === 'photoevidence' || targetNorm === 'photourl') return dataObj.photoUrl || dataObj.directImageUrl || '';
+  if (targetNorm === 'photobefore') return dataObj.photoBeforeUrl || '';
+  if (targetNorm === 'photoafter') return dataObj.photoAfterUrl || '';
+  if (targetNorm === 'gpslocation' || targetNorm === 'locationgps') return dataObj.locationGps || '';
+  if (targetNorm === 'notes') return dataObj.notes || '';
+
+  return '';
+}
+
+// Dynamic Row Appender respecting existing sheet headers
+function appendSheetRecord(sheetName, recordObj) {
+  const s = getSheet(sheetName);
+  const lastCol = s.getLastColumn();
+  let headers = [];
+  if (lastCol > 0) {
+    headers = s.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+  } else {
+    headers = getHeadersForSheet(sheetName);
+    s.getRange(1, 1, 1, headers.length).setValues([headers]);
+    s.setFrozenRows(1);
+  }
+
+  const rowVals = headers.map(h => extractFieldValue(recordObj, h));
+  s.appendRow(rowVals);
+  return recordObj;
+}
+
+// ============================================================================
+// USER AUTHENTICATION & MANAGEMENT
+// ============================================================================
 
 function authenticateUser(idNo, password) {
-  const cleanId = String(idNo || '').trim().toLowerCase();
-  const cleanPass = String(password || '').trim();
-
-  if (!cleanId || !cleanPass) {
+  if (!idNo || !password) {
     throw Error('User ID and Password are required');
   }
 
-  const cache = CacheService.getScriptCache();
-  const cacheKey = 'auth_usr_' + cleanId;
-  let cachedJson = null;
+  const cleanId = String(idNo).trim().toLowerCase();
+  const cleanPass = String(password).trim();
+  const passHash = hashPassword(cleanPass);
+
+  const users = getSheetRows('Users');
+  let matchedUser = null;
+  let matchedIndex = -1;
+
+  for (let i = 0; i < users.length; i++) {
+    const u = users[i];
+    const uId = String(u['User ID'] || u.idNo || '').trim().toLowerCase();
+    const uPhone = String(u['Phone'] || u.phone || '').replace(/\D/g, '');
+    if (uId === cleanId || (cleanId.length >= 10 && uPhone === cleanId)) {
+      matchedUser = u;
+      matchedIndex = u._rowIndex;
+      break;
+    }
+  }
+
+  if (!matchedUser) {
+    throw Error('Invalid User ID or Password.');
+  }
+
+  const status = String(matchedUser['Status'] || matchedUser.status || 'active').toLowerCase();
+  if (status === 'hold') {
+    throw Error('Your account is on hold. Contact administrator.');
+  }
+
+  // Password Verification: Support stored Hash AND Legacy Plain-Text with auto-migration
+  const storedHash = String(matchedUser['Password Hash'] || matchedUser.passwordHash || '').trim();
+  const storedPlain = String(matchedUser['Password'] || matchedUser.password || '').trim();
+
+  let isMatch = false;
+  let needsMigration = false;
+
+  if (storedHash) {
+    if (storedHash.toLowerCase() === passHash.toLowerCase()) {
+      isMatch = true;
+    } else if (storedHash === cleanPass) {
+      // Stored in hash column as plain text -> migrate to SHA-256
+      isMatch = true;
+      needsMigration = true;
+    }
+  }
+
+  if (!isMatch && storedPlain) {
+    if (storedPlain === cleanPass || hashPassword(storedPlain).toLowerCase() === passHash.toLowerCase()) {
+      isMatch = true;
+      needsMigration = true;
+    }
+  }
+
+  if (!isMatch) {
+    throw Error('Invalid User ID or Password.');
+  }
+
+  // Auto-migrate plaintext to SHA-256 hash in Users sheet
+  if (needsMigration && matchedIndex > 1) {
+    try {
+      const s = getSheet('Users');
+      const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => normHeader(h));
+      const hashCol = headers.indexOf('passwordhash');
+      if (hashCol >= 0) {
+        s.getRange(matchedIndex, hashCol + 1).setValue(passHash);
+      }
+      const plainCol = headers.indexOf('password');
+      if (plainCol >= 0) {
+        s.getRange(matchedIndex, plainCol + 1).setValue(''); // Clear plain text
+      }
+    } catch (migErr) {
+      Logger.log('Password migration notice: ' + migErr);
+    }
+  }
+
+  // Update Last Login timestamp
   try {
-    cachedJson = cache.get(cacheKey);
+    const s = getSheet('Users');
+    const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => normHeader(h));
+    const loginCol = headers.indexOf('lastlogin');
+    if (loginCol >= 0 && matchedIndex > 1) {
+      s.getRange(matchedIndex, loginCol + 1).setValue(now());
+    }
   } catch (e) {}
 
-  let user = null;
-  if (cachedJson) {
-    try {
-      user = JSON.parse(cachedJson);
-    } catch (e) {}
-  }
-
-  if (!user) {
-    // High-speed direct read from USERS sheet without ensureHeaders overhead
-    const s = getSheet('USERS');
-    const totalRows = s.getLastRow();
-    const totalCols = s.getLastColumn();
-    if (totalRows < 2 || totalCols < 1) {
-      throw Error('Invalid User ID or Password');
-    }
-
-    const allValues = s.getRange(1, 1, totalRows, totalCols).getValues();
-    const headers = allValues[0].map(h => String(h || '').trim());
-    const idNoIdx = headers.indexOf('idNo');
-    const idIdx = headers.indexOf('id');
-    const passIdx = headers.indexOf('password');
-    const passHashIdx = headers.indexOf('passwordHash');
-    const nameIdx = headers.indexOf('name');
-    const phoneIdx = headers.indexOf('phone');
-    const roleIdx = headers.indexOf('role');
-    const statusIdx = headers.indexOf('status');
-    const desigIdx = headers.indexOf('designation');
-    const badgeIdx = headers.indexOf('badgeNo');
-
-    for (let i = 1; i < totalRows; i++) {
-      const row = allValues[i];
-      const rowIdNo = idNoIdx >= 0 ? String(row[idNoIdx] || '').trim().toLowerCase() : '';
-      const rowId = idIdx >= 0 ? String(row[idIdx] || '').trim().toLowerCase() : '';
-
-      if (rowIdNo === cleanId || rowId === cleanId) {
-        user = {
-          id: idIdx >= 0 ? String(row[idIdx] || '') : ('usr_' + cleanId),
-          idNo: idNoIdx >= 0 ? String(row[idNoIdx] || '') : cleanId,
-          password: passIdx >= 0 ? String(row[passIdx] || '') : '',
-          passwordHash: passHashIdx >= 0 ? String(row[passHashIdx] || '') : '',
-          name: nameIdx >= 0 ? String(row[nameIdx] || '') : cleanId,
-          phone: phoneIdx >= 0 ? String(row[phoneIdx] || '') : '',
-          role: roleIdx >= 0 ? String(row[roleIdx] || 'worker') : 'worker',
-          status: statusIdx >= 0 ? String(row[statusIdx] || 'active') : 'active',
-          designation: desigIdx >= 0 ? String(row[desigIdx] || '') : '',
-          badgeNo: badgeIdx >= 0 ? String(row[badgeIdx] || '') : ''
-        };
-        break;
-      }
-    }
-
-    if (user) {
-      try {
-        cache.put(cacheKey, JSON.stringify(user), 1800); // 30 mins TTL
-      } catch (e) {}
-    }
-  }
-
-  if (!user) throw Error('Invalid User ID or Password');
-  if (user.status === 'hold') throw Error('This user account is currently ON HOLD. Contact Admin.');
-
-  const matchPass = String(user.password).trim() === cleanPass || 
-    (user.passwordHash && String(user.passwordHash) === sha(cleanPass));
-
-  if (!matchPass) throw Error('Invalid User ID or Password');
-
+  const finalId = String(matchedUser['User ID'] || matchedUser.idNo);
   const session = {
-    id: String(user.id),
-    idNo: String(user.idNo),
-    name: String(user.name),
-    phone: String(user.phone || ''),
-    role: String(user.role),
-    status: String(user.status || 'active'),
-    designation: String(user.designation || ''),
-    badgeNo: String(user.badgeNo || ''),
+    id: 'usr_' + finalId,
+    idNo: finalId,
+    name: String(matchedUser['Full Name'] || matchedUser.name || 'User'),
+    phone: String(matchedUser['Phone'] || matchedUser.phone || ''),
+    role: String(matchedUser['Role'] || matchedUser.role || 'worker'),
+    status: status,
+    designation: String(matchedUser['Designation'] || matchedUser.designation || ''),
+    badgeNo: String(matchedUser['Badge No'] || matchedUser.badgeNo || ''),
+    token: 'SES-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9),
     loggedInAt: now()
   };
 
-  // Asynchronous activity logging: do NOT block or delay the login response
-  try {
-    const sAct = getSheet('USER_ACTIVITY');
-    sAct.appendRow([generateId('ACT'), user.id, user.idNo, user.name, user.role, 'LOGIN', 'Successful login', now()]);
-  } catch (e) {}
-
+  logSystemActivity(session.id, session.idNo, session.name, session.role, 'LOGIN', 'Successful user login');
   return session;
 }
 
-// Entry Operations with Strict LockService, Category-Wise Storage & Idempotency Protection
-function saveEntry(d) {
+function getUsersList() {
+  const raw = getSheetRows('Users');
+  return raw.map(u => ({
+    id: 'usr_' + String(u['User ID'] || u.idNo),
+    idNo: String(u['User ID'] || u.idNo || ''),
+    name: String(u['Full Name'] || u.name || ''),
+    phone: String(u['Phone'] || u.phone || ''),
+    role: String(u['Role'] || u.role || 'worker'),
+    status: String(u['Status'] || u.status || 'active'),
+    designation: String(u['Designation'] || u.designation || ''),
+    badgeNo: String(u['Badge No'] || u.badgeNo || ''),
+    createdAt: String(u['Created At'] || u.createdAt || ''),
+    updatedAt: String(u['Updated At'] || u.updatedAt || ''),
+    lastLogin: String(u['Last Login'] || u.lastLogin || '')
+  }));
+}
+
+function createUserAccount(userData) {
+  const idNo = String(userData.idNo || userData['User ID'] || '').trim();
+  const password = String(userData.password || '').trim();
+  const name = String(userData.name || userData['Full Name'] || '').trim();
+  const role = String(userData.role || 'worker').trim();
+
+  if (!idNo) throw Error('User ID is required');
+  if (!password) throw Error('Password is required');
+
+  const existingUsers = getSheetRows('Users');
+  const duplicate = existingUsers.some(u => String(u['User ID'] || u.idNo || '').trim().toLowerCase() === idNo.toLowerCase());
+  if (duplicate) throw Error('User ID already exists: ' + idNo);
+
+  const newRec = {
+    'User ID': idNo,
+    'Role': role,
+    'Full Name': name || ('Worker ' + idNo),
+    'Phone': String(userData.phone || ''),
+    'Password Hash': hashPassword(password),
+    'Status': userData.status || 'active',
+    'Designation': userData.designation || (role === 'admin' ? 'Administrator' : 'Field Worker'),
+    'Badge No': userData.badgeNo || idNo,
+    'Security Question': userData.securityQuestion || '',
+    'Security Answer Hash': userData.securityAnswer ? hashPassword(userData.securityAnswer) : '',
+    'Created At': now(),
+    'Updated At': now(),
+    'Last Login': '',
+    'Created By': userData.createdBy || 'admin'
+  };
+
+  appendSheetRecord('Users', newRec);
+  try { CacheService.getScriptCache().remove('users_cache'); } catch (e) {}
+
+  logSystemActivity(newRec['User ID'], newRec['User ID'], newRec['Full Name'], newRec['Role'], 'CREATE_USER', 'Created user account: ' + idNo);
+
+  return {
+    id: 'usr_' + idNo,
+    idNo: idNo,
+    name: newRec['Full Name'],
+    phone: newRec['Phone'],
+    role: newRec['Role'],
+    status: newRec['Status'],
+    designation: newRec['Designation'],
+    badgeNo: newRec['Badge No'],
+    createdAt: newRec['Created At']
+  };
+}
+
+function updateUserAccount(targetId, updates) {
+  const cleanId = String(targetId || '').trim().toLowerCase();
+  const s = getSheet('Users');
+  const rows = getSheetRows('Users');
+  const matched = rows.find(u => 
+    String(u['User ID'] || u.idNo || '').trim().toLowerCase() === cleanId ||
+    String(u.id || '').trim().toLowerCase() === cleanId
+  );
+
+  if (!matched) throw Error('User not found in Google Sheets: ' + targetId);
+
+  const rowIndex = matched._rowIndex;
+  const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => normHeader(h));
+
+  if (updates.status !== undefined) {
+    const col = headers.indexOf('status');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.status);
+  }
+  if (updates.name !== undefined || updates['Full Name'] !== undefined) {
+    const col = headers.indexOf('fullname');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.name || updates['Full Name']);
+  }
+  if (updates.phone !== undefined) {
+    const col = headers.indexOf('phone');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.phone);
+  }
+  if (updates.designation !== undefined) {
+    const col = headers.indexOf('designation');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.designation);
+  }
+  if (updates.badgeNo !== undefined) {
+    const col = headers.indexOf('badgeno');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.badgeNo);
+  }
+  if (updates.role !== undefined) {
+    const col = headers.indexOf('role');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(updates.role);
+  }
+  if (updates.password) {
+    const col = headers.indexOf('passwordhash');
+    if (col >= 0) s.getRange(rowIndex, col + 1).setValue(hashPassword(updates.password));
+  }
+
+  const updatedCol = headers.indexOf('updatedat');
+  if (updatedCol >= 0) s.getRange(rowIndex, updatedCol + 1).setValue(now());
+
+  try { CacheService.getScriptCache().remove('users_cache'); } catch (e) {}
+  logSystemActivity(cleanId, cleanId, updates.name || '', updates.role || '', 'UPDATE_USER', 'Updated user: ' + cleanId);
+
+  return { success: true, message: 'User updated successfully' };
+}
+
+function deleteUserAccount(targetId) {
+  const cleanId = String(targetId || '').trim().toLowerCase();
+  if (cleanId === '8695716192' || cleanId === 'admin') {
+    throw Error('Primary Admin account cannot be deleted');
+  }
+
+  const s = getSheet('Users');
+  const rows = getSheetRows('Users');
+  const matched = rows.find(u => 
+    String(u['User ID'] || u.idNo || '').trim().toLowerCase() === cleanId ||
+    String(u.id || '').trim().toLowerCase() === cleanId
+  );
+
+  if (!matched) throw Error('User not found: ' + targetId);
+
+  s.deleteRow(matched._rowIndex);
+  try { CacheService.getScriptCache().remove('users_cache'); } catch (e) {}
+  logSystemActivity(cleanId, cleanId, '', '', 'DELETE_USER', 'Deleted user: ' + cleanId);
+
+  return { success: true, message: 'User deleted from Google Sheets' };
+}
+
+// ============================================================================
+// WORKER SUBMISSION & STRICT IDEMPOTENCY
+// ============================================================================
+
+function submitRecord(recordData) {
   const lock = LockService.getScriptLock();
-  // Wait for up to 30 seconds to guarantee atomic execution under concurrent load
-  const hasLock = lock.tryLock(30000);
+  // Try up to 20 seconds for atomic lock
+  const hasLock = lock.tryLock(20000);
   if (!hasLock) {
-    throw Error('Server is busy processing another transaction. Please try again in a moment.');
+    throw Error('Server is busy processing another transaction. Please retry in a few seconds.');
   }
 
   try {
-    // Step 1: Validate request
-    if (!d || typeof d !== 'object') {
-      throw Error('Invalid payload: Entry data object is required.');
+    if (!recordData || typeof recordData !== 'object') {
+      throw Error('Record payload object is required');
     }
 
-    // Step 2 & 3: Identify & Normalize category
-    const rawCat = d.category || d.Category;
-    if (!rawCat) {
-      throw Error('Category is required. Allowed categories: NSC, DISCONNECTION, POLE CASE, METER REPLESMENT, DTR REPLESMENT.');
-    }
-    const canonicalCat = normalizeCategory(rawCat);
-    if (!canonicalCat) {
-      throw Error('Unrecognized work category: "' + rawCat + '". Allowed: NSC, DISCONNECTION, POLE CASE, METER REPLESMENT, DTR REPLESMENT.');
+    const rawCategory = recordData.category || recordData.Category;
+    if (!rawCategory) {
+      throw Error('Category is required. E.g. NSC, Disconnection, Broken, Meter Replacement, DTR Replacement');
     }
 
-    // Step 4 & 5: Find the correct destination sheet & verify existence
-    const destSheet = getCategorySheet(canonicalCat);
-    if (!destSheet) {
-      throw Error('Could not open or initialize Google Sheet tab for category: ' + canonicalCat);
+    const canonicalCat = normalizeCategory(rawCategory);
+    const destSheetName = canonicalCat; // Exactly matching dedicated sheet!
+    const s = getSheet(destSheetName);
+
+    // Guaranteed Unique Submission ID
+    const submissionId = String(recordData.submissionId || recordData.SubmissionID || '').trim();
+    const finalSubmissionId = submissionId || ('SUB-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9).toUpperCase());
+    const finalId = String(recordData.id || '').trim() || ('PWR-' + Date.now().toString().slice(-6));
+
+    // IDEMPOTENCY CHECK: Verify if this Submission ID already exists in target sheet
+    if (finalSubmissionId) {
+      const existingRows = getSheetRows(destSheetName);
+      const match = existingRows.find(r => {
+        const sub = String(r['Submission ID'] || r.submissionId || '').trim();
+        return sub && sub === finalSubmissionId;
+      });
+
+      if (match) {
+        return {
+          duplicate: true,
+          message: 'Record already saved with this Submission ID in ' + destSheetName,
+          sheet: destSheetName,
+          category: canonicalCat,
+          recordId: match['Record ID'] || match.id || finalId,
+          submissionId: finalSubmissionId,
+          entry: match
+        };
+      }
     }
-    const destSheetName = destSheet.getName();
 
-    // Step 6: Validate and construct verified new entry with complete worker identity
-    const submissionId = String(d.submissionId || d.SubmissionID || '').trim();
-    const entryId = String(d.id || '').trim() || ('PWR-' + Date.now().toString().slice(-6));
-    const finalSubmissionId = submissionId || ('SUB-' + Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
-
-    const workerId = String(d.workerId || d.WorkerID || d.idNo || '').trim();
-    const workerName = String(d.workerName || d.WorkerName || 'Field Worker').trim();
-    const role = String(d.role || d.Role || 'worker').trim();
-    const submittedBy = String(d.submittedBy || d.SubmittedBy || (workerId ? (workerName + ' (' + workerId + ')') : workerName)).trim();
-    const dateVal = d.date || now();
-    const createdAtVal = d.createdAt || d.date || now();
-
-    const newEntry = Object.assign({}, d, {
+    // Construct clean verified record object
+    const verifiedRecord = Object.assign({}, recordData, {
       submissionId: finalSubmissionId,
-      id: entryId,
+      id: finalId,
       category: canonicalCat,
-      workerId: workerId,
-      workerName: workerName,
-      role: role,
-      submittedBy: submittedBy,
-      date: dateVal,
-      createdAt: createdAtVal,
-      status: d.status || 'Completed',
+      status: recordData.status || 'Completed',
+      date: recordData.date || now(),
+      createdAt: recordData.createdAt || recordData.date || now(),
       updatedAt: now()
     });
 
-    // Step 7: Check duplicate SubmissionID (in category sheet first, then MASTER_DATA)
-    if (finalSubmissionId) {
-      const existingInCat = findRowIndex(destSheet, 'submissionId', finalSubmissionId);
-      if (existingInCat > 0) {
-        const existingRow = getRowByIndex(destSheet, existingInCat);
-        return {
-          success: true,
-          duplicate: true,
-          message: 'Record already saved with this Submission ID in ' + destSheetName,
-          destinationSheet: destSheetName,
-          category: canonicalCat,
-          recordId: existingRow.id || entryId,
-          submissionId: finalSubmissionId,
-          entry: existingRow,
-          data: existingRow
-        };
-      }
+    // Save ONLY to matching Google Sheet!
+    appendSheetRecord(destSheetName, verifiedRecord);
 
-      const existingInMaster = findRowIndex('MASTER_DATA', 'submissionId', finalSubmissionId);
-      if (existingInMaster > 0) {
-        const existingRow = getRowByIndex('MASTER_DATA', existingInMaster);
-        return {
-          success: true,
-          duplicate: true,
-          message: 'Record already saved with this Submission ID in MASTER_DATA',
-          destinationSheet: destSheetName,
-          category: canonicalCat,
-          recordId: existingRow.id || entryId,
-          submissionId: finalSubmissionId,
-          entry: existingRow,
-          data: existingRow
-        };
-      }
-    }
-
-    // Check by Record ID if not an explicit update
-    if (entryId && !d._isExplicitUpdate) {
-      const existingById = findRowIndex(destSheet, 'id', entryId);
-      if (existingById > 0) {
-        const existingRow = getRowByIndex(destSheet, existingById);
-        return {
-          success: true,
-          duplicate: true,
-          message: 'Record already saved with this ID in ' + destSheetName,
-          destinationSheet: destSheetName,
-          category: canonicalCat,
-          recordId: existingRow.id || entryId,
-          submissionId: existingRow.submissionId || finalSubmissionId,
-          entry: existingRow,
-          data: existingRow
-        };
-      }
-    }
-
-    // Semantic Deduplication Guard: Check if identical record was submitted within last 3 minutes
-    if (d.consumerId && d.meterNo) {
-      const recentRows = getRowsFromSheet(destSheet).slice(-30);
-      const cleanConsumer = String(d.consumerId).trim().toLowerCase();
-      const cleanMeter = String(d.meterNo).trim().toLowerCase();
-      const cleanWorker = String(workerName).trim().toLowerCase();
-
-      const matched = recentRows.find(r => {
-        const sameConsumer = String(r.consumerId || '').trim().toLowerCase() === cleanConsumer;
-        const sameMeter = String(r.meterNo || '').trim().toLowerCase() === cleanMeter;
-        const sameWorker = cleanWorker ? String(r.workerName || '').trim().toLowerCase() === cleanWorker : true;
-        if (sameConsumer && sameMeter && sameWorker) {
-          const recTime = new Date(r.createdAt || r.date || 0).getTime();
-          const currTime = new Date(createdAtVal).getTime();
-          return Math.abs(currTime - recTime) < 180000; // 3 minutes window
-        }
-        return false;
-      });
-
-      if (matched) {
-        return {
-          success: true,
-          duplicate: true,
-          message: 'Identical record already saved recently in ' + destSheetName,
-          destinationSheet: destSheetName,
-          category: canonicalCat,
-          recordId: matched.id,
-          submissionId: matched.submissionId || finalSubmissionId,
-          entry: matched,
-          data: matched
-        };
-      }
-    }
-
-    // Step 8: Save data only in the matching category sheet (PRIMARY DESTINATION)
-    appendRowDynamic(destSheet, newEntry, headersFor(canonicalCat));
-
-    // Also mirror to MASTER_DATA index layer
-    try {
-      const masterSheet = getSheet('MASTER_DATA');
-      const masterIdx = findRowIndex(masterSheet, 'submissionId', finalSubmissionId);
-      if (masterIdx <= 0) {
-        appendRowDynamic(masterSheet, newEntry, COMMON_ENTRY_HEADERS);
-      }
-    } catch (e) {
-      Logger.log('MASTER_DATA mirror warning: ' + e);
-    }
-
+    // Invalidate stats cache
     try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
 
-    // Step 9: Return valid success response
-    return {
-      success: true,
-      duplicate: false,
-      message: 'Data saved successfully in ' + destSheetName,
-      destinationSheet: destSheetName,
-      category: canonicalCat,
-      recordId: newEntry.id,
-      submissionId: newEntry.submissionId,
-      entry: newEntry,
-      data: newEntry
-    };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-// Safe Deduplication & Backup Process for existing duplicate records
-function cleanupDuplicateRecords(targetSheetName) {
-  const lock = LockService.getScriptLock();
-  const hasLock = lock.tryLock(30000);
-  if (!hasLock) throw Error('Server busy. Please try again.');
-
-  try {
-    const targetSheets = targetSheetName ? [targetSheetName] : [
-      'MASTER_DATA', 'NEW_CONNECTION', 'DISCONNECTION', 'POLE_CASE', 'METER_REPLACEMENT', 'DTR_REPLACEMENT'
-    ];
-
-    const results = {};
-    const ssInstance = ss();
-
-    targetSheets.forEach(name => {
-      const aliases = SHEET_ALIASES[name] || [name];
-      let sheet = null;
-      for (let i = 0; i < aliases.length; i++) {
-        sheet = ssInstance.getSheetByName(aliases[i]);
-        if (sheet) break;
-      }
-
-      if (!sheet || sheet.getLastRow() < 3) {
-        results[name] = { removed: 0, kept: sheet ? Math.max(0, sheet.getLastRow() - 1) : 0 };
-        return;
-      }
-
-      // Create backup sheet before deduplication
-      const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmm');
-      const backupName = (sheet.getName() + '_BACKUP_BEFORE_DEDUPLICATION').slice(0, 50);
-      if (!ssInstance.getSheetByName(backupName)) {
-        const backupSheet = sheet.copyTo(ssInstance);
-        backupSheet.setName(backupName);
-      }
-
-      const totalRows = sheet.getLastRow();
-      const totalCols = sheet.getLastColumn();
-      const headers = sheet.getRange(1, 1, 1, totalCols).getValues()[0];
-      const rows = sheet.getRange(2, 1, totalRows - 1, totalCols).getValues();
-
-      const subIdCol = headers.indexOf('submissionId');
-      const idCol = headers.indexOf('id');
-      const catCol = headers.indexOf('category');
-      const consIdCol = headers.indexOf('consumerId');
-      const meterCol = headers.indexOf('meterNo');
-      const dateCol = headers.indexOf('date');
-
-      const seenKeys = new Set();
-      const rowsToKeep = [];
-      let removedCount = 0;
-
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        const subId = subIdCol >= 0 ? String(r[subIdCol] || '').trim() : '';
-        const idVal = idCol >= 0 ? String(r[idCol] || '').trim() : '';
-        const catVal = catCol >= 0 ? String(r[catCol] || '').trim().toUpperCase() : '';
-        const consVal = consIdCol >= 0 ? String(r[consIdCol] || '').trim().toLowerCase() : '';
-        const meterVal = meterCol >= 0 ? String(r[meterCol] || '').trim().toLowerCase() : '';
-        const dateVal = dateCol >= 0 ? String(r[dateCol] || '').slice(0, 10) : '';
-
-        let key = '';
-        if (subId && subId.indexOf('SUB-') === 0) {
-          key = 'SUB:' + subId;
-        } else if (consVal && meterVal) {
-          key = 'CONS:' + catVal + ':' + consVal + ':' + meterVal + ':' + dateVal;
-        } else if (idVal) {
-          key = 'ID:' + idVal;
-        }
-
-        if (key && seenKeys.has(key)) {
-          removedCount++;
-        } else {
-          if (key) seenKeys.add(key);
-          rowsToKeep.push(r);
-        }
-      }
-
-      if (removedCount > 0) {
-        sheet.getRange(2, 1, totalRows - 1, totalCols).clearContent();
-        if (rowsToKeep.length > 0) {
-          sheet.getRange(2, 1, rowsToKeep.length, totalCols).setValues(rowsToKeep);
-        }
-      }
-
-      results[name] = { removed: removedCount, kept: rowsToKeep.length };
-    });
-
-    return {
-      success: true,
-      message: 'Safely deduplicated sheets with backup created',
-      details: results
-    };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function removeEntry(id, submissionId, category) {
-  const targetId = id || submissionId;
-  if (!targetId) return false;
-
-  // 1. Remove from category sheet
-  if (category) {
-    const canonicalCat = normalizeCategory(category);
-    if (canonicalCat) {
-      try {
-        const catSheet = getCategorySheet(canonicalCat);
-        if (id) {
-          try { deleteRow(catSheet, 'id', id); } catch (e) {}
-        }
-        if (submissionId) {
-          try { deleteRow(catSheet, 'submissionId', submissionId); } catch (e) {}
-        }
-      } catch (e) {}
-    }
-  } else {
-    // Check all category sheets if category not passed
-    const categorySheets = ['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'];
-    categorySheets.forEach(cat => {
-      try {
-        const catSheet = getCategorySheet(cat);
-        if (id) {
-          try { deleteRow(catSheet, 'id', id); } catch (e) {}
-        }
-        if (submissionId) {
-          try { deleteRow(catSheet, 'submissionId', submissionId); } catch (e) {}
-        }
-      } catch (e) {}
-    });
-  }
-
-  // 2. Remove from MASTER_DATA
-  try {
-    if (id) {
-      try { deleteRow('MASTER_DATA', 'id', id); } catch (e) {}
-    }
-    if (submissionId) {
-      try { deleteRow('MASTER_DATA', 'submissionId', submissionId); } catch (e) {}
-    }
-  } catch (e) {}
-
-  try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
-  return true;
-}
-
-function updateEntryRecord(data, id) {
-  const targetId = id || data.id || data.submissionId;
-  if (!targetId) throw Error('ID or submissionId is required to update entry');
-
-  const rawCat = data.category || data.Category;
-  const canonicalCat = normalizeCategory(rawCat);
-  let updatedRecord = null;
-
-  if (canonicalCat) {
-    try {
-      const catSheet = getCategorySheet(canonicalCat);
-      const rowById = findRowIndex(catSheet, 'id', targetId);
-      const rowBySub = findRowIndex(catSheet, 'submissionId', targetId);
-      if (rowById > 0) {
-        updatedRecord = updateRow(catSheet, 'id', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
-      } else if (rowBySub > 0) {
-        updatedRecord = updateRow(catSheet, 'submissionId', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
-      }
-    } catch (e) {
-      Logger.log('Category update error: ' + e);
-    }
-  }
-
-  // Also update in MASTER_DATA
-  try {
-    const rowById = findRowIndex('MASTER_DATA', 'id', targetId);
-    const rowBySub = findRowIndex('MASTER_DATA', 'submissionId', targetId);
-    if (rowById > 0) {
-      const mUpdated = updateRow('MASTER_DATA', 'id', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
-      if (!updatedRecord) updatedRecord = mUpdated;
-    } else if (rowBySub > 0) {
-      const mUpdated = updateRow('MASTER_DATA', 'submissionId', targetId, Object.assign({}, data, { _isExplicitUpdate: true }));
-      if (!updatedRecord) updatedRecord = mUpdated;
-    }
-  } catch (e) {
-    Logger.log('MASTER_DATA update error: ' + e);
-  }
-
-  try { CacheService.getScriptCache().remove('dashboard_stats'); } catch (e) {}
-  return updatedRecord || data;
-}
-
-function queryEntries(params) {
-  let list = [];
-  const requestedCat = params.category ? String(params.category).trim() : '';
-
-  if (requestedCat && requestedCat.toUpperCase() !== 'ALL') {
-    const canonicalCat = normalizeCategory(requestedCat);
-    if (!canonicalCat) {
-      return [];
-    }
-    // Read directly from the category's Google Sheet tab
-    try {
-      const catSheet = getCategorySheet(canonicalCat);
-      list = getRowsFromSheet(catSheet);
-    } catch (e) {
-      Logger.log('Error reading category sheet ' + canonicalCat + ': ' + e);
-      list = [];
-    }
-
-    // Fallback: If category sheet was empty or new, check MASTER_DATA for any previously logged entries
-    if (!list || list.length === 0) {
-      try {
-        const masterRows = getRows('MASTER_DATA');
-        list = masterRows.filter(e => normalizeCategory(e.category) === canonicalCat);
-      } catch (e) {}
-    }
-  } else {
-    // Read from MASTER_DATA
-    try {
-      list = getRows('MASTER_DATA');
-    } catch (e) {
-      list = [];
-    }
-
-    // If MASTER_DATA is empty, compile across all 5 category sheets
-    if (!list || list.length === 0) {
-      const categories = ['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'];
-      const combined = [];
-      const seen = {};
-      categories.forEach(cat => {
-        try {
-          const s = getCategorySheet(cat);
-          const rows = getRowsFromSheet(s);
-          rows.forEach(r => {
-            const key = r.submissionId || r.id;
-            if (key && !seen[key]) {
-              seen[key] = true;
-              combined.push(r);
-            } else if (!key) {
-              combined.push(r);
-            }
-          });
-        } catch (e) {}
-      });
-      list = combined;
-    }
-  }
-  
-  if (params.workerId || params.workerName) {
-    const wId = String(params.workerId || '').toLowerCase().trim();
-    const wName = String(params.workerName || '').toLowerCase().trim();
-    list = list.filter(e => {
-      const eWId = String(e.workerId || e.idNo || '').toLowerCase().trim();
-      const eWName = String(e.workerName || '').toLowerCase().trim();
-      const eCreator = String(e.createdBy || e.submittedBy || '').toLowerCase().trim();
-      if (wId && (eWId === wId || eCreator.indexOf(wId) >= 0)) return true;
-      if (wName && eWName.indexOf(wName) >= 0) return true;
-      return false;
-    });
-  }
-
-  if (params.status && params.status !== 'ALL') {
-    list = list.filter(e => String(e.status).toLowerCase() === String(params.status).toLowerCase());
-  }
-
-  if (params.search) {
-    const q = String(params.search).toLowerCase();
-    list = list.filter(e => 
-      (e.id && String(e.id).toLowerCase().indexOf(q) >= 0) ||
-      (e.submissionId && String(e.submissionId).toLowerCase().indexOf(q) >= 0) ||
-      (e.consumerName && String(e.consumerName).toLowerCase().indexOf(q) >= 0) ||
-      (e.consumerId && String(e.consumerId).toLowerCase().indexOf(q) >= 0) ||
-      (e.meterNo && String(e.meterNo).toLowerCase().indexOf(q) >= 0) ||
-      (e.poleNo && String(e.poleNo).toLowerCase().indexOf(q) >= 0) ||
-      (e.workerName && String(e.workerName).toLowerCase().indexOf(q) >= 0) ||
-      (e.address && String(e.address).toLowerCase().indexOf(q) >= 0)
+    logSystemActivity(
+      verifiedRecord.workerId || '',
+      verifiedRecord.workerId || '',
+      verifiedRecord.workerName || '',
+      verifiedRecord.role || 'worker',
+      'SUBMIT_RECORD',
+      'Submitted ' + canonicalCat + ' (ID: ' + finalId + ', SubID: ' + finalSubmissionId + ')'
     );
+
+    return {
+      duplicate: false,
+      message: 'Record saved successfully in ' + destSheetName,
+      sheet: destSheetName,
+      category: canonicalCat,
+      recordId: finalId,
+      submissionId: finalSubmissionId,
+      entry: verifiedRecord
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Query Entries across dedicated sheets
+function queryRecords(filters) {
+  filters = filters || {};
+  const catFilter = filters.category ? normalizeCategory(filters.category) : null;
+  const targetSheets = catFilter && catFilter !== 'ALL' 
+    ? [catFilter] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+
+  const allRecords = [];
+
+  targetSheets.forEach(sheetName => {
+    try {
+      const rows = getSheetRows(sheetName);
+      rows.forEach(r => {
+        // Normalize entry to standard frontend shape
+        const item = {
+          id: String(r['Record ID'] || r.id || ('PWR-' + Math.random().toString(36).substring(2, 7))),
+          submissionId: String(r['Submission ID'] || r.submissionId || ''),
+          category: String(r['Category'] || r.category || sheetName),
+          status: String(r['Status'] || r.status || 'Completed'),
+          date: String(r['Date'] || r.date || r['Created At'] || now()),
+          createdAt: String(r['Created At'] || r.createdAt || now()),
+          updatedAt: String(r['Updated At'] || r.updatedAt || ''),
+          workerId: String(r['Worker ID'] || r.workerId || ''),
+          workerName: String(r['Worker Name'] || r.workerName || 'Worker'),
+          role: String(r['Role'] || r.role || 'worker'),
+          submittedBy: String(r['Submitted By'] || r.submittedBy || r.workerName || ''),
+          workerPhone: String(r['Worker Phone'] || r.workerPhone || ''),
+          substation: String(r['Substation'] || r.substation || ''),
+          feederName: String(r['Feeder Name'] || r.feederName || ''),
+          consumerId: String(r['Consumer ID'] || r.consumerId || ''),
+          consumerName: String(r['Consumer Name'] || r.consumerName || ''),
+          fatherName: String(r['Father Name'] || r.fatherName || ''),
+          mobile: String(r['Mobile No'] || r.mobile || ''),
+          address: String(r['Address'] || r.address || ''),
+          meterNo: String(r['Meter No'] || r.meterNo || ''),
+          initialReading: String(r['Initial Reading'] || r.initialReading || ''),
+          sealNo: String(r['Meter Seal No'] || r.sealNo || ''),
+          appliedLoad: String(r['Applied Load'] || r.appliedLoad || ''),
+          phase: String(r['Supply Phase'] || r.phase || ''),
+          tariffCategory: String(r['Tariff Category'] || r.tariffCategory || ''),
+          serviceCableLength: String(r['Service Cable Length'] || r.serviceCableLength || ''),
+          poleNo: String(r['Pole No'] || r.poleNo || ''),
+          earthResistance: String(r['Earth Resistance'] || r.earthResistance || ''),
+          workOrderNo: String(r['Work Order No'] || r.workOrderNo || ''),
+          workOrderDate: String(r['Work Order Date'] || r.workOrderDate || ''),
+          workOrderNoticeId: String(r['Work Order Notice ID'] || r.workOrderNoticeId || ''),
+          workOrderNoticeTitle: String(r['Work Order Notice Title'] || r.workOrderNoticeTitle || ''),
+          arrearAmount: String(r['Arrear Amount'] || r.arrearAmount || ''),
+          reason: String(r['Reason'] || r.reason || ''),
+          finalReading: String(r['Final Reading'] || r.finalReading || ''),
+          disconnectionType: String(r['Disconnection Type'] || r.disconnectionType || ''),
+          issueType: String(r['Issue Type'] || r.issueType || ''),
+          priority: String(r['Priority'] || r.priority || ''),
+          actionTaken: String(r['Action Taken'] || r.actionTaken || ''),
+          materialUsed: String(r['Material Used'] || r.materialUsed || ''),
+          oldMeterNo: String(r['Old Meter No'] || r.oldMeterNo || ''),
+          replacementReason: String(r['Replacement Reason'] || r.replacementReason || ''),
+          newMeterNo: String(r['New Meter No'] || r.newMeterNo || ''),
+          newMeterSealNo: String(r['New Meter Seal No'] || r.newMeterSealNo || ''),
+          dtrName: String(r['DTR Name'] || r.dtrName || ''),
+          existingCapacity: String(r['Existing Capacity'] || r.existingCapacity || ''),
+          newCapacity: String(r['New Capacity'] || r.newCapacity || ''),
+          locationGps: String(r['GPS Location'] || r.locationGps || ''),
+          photoUrl: String(r['Photo Evidence'] || r.photoUrl || ''),
+          photoBeforeUrl: String(r['Photo Before'] || r.photoBeforeUrl || ''),
+          photoAfterUrl: String(r['Photo After'] || r.photoAfterUrl || ''),
+          notes: String(r['Notes'] || r.notes || '')
+        };
+        allRecords.push(item);
+      });
+    } catch (e) {
+      Logger.log('Notice reading sheet ' + sheetName + ': ' + e);
+    }
+  });
+
+  // Apply filters
+  let filtered = allRecords;
+  if (filters.status && filters.status !== 'ALL') {
+    filtered = filtered.filter(x => x.status === filters.status);
+  }
+  if (filters.workerId) {
+    const wid = String(filters.workerId).trim().toLowerCase();
+    filtered = filtered.filter(x => String(x.workerId).trim().toLowerCase() === wid);
+  }
+  if (filters.search) {
+    const q = String(filters.search).trim().toLowerCase();
+    filtered = filtered.filter(x => JSON.stringify(x).toLowerCase().includes(q));
+  }
+
+  // Sort descending by date
+  filtered.sort((a, b) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+  return filtered;
+}
+
+// Compute Dashboard Stats
+function computeDashboardStats() {
+  const records = queryRecords();
+  const stats = {
+    total: records.length,
+    categories: {
+      NSC: 0,
+      DISCONNECTION: 0,
+      POLE_CASE: 0,
+      METER_REPLESMENT: 0,
+      DTR_REPLESMENT: 0
+    },
+    status: {
+      pending: 0,
+      completed: 0,
+      approved: 0
+    }
+  };
+
+  records.forEach(r => {
+    const cat = normalizeCategory(r.category);
+    if (cat === 'NSC') stats.categories.NSC++;
+    else if (cat === 'Disconnection') stats.categories.DISCONNECTION++;
+    else if (cat === 'Broken') stats.categories.POLE_CASE++;
+    else if (cat === 'Meter Replacement') stats.categories.METER_REPLESMENT++;
+    else if (cat === 'DTR Replacement') stats.categories.DTR_REPLESMENT++;
+
+    const st = String(r.status || '').toLowerCase();
+    if (st === 'pending') stats.status.pending++;
+    else if (st === 'approved') stats.status.approved++;
+    else stats.status.completed++;
+  });
+
+  return stats;
+}
+
+// ============================================================================
+// WORK ORDERS & GOOGLE DRIVE INTEGRATION
+// ============================================================================
+
+function getOrCreateWorkOrdersDriveFolder() {
+  const folders = DriveApp.getFoldersByName(WORK_ORDERS_FOLDER_NAME);
+  if (folders.hasNext()) {
+    const folder = folders.next();
+    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return folder;
+  }
+  const newFolder = DriveApp.createFolder(WORK_ORDERS_FOLDER_NAME);
+  newFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return newFolder;
+}
+
+function uploadWorkOrder(data) {
+  const title = String(data.title || 'Work Order Notice').trim();
+  const category = normalizeCategory(data.category || 'NSC');
+  let photoUrl = String(data.photoUrl || '').trim();
+  let fileId = '';
+  let driveViewUrl = '';
+  let directImageUrl = '';
+
+  // If base64 photo data provided, upload to Google Drive!
+  if (photoUrl && photoUrl.startsWith('data:')) {
+    try {
+      const parts = photoUrl.split(';base64,');
+      const contentType = parts[0].replace('data:', '') || 'image/jpeg';
+      const base64Data = parts[1];
+      const decodedBytes = Utilities.base64Decode(base64Data);
+      const ext = contentType.includes('png') ? '.png' : (contentType.includes('pdf') ? '.pdf' : '.jpg');
+      const fileName = 'WO_' + Date.now() + ext;
+      const blob = Utilities.newBlob(decodedBytes, contentType, fileName);
+
+      const folder = getOrCreateWorkOrdersDriveFolder();
+      const file = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+      fileId = file.getId();
+      driveViewUrl = 'https://drive.google.com/file/d/' + fileId + '/view?usp=sharing';
+      directImageUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+      photoUrl = directImageUrl;
+    } catch (driveErr) {
+      Logger.log('Drive upload notice: ' + driveErr);
+    }
+  }
+
+  const workOrder = {
+    id: data.id || generateId('WO'),
+    category: category,
+    title: title,
+    photoUrl: photoUrl || directImageUrl,
+    fileId: fileId,
+    fileName: data.fileName || ('Notice_' + Date.now()),
+    fileType: data.fileType || 'image/jpeg',
+    fileSize: data.fileSize || 0,
+    driveViewUrl: driveViewUrl,
+    driveDownloadUrl: fileId ? ('https://drive.google.com/uc?export=download&id=' + fileId) : '',
+    directImageUrl: directImageUrl || photoUrl,
+    description: data.description || '',
+    uploadedBy: data.uploadedBy || 'admin',
+    adminName: data.adminName || 'Admin Controller',
+    adminPhone: data.adminPhone || '8695716192',
+    uploadDate: data.uploadDate || new Date().toISOString().split('T')[0],
+    uploadTime: data.uploadTime || new Date().toLocaleTimeString(),
+    createdAt: now(),
+    isHidden: Boolean(data.isHidden)
+  };
+
+  appendSheetRecord('Work Orders', workOrder);
+  logSystemActivity(data.uploadedBy || 'admin', 'admin', data.adminName || 'Admin', 'admin', 'UPLOAD_WORK_ORDER', 'Uploaded WO: ' + title);
+
+  return workOrder;
+}
+
+function getWorkOrdersList(category) {
+  const rows = getSheetRows('Work Orders');
+  let list = rows.map(r => ({
+    id: String(r.id || ''),
+    category: String(r.category || 'NSC'),
+    title: String(r.title || ''),
+    photoUrl: String(r.photoUrl || r.directImageUrl || ''),
+    fileId: String(r.fileId || ''),
+    fileName: String(r.fileName || ''),
+    fileType: String(r.fileType || ''),
+    fileSize: r.fileSize || 0,
+    driveViewUrl: String(r.driveViewUrl || ''),
+    driveDownloadUrl: String(r.driveDownloadUrl || ''),
+    directImageUrl: String(r.directImageUrl || r.photoUrl || ''),
+    description: String(r.description || ''),
+    uploadedBy: String(r.uploadedBy || ''),
+    adminName: String(r.adminName || ''),
+    adminPhone: String(r.adminPhone || ''),
+    uploadDate: String(r.uploadDate || ''),
+    uploadTime: String(r.uploadTime || ''),
+    createdAt: String(r.createdAt || ''),
+    isHidden: Boolean(r.isHidden === true || r.isHidden === 'TRUE' || r.isHidden === 'true')
+  }));
+
+  if (category && category !== 'ALL') {
+    const norm = normalizeCategory(category);
+    list = list.filter(o => o.category === norm || o.category === 'ALL');
   }
 
   return list.reverse();
 }
 
-function computeStats() {
-  const cache = CacheService.getScriptCache();
-  try {
-    const cached = cache.get('dashboard_stats');
-    if (cached) return JSON.parse(cached);
-  } catch (e) {}
+function deleteWorkOrder(id) {
+  const s = getSheet('Work Orders');
+  const rows = getSheetRows('Work Orders');
+  const matched = rows.find(r => String(r.id) === String(id));
+  if (!matched) throw Error('Work order not found: ' + id);
 
-  const entries = getRows('MASTER_DATA');
-  const countCat = (catName) => {
-    return entries.filter(e => {
-      const c = String(e.category || '').toUpperCase();
-      return c === catName || CATEGORY_MAP[c] === CATEGORY_MAP[catName];
-    }).length;
-  };
-
-  const result = {
-    total: entries.length,
-    categories: {
-      NSC: countCat('NSC'),
-      DISCONNECTION: countCat('DISCONNECTION'),
-      POLE_CASE: countCat('POLE_CASE') + countCat('POLE CASE'),
-      'POLE CASE': countCat('POLE_CASE') + countCat('POLE CASE'),
-      METER_REPLESMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
-      METER_REPLACEMENT: countCat('METER_REPLESMENT') + countCat('METER_REPLACEMENT'),
-      DTR_REPLESMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT'),
-      DTR_REPLACEMENT: countCat('DTR_REPLESMENT') + countCat('DTR_REPLACEMENT')
-    },
-    status: {
-      pending: entries.filter(e => String(e.status).toLowerCase() === 'pending').length,
-      completed: entries.filter(e => String(e.status).toLowerCase() === 'completed').length,
-      approved: entries.filter(e => String(e.status).toLowerCase() === 'approved').length
-    }
-  };
-
-  try {
-    cache.put('dashboard_stats', JSON.stringify(result), 45); // 45s cache
-  } catch (e) {}
-
-  return result;
+  s.deleteRow(matched._rowIndex);
+  logSystemActivity('admin', 'admin', 'Admin', 'admin', 'DELETE_WORK_ORDER', 'Deleted WO: ' + id);
+  return { success: true, message: 'Work order deleted' };
 }
 
-function bulkSyncEntries(items) {
-  if (!Array.isArray(items)) throw Error('Array of entries is required for bulkSync');
-  let count = 0;
-  for (let i = 0; i < items.length; i++) {
-    saveEntry(items[i]);
-    count++;
-  }
-  return { success: true, syncedCount: count, total: getRows('MASTER_DATA').length };
-}
+// ============================================================================
+// MAIN HTTP DISPATCHERS: doGet & doPost
+// ============================================================================
 
-// Google Drive Storage for Work Orders & Khata Files
-function getOrCreateWorkOrdersFolder() {
-  const folderName = 'WBSEDCL_Work_Orders_Khata_Files';
-  const folders = DriveApp.getFoldersByName(folderName);
-  if (folders.hasNext()) {
-    const folder = folders.next();
-    try {
-      folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    } catch (e) {}
-    return folder;
-  }
-  const folder = DriveApp.createFolder(folderName);
-  try {
-    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {}
-  return folder;
-}
-
-function saveFileToDrive(fileData, fileName, mimeType) {
-  if (!fileData || typeof fileData !== 'string') {
-    return null;
-  }
-
-  // If already an http(s) URL, no need to re-upload
-  if (fileData.indexOf('http://') === 0 || fileData.indexOf('https://') === 0) {
-    return {
-      fileId: '',
-      fileName: fileName || '',
-      fileType: mimeType || 'image/jpeg',
-      fileSize: 0,
-      driveViewUrl: fileData,
-      driveDownloadUrl: fileData,
-      directImageUrl: fileData
-    };
-  }
-
-  let cleanBase64 = fileData;
-  let detectedMime = mimeType || 'image/jpeg';
-
-  if (cleanBase64.indexOf(';base64,') > -1) {
-    const parts = cleanBase64.split(';base64,');
-    const prefix = parts[0];
-    if (prefix.indexOf('data:') === 0) {
-      detectedMime = prefix.replace('data:', '').trim();
-    }
-    cleanBase64 = parts[1];
-  } else if (cleanBase64.indexOf('data:') === 0) {
-    const commaIdx = cleanBase64.indexOf(',');
-    if (commaIdx > -1) {
-      cleanBase64 = cleanBase64.substring(commaIdx + 1);
-    }
-  }
-
-  cleanBase64 = cleanBase64.trim();
-  const decodedBytes = Utilities.base64Decode(cleanBase64);
-
-  let ext = '.jpg';
-  if (detectedMime.indexOf('png') > -1) ext = '.png';
-  else if (detectedMime.indexOf('pdf') > -1) ext = '.pdf';
-  else if (detectedMime.indexOf('webp') > -1) ext = '.webp';
-
-  const baseName = (fileName || ('WBSEDCL_Notice_' + Date.now())).replace(/\.[^/.]+$/, '');
-  const safeFileName = baseName + ext;
-
-  const blob = Utilities.newBlob(decodedBytes, detectedMime, safeFileName);
-  const folder = getOrCreateWorkOrdersFolder();
-  const file = folder.createFile(blob);
-
-  try {
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {
-    Logger.log('Set sharing failed: ' + e);
-  }
-
-  const fileId = file.getId();
-  const driveViewUrl = 'https://drive.google.com/file/d/' + fileId + '/view?usp=drivesdk';
-  const driveDownloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
-  const directImageUrl = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w2000';
-
-  return {
-    fileId: fileId,
-    fileName: safeFileName,
-    fileType: detectedMime,
-    fileSize: file.getSize(),
-    driveViewUrl: driveViewUrl,
-    driveDownloadUrl: driveDownloadUrl,
-    directImageUrl: directImageUrl
-  };
-}
-
-// Work Orders
-function saveWorkOrder(d) {
-  const id = d.id || generateId('WO');
-  const nowObj = new Date();
-
-  const rawFile = d.photoUrl || d.fileData || d.photoBase64 || d.image || '';
-  let driveInfo = null;
-
-  if (rawFile && typeof rawFile === 'string' && (rawFile.indexOf('data:') === 0 || rawFile.length > 500)) {
-    try {
-      driveInfo = saveFileToDrive(rawFile, d.fileName || d.title, d.fileType || d.mimeType);
-    } catch (err) {
-      Logger.log('Drive upload error: ' + err.toString());
-    }
-  }
-
-  const finalPhotoUrl = driveInfo ? driveInfo.directImageUrl : (rawFile.length < 500 ? rawFile : '');
-  const fileId = driveInfo ? driveInfo.fileId : (d.fileId || '');
-  const fileName = driveInfo ? driveInfo.fileName : (d.fileName || '');
-  const fileType = driveInfo ? driveInfo.fileType : (d.fileType || 'image/jpeg');
-  const fileSize = driveInfo ? driveInfo.fileSize : (d.fileSize || 0);
-  const driveViewUrl = driveInfo ? driveInfo.driveViewUrl : (d.driveViewUrl || '');
-  const driveDownloadUrl = driveInfo ? driveInfo.driveDownloadUrl : (d.driveDownloadUrl || '');
-  const directImageUrl = driveInfo ? driveInfo.directImageUrl : (d.directImageUrl || finalPhotoUrl);
-
-  const item = {
-    id: id,
-    category: d.category || 'NSC',
-    title: d.title || 'WBSEDCL Work Order Notice',
-    photoUrl: finalPhotoUrl,
-    fileId: fileId,
-    fileName: fileName,
-    fileType: fileType,
-    fileSize: fileSize,
-    driveViewUrl: driveViewUrl,
-    driveDownloadUrl: driveDownloadUrl,
-    directImageUrl: directImageUrl,
-    description: d.description || '',
-    uploadedBy: d.uploadedBy || 'admin',
-    adminName: d.adminName || 'Admin Controller',
-    adminPhone: d.adminPhone || '8695716192',
-    uploadDate: Utilities.formatDate(nowObj, Session.getScriptTimeZone(), 'dd MMM yyyy'),
-    uploadTime: Utilities.formatDate(nowObj, Session.getScriptTimeZone(), 'hh:mm a'),
-    createdAt: now(),
-    isHidden: Boolean(d.isHidden)
-  };
-  appendRow('WORK_ORDERS', item);
-  return item;
-}
-
-// Routing
 function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
     const action = String(p.action || 'health').trim();
 
+    // 1. Health Check
     if (action === 'health' || action === 'healthCheck') {
       return out({
-        success: true,
         status: 'ok',
-        app: 'POWER',
+        spreadsheet: 'connected',
         spreadsheetId: SPREADSHEET_ID,
-        message: 'Google Sheets API connected and operational'
-      });
+        app: 'WBSEDCL POWER Management',
+        timestamp: now()
+      }, 'Health check successful');
     }
 
-    if (action === 'database' || action === 'setup' || action === 'init') {
-      return out(setupDatabase());
+    // 2. Database Initialization
+    if (action === 'setup' || action === 'init' || action === 'database' || action === 'initializeDatabase') {
+      return out(initializeDatabase(), 'Database initialized successfully');
     }
 
+    // 3. User Operations
     if (action === 'users' || action === 'getUsers') {
-      const users = getRows('USERS').map(sanitizeUser);
-      return out({ success: true, users: users });
+      return out({ users: getUsersList() }, 'Users retrieved successfully');
     }
 
-    if (action === 'login' || action === 'authenticate') {
-      return out({ success: true, session: authenticateUser(p.idNo, p.password) });
+    // 4. Record Queries
+    if (action === 'entries' || action === 'getRecords' || action === 'getMasterData') {
+      return out({ entries: queryRecords(p) }, 'Records retrieved successfully');
     }
 
-    if (action === 'entries' || action === 'getMasterData') {
-      return out({ success: true, entries: queryEntries(p) });
+    // 5. Dashboard Stats
+    if (action === 'stats' || action === 'getDashboard' || action === 'getDashboardStats') {
+      return out({ stats: computeDashboardStats() }, 'Stats computed successfully');
     }
 
-    if (action === 'stats' || action === 'getDashboardStats') {
-      return out({ success: true, stats: computeStats() });
-    }
-
-    if (action === 'verify') {
-      const cleanId = String(p.idNo || '').trim().toLowerCase();
-      const u = getRows('USERS').find(x => 
-        String(x.idNo).trim().toLowerCase() === cleanId || 
-        String(x.id).trim().toLowerCase() === cleanId
-      );
-      if (u) {
-        return out({ success: true, result: { valid: u.status !== 'hold', status: u.status, role: u.role } });
-      }
-      return out({ success: true, result: { valid: false, error: 'User not found in Google Sheets' } });
-    }
-
+    // 6. Work Orders
     if (action === 'workorders' || action === 'getWorkOrders') {
-      let orders = getRows('WORK_ORDERS');
-      if (p.category && p.category !== 'ALL') {
-        orders = orders.filter(o => o.category === p.category || o.category === 'ALL');
-      }
-      return out({ success: true, workOrders: orders.reverse() });
+      return out({ workOrders: getWorkOrdersList(p.category) }, 'Work orders retrieved successfully');
     }
 
-    if (action === 'chat' || action === 'getChat') {
-      let msgs = getRows('CHAT');
-      if (p.workerId) {
-        msgs = msgs.filter(m => 
-          String(m.workerId) === String(p.workerId) || 
-          String(m.senderId) === String(p.workerId) || 
-          String(m.recipientId) === String(p.workerId) ||
-          m.recipientId === 'all'
-        );
-      }
-      return out({ success: true, messages: msgs });
+    // 7. Refresh Combined Endpoint
+    if (action === 'refresh') {
+      return out({
+        users: getUsersList(),
+        entries: queryRecords(p),
+        stats: computeDashboardStats(),
+        workOrders: getWorkOrdersList()
+      }, 'Refreshed from Google Sheets');
     }
 
-    if (action === 'settings' || action === 'getSettings') {
-      return out({ success: true, settings: getRows('SETTINGS') });
+    // 8. User Activity Logs
+    if (action === 'logs' || action === 'getSystemLogs' || action === 'userActivity') {
+      return out({ logs: getSheetRows('System Logs').reverse() }, 'System logs retrieved');
     }
 
-    if (action === 'userActivity' || action === 'getUserActivity') {
-      return out({ success: true, activities: getRows('USER_ACTIVITY').reverse() });
-    }
-
-    // Specific category read shortcuts
-    if (action === 'getNewConnections') return out({ success: true, entries: queryEntries({ category: 'NSC' }) });
-    if (action === 'getDisconnections') return out({ success: true, entries: queryEntries({ category: 'DISCONNECTION' }) });
-    if (action === 'getPoleCases') return out({ success: true, entries: queryEntries({ category: 'POLE CASE' }) });
-    if (action === 'getMeterReplacements') return out({ success: true, entries: queryEntries({ category: 'METER REPLESMENT' }) });
-    if (action === 'getDTRReplacements') return out({ success: true, entries: queryEntries({ category: 'DTR REPLESMENT' }) });
-
-    throw Error('Unknown GET action: ' + action);
+    // Fallback: Unknown action
+    return errOut('UNKNOWN_GET_ACTION', 'Unrecognized GET action: ' + action);
   } catch (err) {
-    return out({ success: false, error: String(err.message || err) });
+    return errOut('GET_ERROR', String(err.message || err));
   }
 }
 
 function doPost(e) {
   try {
-    const rawContent = (e && e.postData && e.postData.contents) || '{}';
-    const body = JSON.parse(rawContent);
+    const raw = (e && e.postData && e.postData.contents) || '{}';
+    let body = {};
+    try {
+      body = JSON.parse(raw);
+    } catch (parseErr) {
+      throw Error('Invalid JSON in request body: ' + parseErr.message);
+    }
+
     const action = String(body.action || '').trim();
-    const data = body.data || {};
+    const data = (body.data && typeof body.data === 'object' && Object.keys(body.data).length > 0)
+      ? body.data
+      : body;
+    const reqId = body.requestId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
 
-    if (!action) throw Error('Action is required in POST payload');
+    if (!action) {
+      return errOut('MISSING_ACTION', 'Action field is required in request payload', reqId);
+    }
 
-    // Health & Setup
+    // Health
     if (action === 'health' || action === 'healthCheck') {
-      return out({ success: true, status: 'ok', app: 'POWER', spreadsheetId: SPREADSHEET_ID });
-    }
-    if (action === 'setup' || action === 'init' || action === 'database') {
-      return out(setupDatabase());
+      return out({ status: 'ok', spreadsheetId: SPREADSHEET_ID }, 'OK', reqId);
     }
 
-    // Auth & User Management
-    if (action === 'login') {
-      return out({ success: true, session: authenticateUser(body.idNo, body.password) });
+    // Initialize Database
+    if (action === 'setup' || action === 'init' || action === 'initializeDatabase') {
+      return out(initializeDatabase(), 'Database initialized', reqId);
     }
-    if (action === 'users' || action === 'getUsers') {
-      return out({ success: true, users: getRows('USERS').map(sanitizeUser) });
+
+    // Authentication
+    if (action === 'login' || action === 'authenticateUser') {
+      const idNo = body.idNo || body.loginId || data.idNo || data.loginId;
+      const password = body.password || data.password;
+      const session = authenticateUser(idNo, password);
+      return out({ session: session }, 'Login successful', reqId);
+    }
+
+    // User Management
+    if (action === 'getUsers' || action === 'users') {
+      return out({ users: getUsersList() }, 'Users retrieved', reqId);
     }
     if (action === 'createUser') {
-      return out({ success: true, user: createUser(data) });
+      const user = createUserAccount(data);
+      return out({ user: user }, 'User created successfully', reqId);
     }
     if (action === 'updateUser') {
-      const updated = updateRow('USERS', 'id', body.id, data);
-      invalidateUserCache(updated?.idNo || body?.idNo, body?.id);
-      return out({ success: true, user: sanitizeUser(updated) });
+      const targetId = body.id || body.idNo || data.id || data.idNo;
+      const res = updateUserAccount(targetId, data);
+      return out(res, 'User updated', reqId);
     }
-    if (action === 'updateUserStatus') {
-      const targetId = body.id || body.idNo;
-      const key = body.id ? 'id' : 'idNo';
-      const updated = updateRow('USERS', key, targetId, { status: body.status });
-      invalidateUserCache(body.idNo, body.id);
-      return out({ success: true, user: sanitizeUser(updated) });
+    if (action === 'holdUser' || action === 'updateUserStatus') {
+      const targetId = body.id || body.idNo || data.id || data.idNo;
+      const status = body.status || data.status || 'hold';
+      const res = updateUserAccount(targetId, { status: status });
+      return out(res, 'User status updated to ' + status, reqId);
     }
-    if (action === 'deleteUser') {
-      const targetId = String(body.id || body.idNo || '').toLowerCase();
-      if (targetId.indexOf('8695716192') >= 0 || targetId === 'admin') {
-        throw Error('Primary Admin account cannot be deleted');
-      }
-      const key = body.id ? 'id' : 'idNo';
-      deleteRow('USERS', key, body.id || body.idNo);
-      invalidateUserCache(body.idNo, body.id);
-      return out({ success: true, message: 'User deleted from Google Sheets' });
+    if (action === 'activateUser') {
+      const targetId = body.id || body.idNo || data.id || data.idNo;
+      const res = updateUserAccount(targetId, { status: 'active' });
+      return out(res, 'User activated', reqId);
     }
     if (action === 'changePassword') {
-      const cleanId = String(body.idNo || '').trim().toLowerCase();
-      const users = getRows('USERS');
-      const u = users.find(x => String(x.idNo).trim().toLowerCase() === cleanId);
-      if (!u) throw Error('User not found in Google Sheets');
-      const match = String(u.password).trim() === String(body.currentPassword).trim() || 
-        (u.passwordHash && u.passwordHash === sha(body.currentPassword));
-      if (!match) throw Error('Current password is incorrect');
-      updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
-      invalidateUserCache(u.idNo, u.id);
-      return out({ success: true, message: 'Password updated successfully in Google Sheets' });
+      const targetId = body.id || body.idNo || data.id || data.idNo;
+      const newPass = body.newPassword || data.newPassword || body.password || data.password;
+      const res = updateUserAccount(targetId, { password: newPass });
+      return out(res, 'Password changed successfully', reqId);
     }
-    if (action === 'resetPassword') {
-      const cleanId = String(body.idNo || '').trim().toLowerCase();
-      const users = getRows('USERS');
-      const u = users.find(x => {
-        const idMatch = String(x.idNo).trim().toLowerCase() === cleanId;
-        if (!idMatch) return false;
-        if (body.phone) {
-          return String(x.phone).replace(/\D/g, '') === String(body.phone).replace(/\D/g, '');
-        }
-        return true;
-      });
-      if (!u) throw Error('User verification failed in Google Sheets');
-      updateRow('USERS', 'id', u.id, { password: String(body.newPassword).trim() });
-      invalidateUserCache(u.idNo, u.id);
-      return out({ success: true, message: 'Password reset successfully in Google Sheets' });
+    if (action === 'deleteUser') {
+      const targetId = body.id || body.idNo || data.id || data.idNo;
+      const res = deleteUserAccount(targetId);
+      return out(res, 'User deleted', reqId);
     }
 
-    // Entries & CRUD Operations (Protected with LockService & Idempotency)
-    if (action === 'entries' || action === 'getMasterData') {
-      return out({ success: true, entries: queryEntries(body) });
-    }
-    if (action === 'stats' || action === 'getDashboardStats') {
-      return out({ success: true, stats: computeStats() });
-    }
+    // Record Submission & Management
     if (
+      action === 'submitRecord' ||
       action === 'createEntry' ||
       action === 'saveEntry' ||
       action === 'createNSC' ||
@@ -1433,119 +1257,75 @@ function doPost(e) {
       action === 'createMeterReplacement' ||
       action === 'createDTRReplacement'
     ) {
-      if (action === 'createNSC' || action === 'createNewConnection') data.category = data.category || 'NSC';
-      if (action === 'createDisconnection') data.category = data.category || 'DISCONNECTION';
-      if (action === 'createPoleCase') data.category = data.category || 'POLE CASE';
-      if (action === 'createMeterReplacement') data.category = data.category || 'METER REPLESMENT';
-      if (action === 'createDTRReplacement') data.category = data.category || 'DTR REPLESMENT';
-      return out(saveEntry(data));
+      if (action === 'createNSC' || action === 'createNewConnection') data.category = 'NSC';
+      if (action === 'createDisconnection') data.category = 'Disconnection';
+      if (action === 'createPoleCase') data.category = 'Broken';
+      if (action === 'createMeterReplacement') data.category = 'Meter Replacement';
+      if (action === 'createDTRReplacement') data.category = 'DTR Replacement';
+      const res = submitRecord(data);
+      return out(res, res.message, reqId);
     }
-    if (
-      action === 'updateEntry' ||
-      action === 'updateNSC' ||
-      action === 'updateNewConnection' ||
-      action === 'updateDisconnection' ||
-      action === 'updatePoleCase' ||
-      action === 'updateMeterReplacement' ||
-      action === 'updateDTRReplacement'
-    ) {
-      const targetId = body.id || data.id || body.submissionId || data.submissionId;
-      if (action === 'updateNSC' || action === 'updateNewConnection') data.category = data.category || 'NSC';
-      if (action === 'updateDisconnection') data.category = data.category || 'DISCONNECTION';
-      if (action === 'updatePoleCase') data.category = data.category || 'POLE CASE';
-      if (action === 'updateMeterReplacement') data.category = data.category || 'METER REPLESMENT';
-      if (action === 'updateDTRReplacement') data.category = data.category || 'DTR REPLESMENT';
-      const updated = updateEntryRecord(data, targetId);
-      return out({ success: true, entry: updated });
+
+    if (action === 'getRecords' || action === 'entries' || action === 'getMasterData') {
+      return out({ entries: queryRecords(body) }, 'Records retrieved', reqId);
     }
-    if (
-      action === 'deleteEntry' ||
-      action === 'deleteNSC' ||
-      action === 'deleteNewConnection' ||
-      action === 'deleteDisconnection' ||
-      action === 'deletePoleCase' ||
-      action === 'deleteMeterReplacement' ||
-      action === 'deleteDTRReplacement'
-    ) {
-      const targetId = body.id || data.id;
-      const subId = body.submissionId || data.submissionId;
-      let cat = body.category || data.category;
-      if (action === 'deleteNSC' || action === 'deleteNewConnection') cat = cat || 'NSC';
-      if (action === 'deleteDisconnection') cat = cat || 'DISCONNECTION';
-      if (action === 'deletePoleCase') cat = cat || 'POLE CASE';
-      if (action === 'deleteMeterReplacement') cat = cat || 'METER REPLESMENT';
-      if (action === 'deleteDTRReplacement') cat = cat || 'DTR REPLESMENT';
-      removeEntry(targetId, subId, cat);
-      return out({ success: true, message: 'Entry deleted successfully from Google Sheets' });
+
+    if (action === 'getDashboard' || action === 'stats') {
+      return out({ stats: computeDashboardStats() }, 'Stats computed', reqId);
     }
-    if (action === 'cleanupDuplicates' || action === 'deduplicateSheets') {
-      return out(cleanupDuplicateRecords(body.sheetName));
-    }
-    if (action === 'clearEntries') {
-      const s = getSheet('MASTER_DATA');
-      if (s.getLastRow() > 1) {
-        s.deleteRows(2, s.getLastRow() - 1);
-      }
-      return out({ success: true, message: 'All entries cleared from Google Sheets' });
-    }
-    if (action === 'sync' || action === 'bulkSync') {
-      const items = body.entries || body.data || [];
-      return out(bulkSyncEntries(items));
+
+    if (action === 'refresh') {
+      return out({
+        users: getUsersList(),
+        entries: queryRecords(body),
+        stats: computeDashboardStats(),
+        workOrders: getWorkOrdersList()
+      }, 'Refreshed from Google Sheets', reqId);
     }
 
     // Work Orders
-    if (action === 'workorders' || action === 'getWorkOrders') {
-      return out({ success: true, workOrders: getRows('WORK_ORDERS').reverse() });
+    if (action === 'uploadWorkOrder' || action === 'createWorkOrder') {
+      const wo = uploadWorkOrder(data);
+      return out({ workOrder: wo }, 'Work order uploaded successfully', reqId);
     }
-    if (action === 'createWorkOrder' || action === 'uploadWorkOrder') {
-      return out({ success: true, workOrder: saveWorkOrder(data) });
-    }
-    if (action === 'toggleWorkOrder') {
-      const updated = updateRow('WORK_ORDERS', 'id', body.id, { isHidden: Boolean(body.isHidden) });
-      return out({ success: true, workOrder: updated });
+    if (action === 'getWorkOrders' || action === 'workorders') {
+      return out({ workOrders: getWorkOrdersList(body.category) }, 'Work orders retrieved', reqId);
     }
     if (action === 'deleteWorkOrder') {
-      deleteRow('WORK_ORDERS', 'id', body.id);
-      return out({ success: true, message: 'Work order deleted from Google Sheets' });
+      const res = deleteWorkOrder(body.id || data.id);
+      return out(res, 'Work order deleted', reqId);
     }
 
     // Live Chat
-    if (action === 'chat' || action === 'getChat') {
-      return out({ success: true, messages: getRows('CHAT') });
+    if (action === 'getChat' || action === 'chat') {
+      return out({ messages: getSheetRows('Chat') }, 'Chat messages retrieved', reqId);
     }
     if (action === 'sendChat') {
       const msg = {
-        id: data.id || generateId('MSG'),
+        id: generateId('MSG'),
         workerId: data.workerId || data.senderId || '',
-        senderId: data.senderId || 'anonymous',
+        senderId: data.senderId || 'user',
         senderName: data.senderName || 'User',
         senderRole: data.senderRole || 'worker',
         recipientId: data.recipientId || 'all',
-        recipientRole: data.recipientRole || (data.senderRole === 'worker' ? 'admin' : 'worker'),
+        recipientRole: data.recipientRole || 'admin',
         message: String(data.message || '').trim(),
-        timestamp: data.timestamp || now(),
-        status: data.status || 'sent',
+        timestamp: now(),
+        status: 'sent',
         createdAt: now()
       };
-      appendRow('CHAT', msg);
-      return out({ success: true, message: msg });
-    }
-    if (action === 'clearChat') {
-      const s = getSheet('CHAT');
-      if (s.getLastRow() > 1) {
-        s.deleteRows(2, s.getLastRow() - 1);
-      }
-      return out({ success: true, message: 'Chat history cleared in Google Sheets' });
+      appendSheetRecord('Chat', msg);
+      return out({ message: msg }, 'Message sent', reqId);
     }
 
     // Activity Log
     if (action === 'logActivity') {
-      logActivity(data.userId, data.idNo, data.userName, data.role, data.activityAction, data.details);
-      return out({ success: true });
+      logSystemActivity(data.userId, data.idNo, data.userName, data.role, data.action, data.details);
+      return out({ logged: true }, 'Activity logged', reqId);
     }
 
-    throw Error('Unknown POST action: ' + action);
+    return errOut('UNKNOWN_POST_ACTION', 'Unrecognized POST action: ' + action, reqId);
   } catch (err) {
-    return out({ success: false, error: String(err.message || err) });
+    return errOut('SERVER_ERROR', String(err.message || err));
   }
 }

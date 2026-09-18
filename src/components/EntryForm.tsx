@@ -55,6 +55,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   const [loading, setLoading] = useState(false);
   const isSubmittingRef = useRef<boolean>(false);
+  const submissionIdRef = useRef<string>(
+    `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`
+  );
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submissionModalEntry, setSubmissionModalEntry] = useState<PowerEntry | null>(null);
   const [fetchingGps, setFetchingGps] = useState(false);
@@ -402,7 +405,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     setLoading(true);
     setSuccessMessage(null);
 
-    const submissionId = `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+    if (!submissionIdRef.current) {
+      submissionIdRef.current = `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+    }
+    const submissionId = submissionIdRef.current;
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
@@ -534,6 +540,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       setSuccessMessage(t.entryCreatedSuccess);
       setSubmissionModalEntry(created);
       onSuccess(created);
+      // Reset submissionId for the NEXT fresh entry only after successful submission
+      submissionIdRef.current = `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     } catch (err: any) {
       console.error('Error creating entry in Google Sheets:', err);
       const errMsg = err?.message || 'Check network connection';

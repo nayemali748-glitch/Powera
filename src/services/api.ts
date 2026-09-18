@@ -109,7 +109,8 @@ export async function callGasApi<T = any>(
       }
 
       if (data && data.success === false && data.error) {
-        throw new Error(data.error);
+        const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || data.message || 'Google Sheets request failed');
+        throw new Error(errMsg);
       }
       return data as T;
     } catch (err: any) {
@@ -179,7 +180,8 @@ export async function callGasApi<T = any>(
     }
 
     if (data && data.success === false && data.error) {
-      throw new Error(data.error);
+      const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || data.message || 'Google Sheets request failed');
+      throw new Error(errMsg);
     }
 
     return data as T;

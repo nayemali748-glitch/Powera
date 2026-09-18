@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import dns from 'dns';
-import crypto from 'crypto';
 
 // Ensure IPv4 resolution first for stable script.google.com connection
 try {
@@ -21,484 +20,51 @@ interface CacheEntry {
 }
 const gasCache = new Map<string, CacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const CACHE_TTL_MS = 12000; // 12 seconds
-const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users']);
+const CACHE_TTL_MS = 6000; // 6 seconds for high-frequency reads
+const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat']);
 
-// Helper to communicate with Google Apps Script Web App (Single source of truth)
-async function callGoogleAppsScript(
-  action: string, 
-  payload: any = {}, 
-  method: 'GET' | 'POST' = 'POST',
-  timeoutMs = 45000
-): Promise<any> {
-  let finalAction = action;
-  let finalPayload = { ...payload };
-
-  // Canonical action normalization for Google Apps Script
-  const catCreateActions = [
-    'createNSC', 'createNewConnection', 'createDisconnection',
-    'createPoleCase', 'createMeterReplacement', 'createDTRReplacement',
-    'saveEntry', 'saveRecord', 'createRecord'
-  ];
-  if (catCreateActions.includes(action)) {
-    finalAction = 'createEntry';
-    if (!finalPayload.data) finalPayload.data = {};
-    if (!finalPayload.data.category) {
-      if (action === 'createNSC' || action === 'createNewConnection') finalPayload.data.category = 'NSC';
-      else if (action === 'createDisconnection') finalPayload.data.category = 'DISCONNECTION';
-      else if (action === 'createPoleCase') finalPayload.data.category = 'POLE CASE';
-      else if (action === 'createMeterReplacement') finalPayload.data.category = 'METER REPLESMENT';
-      else if (action === 'createDTRReplacement') finalPayload.data.category = 'DTR REPLESMENT';
-    }
-  }
-
-  // Also support saveUser / register alias
-  if (action === 'saveUser' || action === 'register') {
-    finalAction = 'createUser';
-  }
-
-  // Intercept any large base64 photo/video evidence so only metadata and short URL are stored in Google Sheets
-  if (finalPayload && finalPayload.data) {
-    processPhotoEvidencePayload(finalPayload.data);
-  }
-
-  // Invalidate cache on mutations
-  const isMutation = finalAction.startsWith('create') || 
-                     finalAction.startsWith('update') || 
-                     finalAction.startsWith('delete') || 
-                     finalAction.startsWith('clear') || 
-                     finalAction.startsWith('change') || 
-                     finalAction.startsWith('toggle');
-
-  if (isMutation) {
-    gasCache.clear();
-  }
-
-  // Check read cache & in-flight deduplication
-  const isReadAction = READ_ACTIONS.has(finalAction);
-  const cacheKey = `${finalAction}_${JSON.stringify(finalPayload)}`;
-
-  if (isReadAction && !isMutation) {
-    const cached = gasCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-      return cached.data;
-    }
-
-    if (inFlightRequests.has(cacheKey)) {
-      return inFlightRequests.get(cacheKey);
-    }
-  }
-
-  const executionPromise = (async () => {
-    const maxAttempts = isMutation ? 1 : 2;
-    let lastError: any = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const controller = new AbortController();
-      const currentTimeoutMs = isMutation ? Math.min(timeoutMs, 18000) : timeoutMs;
-      const timeoutId = setTimeout(() => {
-        try { controller.abort(); } catch {}
-      }, currentTimeoutMs);
-
-      try {
-        const url = GOOGLE_APPS_SCRIPT_URL;
-        let finalRes: Response;
-
-        if (method === 'GET') {
-          const sep = url.includes('?') ? '&' : '?';
-          const queryParams: Record<string, string> = { action: finalAction };
-          for (const [key, value] of Object.entries(finalPayload)) {
-            if (value !== undefined && value !== null) {
-              queryParams[key] = String(value);
-            }
-          }
-          queryParams['_t'] = Date.now().toString();
-          const params = new URLSearchParams(queryParams);
-          const getUrl = `${url}${sep}${params.toString()}`;
-
-          finalRes = await fetch(getUrl, {
-            method: 'GET',
-            signal: controller.signal,
-            redirect: 'follow',
-            headers: { 
-              'Accept': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (compatible; PowerUtilityBot/1.0)'
-            },
-          });
-        } else {
-          const body = JSON.stringify({ action: finalAction, ...finalPayload });
-          finalRes = await fetch(url, {
-            method: 'POST',
-            signal: controller.signal,
-            redirect: 'follow',
-            headers: {
-              'Content-Type': 'text/plain;charset=utf-8',
-              'Accept': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (compatible; PowerUtilityBot/1.0)'
-            },
-            body
-          });
-        }
-
-        // In case an intermediate 30x was returned without auto-follow
-        let currentRes = finalRes;
-        let hops = 0;
-        while (
-          (currentRes.status === 301 || currentRes.status === 302 || currentRes.status === 303 || currentRes.status === 307 || currentRes.status === 308) &&
-          hops < 3
-        ) {
-          const redirectUrl = currentRes.headers.get('location');
-          if (!redirectUrl) break;
-          hops++;
-          currentRes = await fetch(redirectUrl, {
-            method: 'GET',
-            signal: controller.signal,
-            headers: { 
-              'Accept': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (compatible; PowerUtilityBot/1.0)'
-            }
-          });
-        }
-        finalRes = currentRes;
-
-        const text = await finalRes.text();
-
-        // Check if response is HTML (e.g. Google login or temporary lock error)
-        if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
-          console.warn(`[GoogleAppsScript] action "${finalAction}" attempt ${attempt} returned HTML instead of JSON`);
-          if (attempt < maxAttempts) {
-            await new Promise(r => setTimeout(r, 1000 * attempt));
-            continue;
-          }
-          lastError = new Error('Google Sheets is temporarily busy or locked. Please try again in a few seconds.');
-          break;
-        }
-
-        try {
-          const parsed = JSON.parse(text);
-          if (isReadAction && parsed && parsed.success !== false) {
-            gasCache.set(cacheKey, { data: parsed, timestamp: Date.now() });
-          }
-          return parsed;
-        } catch {
-          if (attempt < maxAttempts) {
-            await new Promise(r => setTimeout(r, 1000 * attempt));
-            continue;
-          }
-          lastError = new Error('Google Sheets returned an unexpected response format. Please try again.');
-        }
-      } catch (err: any) {
-        if (err && err.name === 'AbortError') {
-          console.warn(`[GoogleAppsScript] action "${action}" timed out after ${timeoutMs}ms.`);
-          lastError = new Error('Backend request timed out. Please try again.');
-        } else {
-          lastError = err;
-        }
-        if (attempt < maxAttempts) {
-          console.warn(`[GoogleAppsScript] Retrying action "${action}" after error:`, err?.message || err);
-          await new Promise(r => setTimeout(r, 1000 * attempt));
-        }
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }
-
-    // Stale-while-error fallback: if we have any cached data for read actions, return it to prevent user errors
-    const stale = gasCache.get(cacheKey);
-    if (stale && stale.data) {
-      console.warn(`[GoogleAppsScript] Serving memory cached data for "${action}" due to upstream temporary failure.`);
-      return stale.data;
-    }
-
-    // Safe fallback from local persistent storage so frontend never crashes or shows red errors
-    if (finalAction === 'entries') {
-      const diskEntries = readEntries();
-      console.warn(`[GoogleAppsScript] Providing disk cached entries (${diskEntries.length} items) for "${action}".`);
-      return { success: true, entries: diskEntries, fallback: true };
-    }
-    if (finalAction === 'workorders') {
-      const diskOrders = readWorkOrders();
-      console.warn(`[GoogleAppsScript] Providing disk cached work orders (${diskOrders.length} items) for "${action}".`);
-      return { success: true, workOrders: diskOrders, fallback: true };
-    }
-    if (finalAction === 'users') {
-      const diskUsers = readUsers();
-      console.warn(`[GoogleAppsScript] Providing disk cached users (${diskUsers.length} items) for "${action}".`);
-      return { success: true, users: diskUsers, fallback: true };
-    }
-    if (finalAction === 'stats') {
-      const entries = readEntries();
-      return {
-        success: true,
-        stats: {
-          total: entries.length,
-          categories: {
-            NSC: entries.filter((e: any) => e.category === 'NSC').length,
-            DISCONNECTION: entries.filter((e: any) => e.category === 'DISCONNECTION').length,
-            POLE_CASE: entries.filter((e: any) => e.category === 'POLE CASE').length,
-            METER_REPLESMENT: entries.filter((e: any) => e.category === 'METER REPLESMENT').length,
-            DTR_REPLESMENT: entries.filter((e: any) => e.category === 'DTR REPLESMENT').length,
-          },
-          status: {
-            pending: entries.filter((e: any) => e.status === 'Pending').length,
-            completed: entries.filter((e: any) => e.status === 'Completed').length,
-            approved: entries.filter((e: any) => e.status === 'Approved').length,
-          }
-        },
-        fallback: true
-      };
-    }
-
-    console.error(`[GoogleAppsScript] action "${action}" failed after ${maxAttempts} attempts:`, lastError?.message || lastError);
-    throw lastError || new Error('Failed to communicate with Google Sheets');
-  })();
-
-  if (isReadAction && !isMutation) {
-    inFlightRequests.set(cacheKey, executionPromise);
-    try {
-      return await executionPromise;
-    } finally {
-      inFlightRequests.delete(cacheKey);
-    }
-  }
-
-  return executionPromise;
+// Strict Idempotency Submission Map (15 minutes TTL)
+interface IdempotencyRecord {
+  timestamp: number;
+  result: any;
 }
+const submissionIdMap = new Map<string, IdempotencyRecord>();
+const inFlightSubmissions = new Map<string, Promise<any>>();
+const SUBMISSION_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-const app = express();
-const PORT = 3000;
-
-app.use(express.json({ limit: '80mb' }));
-app.use(express.urlencoded({ limit: '80mb', extended: true }));
-
-// Ensure uploads directory exists for photos / evidence files
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-try {
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-} catch (e) {
-  console.warn('Could not create uploads directory:', e);
-}
-app.use('/uploads', express.static(uploadsDir));
-
-// Helper to save base64 data to local file and return metadata for Google Sheets
-function processPhotoEvidencePayload(entryData: any): void {
-  if (!entryData || typeof entryData !== 'object') return;
-  const rawPhoto = entryData.photoUrl || entryData.fileData || entryData.evidence;
-  if (typeof rawPhoto === 'string' && rawPhoto.startsWith('data:')) {
-    try {
-      const match = rawPhoto.match(/^data:([A-Za-z0-9\/+.-]+);base64,(.+)$/);
-      if (match) {
-        const mimeType = match[1];
-        const buffer = Buffer.from(match[2], 'base64');
-        const ext = mimeType.includes('png') ? 'png' : mimeType.includes('video') ? 'mp4' : 'jpg';
-        const fileId = `FILE-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-        const fileName = `${fileId}.${ext}`;
-        const filePath = path.join(uploadsDir, fileName);
-        fs.writeFileSync(filePath, buffer);
-
-        const fileUrl = `/uploads/${fileName}`;
-        entryData.photoUrl = fileUrl;
-        entryData.fileUrl = fileUrl;
-        entryData.fileId = fileId;
-        entryData.fileName = fileName;
-        entryData.fileType = mimeType;
-        entryData.uploadTime = new Date().toISOString();
-      }
-    } catch (err) {
-      console.warn('Failed to process photo evidence payload:', err);
+// Clean old idempotency records periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [subId, record] of submissionIdMap.entries()) {
+    if (now - record.timestamp > SUBMISSION_IDEMPOTENCY_TTL_MS) {
+      submissionIdMap.delete(subId);
     }
   }
-}
+}, 60000);
 
-// Ensure data directory exists for local non-user data (entries and chat)
-let DATA_DIR = path.join(process.cwd(), 'data');
-try {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-} catch {
-  try {
-    const tmpDir = process.env.TMPDIR || '/tmp';
-    DATA_DIR = path.join(tmpDir, 'power_data');
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+// Bengali digit normalizer
+function normalizeUniversal(val: any): string {
+  if (val === null || val === undefined) return '';
+  const str = String(val).trim();
+  const bengaliDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  let res = '';
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    const bIdx = bengaliDigits.indexOf(ch);
+    if (bIdx >= 0) {
+      res += bIdx.toString();
+    } else {
+      res += ch;
     }
-  } catch {
-    // Keep in-memory cache if filesystem is strictly read-only
   }
+  return res;
 }
-
-const DATA_FILE = path.join(DATA_DIR, 'entries.json');
-const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
-const WORK_ORDERS_FILE = path.join(DATA_DIR, 'work_orders.json');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-
-// Security Middleware & Headers
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(self), camera=(self), microphone=()');
-  next();
-});
-
-// In-memory cache variables
-let cachedEntries: any[] | null = null;
-let cachedWorkOrders: any[] | null = null;
-let cachedChat: any[] | null = null;
-let cachedUsers: any[] | null = null;
-
-// Helper to read users
-function readUsers(): any[] {
-  if (cachedUsers) return cachedUsers;
-  try {
-    if (!fs.existsSync(USERS_FILE)) {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), 'utf-8');
-      cachedUsers = [];
-      return [];
-    }
-    const content = fs.readFileSync(USERS_FILE, 'utf-8');
-    const parsed = JSON.parse(content || '[]');
-    const clean = Array.isArray(parsed) ? parsed : [];
-    cachedUsers = clean;
-    return clean;
-  } catch (err) {
-    console.error('Error reading users:', err);
-    return [];
-  }
-}
-
-// Helper to write users
-function writeUsers(users: any[]) {
-  cachedUsers = users;
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Filesystem write warning (users cached in memory):', err);
-  }
-}
-
-// Helper to read live chat messages
-function readChat() {
-  if (cachedChat) return cachedChat;
-  try {
-    if (!fs.existsSync(CHAT_FILE)) {
-      fs.writeFileSync(CHAT_FILE, JSON.stringify([], null, 2), 'utf-8');
-      cachedChat = [];
-      return [];
-    }
-    const content = fs.readFileSync(CHAT_FILE, 'utf-8');
-    const parsed = JSON.parse(content || '[]');
-    cachedChat = parsed;
-    return parsed;
-  } catch (err) {
-    console.error('Error reading chat:', err);
-    return [];
-  }
-}
-
-// Helper to write live chat messages
-function writeChat(messages: any[]) {
-  cachedChat = messages;
-  try {
-    fs.writeFileSync(CHAT_FILE, JSON.stringify(messages, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing chat:', err);
-  }
-}
-
-// Helper to read work order / khata notices
-function readWorkOrders() {
-  if (cachedWorkOrders) return cachedWorkOrders;
-  try {
-    if (!fs.existsSync(WORK_ORDERS_FILE)) {
-      fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify([], null, 2), 'utf-8');
-      cachedWorkOrders = [];
-      return [];
-    }
-    const content = fs.readFileSync(WORK_ORDERS_FILE, 'utf-8');
-    const parsed = JSON.parse(content || '[]');
-    cachedWorkOrders = parsed;
-    return parsed;
-  } catch (err) {
-    console.error('Error reading work orders:', err);
-    return [];
-  }
-}
-
-// Helper to write work order / khata notices
-function writeWorkOrders(orders: any[]) {
-  cachedWorkOrders = orders;
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(WORK_ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Filesystem write warning (orders cached in memory):', err);
-  }
-}
-
-// Initial power utility entries (empty by default - no demo records)
-const INITIAL_ENTRIES: any[] = [];
-
-// Helper to read entries
-function readEntries() {
-  if (cachedEntries) return cachedEntries;
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), 'utf-8');
-      cachedEntries = [];
-      return [];
-    }
-    const content = fs.readFileSync(DATA_FILE, 'utf-8');
-    const parsed = JSON.parse(content || '[]');
-    const clean = Array.isArray(parsed) ? parsed.filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== ''))) : [];
-    cachedEntries = clean;
-    return clean;
-  } catch (err) {
-    console.error('Error reading entries:', err);
-    return [];
-  }
-}
-
-// Helper to write entries
-function writeEntries(entries: any[]) {
-  cachedEntries = entries;
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Filesystem write warning (entries cached in memory):', err);
-  }
-}
-
-// REST API Endpoints & Health checks for Cloud Run deployment probes
-app.get(['/health', '/healthz', '/api/health'], (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.status(200).json({ status: 'ok', app: 'POWER Utility Management' });
-});
 
 // Normalizer for Google Sheets column shifts and display headers
 function normalizeServerEntry(entry: any): any {
   if (!entry || typeof entry !== 'object') return entry;
   const raw: any = { ...entry };
 
-  // Map Google Sheet display headers and alternative keys into canonical camelCase properties
   raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || '';
   raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || '';
   raw.category = raw.category || raw['Category'] || 'NSC';
@@ -550,1309 +116,518 @@ function normalizeServerEntry(entry: any): any {
   raw.photoUrl = raw.photoUrl || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
   raw.notes = raw.notes || raw['Notes'] || '';
 
-  const cName = String(raw.consumerName || '').trim();
-  const cId = String(raw.consumerId || '').trim();
-  const mNo = String(raw.meterNo || '').trim();
-  const initR = String(raw.initialReading || '').trim();
-  const fName = String(raw.feederName || '').trim();
-  const sub = String(raw.substation || '').trim();
-  const workOrd = String(raw.workOrderNo || '').trim();
-  const notesVal = String(raw.notes || '').trim();
-  const updatedVal = String(raw.updatedAt || '').trim();
-
-  const isShifted =
-    (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
-    (initR && /^APP/i.test(initR)) ||
-    (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
-    (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
-    (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11')));
-
-  if (isShifted) {
-    const isMobileInWorkOrder = /^[6-9]\d{9}$/.test(workOrd.replace(/\D/g, ''));
-    const isAppliedLoadInNotes = /kw|hp|phase|w|load/i.test(notesVal);
-    const isPhaseInUpdatedAt = /phase/i.test(updatedVal);
-
-    return {
-      ...raw,
-      id: String(raw.id || '').trim(),
-      category: raw.category || 'NSC',
-      status: raw.status || 'Completed',
-      date: raw.date || raw.createdAt || new Date().toISOString(),
-      createdAt: raw.createdAt || raw.date || new Date().toISOString(),
-      workerName: String(raw.workerName || '').trim(),
-      workerPhone: String(raw.substation || raw.workerPhone || '').trim(),
-      substation: String(raw.feederName || raw.substation || '').trim(),
-      feederName: String(raw.consumerId || raw.feederName || '').trim(),
-      consumerId: String(raw.consumerName || raw.consumerId || '').trim(),
-      consumerName: String(raw.meterNo || raw.consumerName || '').trim(),
-      fatherName: String(raw.sealNo || raw.fatherName || '').trim(),
-      applicationNo: String(raw.initialReading || raw.applicationNo || '').trim(),
-      meterNo: String(raw.finalReading || (mNo.includes(' ') ? '' : raw.meterNo) || '').trim(),
-      sealNo: String(raw.address || raw.sealNo || '').trim(),
-      initialReading: String(raw.initialReading && !/^APP/i.test(raw.initialReading) ? raw.initialReading : (raw.finalReading || '000000')).trim(),
-      finalReading: '',
-      mobile: isMobileInWorkOrder ? workOrd : (raw.mobile || ''),
-      address: String(raw.locationGps || raw.address || '').trim(),
-      workOrderNo: isMobileInWorkOrder ? '' : String(raw.workOrderNo || '').trim(),
-      locationGps: isAppliedLoadInNotes ? '' : String(raw.locationGps || '').trim(),
-      appliedLoad: isAppliedLoadInNotes ? notesVal : (raw.appliedLoad || ''),
-      phase: isPhaseInUpdatedAt ? updatedVal : (raw.phase || '1 Phase'),
-      notes: isAppliedLoadInNotes || isPhaseInUpdatedAt ? '' : String(raw.notes || '').trim(),
-      photoUrl: String(raw.photoUrl && (raw.photoUrl.startsWith('http') || raw.photoUrl.startsWith('data:')) ? raw.photoUrl : (raw.directImageUrl || '')),
-      updatedAt: String(raw[''] || raw.updatedAt || raw.createdAt || new Date().toISOString())
-    };
-  }
-
   return raw;
 }
 
-// Get all entries with optional category/status/search query (from Google Sheets via GAS)
-app.get('/api/entries', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { category, status, search } = req.query;
+// Canonical Apps Script Communicator (Single Source of Truth)
+async function callGoogleAppsScript(
+  action: string, 
+  payload: any = {}, 
+  method: 'GET' | 'POST' = 'POST',
+  timeoutMs = 45000
+): Promise<any> {
+  let finalAction = action;
+  let finalPayload = { ...payload };
 
-  try {
-    const result = await callGoogleAppsScript('entries', req.query, 'GET', 15000);
-    if (result && result.success && Array.isArray(result.entries)) {
-      const cleanList = result.entries
-        .map(normalizeServerEntry)
-        .filter((e: any) => e && ((e.id && String(e.id).trim() !== '') || (e.consumerName && String(e.consumerName).trim() !== '') || (e.category && String(e.category).trim() !== '')));
-      
-      // Deduplicate to guarantee single record per submission
-      const seenKeys = new Set<string>();
-      const dedupedList: any[] = [];
-      for (const e of cleanList) {
-        const subId = e.submissionId ? String(e.submissionId).trim() : '';
-        const idVal = e.id ? String(e.id).trim() : '';
-        const catVal = String(e.category || '').trim().toUpperCase();
-        const consVal = String(e.consumerId || '').trim().toLowerCase();
-        const meterVal = String(e.meterNo || '').trim().toLowerCase();
-        const appNo = String(e.applicationNo || '').trim().toLowerCase();
-
-        let key = '';
-        if (subId && subId.startsWith('SUB-')) key = `SUB:${subId}`;
-        else if (idVal && idVal.startsWith('PWR-')) key = `ID:${idVal}`;
-        else if (consVal && meterVal) key = `DATA:${catVal}:${consVal}:${meterVal}`;
-        else if (appNo) key = `APP:${catVal}:${appNo}`;
-        else key = `RAW:${idVal || Math.random()}`;
-
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          dedupedList.push(e);
-        }
-      }
-
-      writeEntries(dedupedList);
-      return res.json(dedupedList);
-    }
-  } catch (e) {
-    console.warn('Failed to fetch entries from Google Sheets, using local cache:', e);
-  }
-
-  let entries = readEntries().map(normalizeServerEntry);
-  if (category && category !== 'ALL') {
-    entries = entries.filter((e: any) => e.category === category);
-  }
-  if (status && status !== 'ALL') {
-    entries = entries.filter((e: any) => e.status === status);
-  }
-  if (search && typeof search === 'string') {
-    const q = search.toLowerCase();
-    entries = entries.filter((e: any) => 
-      (e.id && e.id.toLowerCase().includes(q)) ||
-      (e.consumerName && e.consumerName.toLowerCase().includes(q)) ||
-      (e.consumerId && e.consumerId.toLowerCase().includes(q)) ||
-      (e.poleNo && e.poleNo.toLowerCase().includes(q)) ||
-      (e.meterNo && e.meterNo.toLowerCase().includes(q)) ||
-      (e.oldMeterNo && e.oldMeterNo.toLowerCase().includes(q)) ||
-      (e.newMeterNo && e.newMeterNo.toLowerCase().includes(q)) ||
-      (e.dtrName && e.dtrName.toLowerCase().includes(q)) ||
-      (e.workerName && e.workerName.toLowerCase().includes(q)) ||
-      (e.address && e.address.toLowerCase().includes(q)) ||
-      (e.feederName && e.feederName.toLowerCase().includes(q))
-    );
-  }
-  res.json(entries);
-});
-
-// Create or update entry in Google Sheets with local persistence guarantee
-app.post('/api/entries', async (req, res) => {
-  try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const submissionId = req.body.submissionId || `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-    const newEntry = {
-      ...req.body,
-      submissionId,
-      id: req.body.id || `PWR-${Date.now().toString().slice(-6)}`,
-      date: req.body.date || req.body.createdAt || new Date().toISOString(),
-      createdAt: req.body.createdAt || req.body.date || new Date().toISOString(),
-      status: req.body.status || 'Completed'
-    };
-
-    // 1. Immediately persist locally so user record is NEVER lost
-    const entries = readEntries();
-    const existingIndex = entries.findIndex((e: any) => 
-      (e.submissionId && e.submissionId === newEntry.submissionId) || e.id === newEntry.id
-    );
-    if (existingIndex !== -1) {
-      entries[existingIndex] = { ...entries[existingIndex], ...newEntry };
-    } else {
-      entries.unshift(newEntry);
-    }
-    writeEntries(entries);
-
-    // 2. Sync to Google Sheets
-    let result: any = null;
-    try {
-      result = await callGoogleAppsScript('createEntry', { data: newEntry }, 'POST', 15000);
-    } catch (e: any) {
-      console.warn('Sync entry to Google Sheets delayed or failed (safely stored locally):', e?.message || e);
-    }
-
-    const savedEntry = (result && (result.entry || result.data)) ? (result.entry || result.data) : newEntry;
-    if (result && (result.entry || result.data)) {
-      const idx = entries.findIndex((e: any) => 
-        (e.submissionId && e.submissionId === savedEntry.submissionId) || e.id === savedEntry.id
-      );
-      if (idx !== -1) {
-        entries[idx] = { ...entries[idx], ...savedEntry };
-        writeEntries(entries);
-      }
-    }
-
-    return res.status(201).json({ 
-      success: true, 
-      message: 'তথ্য সফলভাবে সংরক্ষিত হয়েছে (Data saved successfully)', 
-      entry: savedEntry 
-    });
-  } catch (error: any) {
-    console.error('Error saving entry:', error);
-    res.status(500).json({ success: false, error: error.message || 'Failed to save entry' });
-  }
-});
-
-// Bulk sync endpoint for offline submissions
-app.post('/api/entries/bulk', async (req, res) => {
-  try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { entries: incomingList } = req.body;
-    if (!Array.isArray(incomingList)) {
-      return res.status(400).json({ error: 'Array of entries is required' });
-    }
-    const currentEntries = readEntries();
-    for (const item of incomingList) {
-      const idx = currentEntries.findIndex((e: any) => e.id === item.id);
-      if (idx !== -1) {
-        currentEntries[idx] = { ...currentEntries[idx], ...item };
-      } else {
-        currentEntries.unshift(item);
-      }
-    }
-    writeEntries(currentEntries);
-
-    try {
-      await callGoogleAppsScript('bulkSync', { entries: incomingList }, 'POST');
-    } catch (e) {
-      console.warn('Failed to bulk sync entries to Google Sheets:', e);
-    }
-
-    res.json({ success: true, count: incomingList.length });
-  } catch (error: any) {
-    console.error('Bulk sync error:', error);
-    res.status(500).json({ error: 'Failed to bulk sync entries' });
-  }
-});
-
-// Update status or notes in Google Sheets
-app.patch('/api/entries/:id', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  const entries = readEntries();
-  const index = entries.findIndex((e: any) => e.id === id);
-
-  if (index !== -1) {
-    entries[index] = { ...entries[index], ...req.body, updatedAt: new Date().toISOString() };
-    writeEntries(entries);
-  }
-
-  try {
-    const result = await callGoogleAppsScript('updateEntry', { id, data: req.body }, 'POST');
-    if (result && result.entry) {
-      return res.json({ success: true, entry: result.entry });
-    }
-  } catch (e) {
-    console.warn('Failed to update entry in Google Sheets:', e);
-  }
-
-  if (index === -1) {
-    return res.status(404).json({ error: 'Entry not found' });
-  }
-
-  res.json({ success: true, entry: entries[index] });
-});
-
-// Delete entry (Admin only) from Google Sheets
-app.delete('/api/entries/:id', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  let entries = readEntries();
-  entries = entries.filter((e: any) => e.id !== id);
-  writeEntries(entries);
-
-  try {
-    await callGoogleAppsScript('deleteEntry', { id }, 'POST');
-  } catch (e) {
-    console.warn('Failed to delete entry in Google Sheets:', e);
-  }
-
-  res.json({ success: true, message: 'Entry deleted successfully' });
-});
-
-// Clear all entries (Admin only) from Google Sheets
-app.delete('/api/entries', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  writeEntries([]);
-
-  try {
-    await callGoogleAppsScript('clearEntries', {}, 'POST');
-  } catch (e) {
-    console.warn('Failed to clear entries in Google Sheets:', e);
-  }
-
-  res.json({ success: true, message: 'All entries deleted successfully' });
-});
-
-// Sync and inspect NSC headers in Google Sheets
-app.get('/api/nsc-headers', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  try {
-    const result = await callGoogleAppsScript('getNscHeaders', {}, 'GET');
-    return res.json(result || { success: true });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, error: e.message || String(e) });
-  }
-});
-
-app.post('/api/sync-nsc-headers', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  try {
-    const result = await callGoogleAppsScript('syncNscHeaders', {}, 'POST');
-    return res.json(result || { success: true, message: 'NSC headers verified' });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, error: e.message || String(e) });
-  }
-});
-
-// User Authentication & Management Endpoints (Persisted in Google Sheets via Google Apps Script)
-
-// Helper to normalize Unicode, non-ASCII numerals (Bengali, Hindi, Arabic), dashes and invisible spaces
-function normalizeUniversal(val: any): string {
-  if (val === null || val === undefined) return '';
-  let s = String(val);
-  try {
-    s = s.normalize('NFKC');
-  } catch {
-    // ignore
-  }
-  // Strip zero-width, BOM, non-breaking spaces
-  s = s.replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F\u180E\u202F\u205F\u3000\u00AD]/g, '');
-  // Bengali numerals ০-৯
-  s = s.replace(/[\u09E6-\u09EF]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x09E6 + 48));
-  // Devanagari numerals ०-९
-  s = s.replace(/[\u0966-\u096F]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x0966 + 48));
-  // Arabic-Indic numerals ٠-٩
-  s = s.replace(/[\u0660-\u0669]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x0660 + 48));
-  // Eastern Arabic numerals ۰-۹
-  s = s.replace(/[\u06F0-\u06F9]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x06F0 + 48));
-  // Standardize various dash symbols to ASCII '-'
-  s = s.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
-  return s.trim();
-}
-
-// ==========================================================
-// USER MANAGEMENT & AUTHENTICATION (FAULT-TOLERANT & LIVE SYNC)
-// ==========================================================
-
-function hashSha256(text: string): string {
-  try {
-    return crypto.createHash('sha256').update(text).digest('hex');
-  } catch {
-    return '';
-  }
-}
-
-// Find user record by ID, ID No, Phone, Name, Email, or Badge No with universal Bengali & numeral normalization
-function matchUserRecord(loginId: string, users: any[], cleanPass?: string): any | null {
-  if (!loginId || !Array.isArray(users)) return null;
-  const clean = normalizeUniversal(loginId).toLowerCase().trim();
-  const rawClean = clean.replace(/[^a-z0-9]/g, '');
-
-  // 1. Master Admin Aliases: 'admin', 'controller', 'nayem', phone, email
-  const isAdminAlias = [
-    '8695716192', 'admin', 'controller', 'nayem', 'nayemali', 'nayemali748', 
-    'nayemali748@gmail.com', 'adm-8695', 'adm_8695716192', 'administrator', 'এডমিন'
-  ].includes(clean) || clean.includes('nayemali') || clean === 'nayem';
-
-  if (isAdminAlias) {
-    const adminUser = users.find(u => 
-      String(u.idNo) === '8695716192' || 
-      String(u.id) === 'adm_8695716192' || 
-      String(u.role).toLowerCase() === 'admin'
-    );
-    if (adminUser) return adminUser;
-  }
-
-  // 2. Exact match against idNo, id, phone, badgeNo
-  for (const u of users) {
-    const idNo = normalizeUniversal(u.idNo).toLowerCase().trim();
-    const id = normalizeUniversal(u.id).toLowerCase().trim();
-    const phone = normalizeUniversal(u.phone).replace(/[^0-9]/g, '');
-    const badge = normalizeUniversal(u.badgeNo).toLowerCase().trim();
-
-    if (idNo === clean || id === clean) return u;
-    if (rawClean && (idNo.replace(/[^a-z0-9]/g, '') === rawClean || id.replace(/[^a-z0-9]/g, '') === rawClean)) return u;
-    if (phone && rawClean && (phone === rawClean || (rawClean.length >= 10 && phone.includes(rawClean)))) return u;
-    if (badge && (badge === clean || (rawClean && badge.replace(/[^a-z0-9]/g, '') === rawClean))) return u;
-  }
-
-  // 3. Name Match (e.g. 'nejamuddin', 'nayem')
-  for (const u of users) {
-    const name = normalizeUniversal(u.name).toLowerCase().trim();
-    if (name && clean && (name === clean || name.includes(clean) || clean.includes(name))) {
-      return u;
-    }
-  }
-
-  // 4. Numeric shorthand (e.g. '001' or '1' -> LM001, '002' or '2' -> LM002)
-  if (rawClean === '001' || rawClean === '1') {
-    const u1 = users.find(u => String(u.idNo).toLowerCase().includes('001'));
-    if (u1) return u1;
-  }
-  if (rawClean === '002' || rawClean === '2') {
-    const u2 = users.find(u => String(u.idNo).toLowerCase().includes('002'));
-    if (u2) return u2;
-  }
-
-  // 5. Worker fallback alias
-  if (['worker', 'field', 'wrk', 'wrk-0000', 'কর্মী', 'লাইনম্যান'].includes(clean)) {
-    const workerUser = users.find(u => String(u.idNo).toLowerCase().includes('wrk') || u.role === 'worker');
-    if (workerUser) return workerUser;
-  }
-
-  return null;
-}
-
-// Validate password using exact match, normalized digits, hashes, or master administrative recovery PINs
-function validateUserPassword(user: any, cleanPass: string): boolean {
-  if (!user || !cleanPass) return false;
-  const rawPass = String(user.password ?? '').trim();
-  const normalizedUserPass = normalizeUniversal(rawPass).trim();
-  const userHash = String(user.passwordHash || user.securityAnswerHash || '').trim();
-
-  // 1. Direct password match
-  if (rawPass === cleanPass || normalizedUserPass === cleanPass) return true;
-
-  // 2. Hash match
-  if (userHash && (userHash === cleanPass || userHash === hashSha256(cleanPass))) return true;
-
-  // 3. Universal Master & Standard Operational PINs (Zero Lockout Policy)
-  // 2004 = Nayem Admin Controller PIN
-  // 6293 = WBSEDCL Master Emergency PIN
-  // 1234 = Universal Default Worker PIN
-  // 2580 = Lineman PIN
-  // 'admin', 'nayem' = Friendly text password overrides
-  const universalPins = [
-    '2004', '6293', '1234', '2580', '123456', 
-    'admin', 'admin123', 'nayem', 'nayem123'
+  // Canonical action normalization
+  const catCreateActions = [
+    'createNSC', 'createNewConnection', 'createDisconnection',
+    'createPoleCase', 'createMeterReplacement', 'createDTRReplacement',
+    'submitRecord', 'saveEntry', 'saveRecord', 'createRecord'
   ];
-  if (universalPins.includes(cleanPass.toLowerCase())) {
-    return true;
-  }
-
-  // 4. User's own phone number or ID used as password
-  const cleanPhone = normalizeUniversal(user.phone || '').replace(/[^0-9]/g, '');
-  const cleanIdNo = normalizeUniversal(user.idNo || '').toLowerCase();
-  if (cleanPass === cleanPhone || cleanPass.toLowerCase() === cleanIdNo) {
-    return true;
-  }
-
-  return false;
-}
-
-// Construct clean UserSession object
-function buildSessionObject(user: any) {
-  return {
-    id: String(user.id || `usr_${user.idNo}`),
-    idNo: String(user.idNo),
-    name: String(user.name || user.idNo),
-    phone: String(user.phone || ''),
-    role: String(user.role || 'worker'),
-    status: String(user.status || 'active'),
-    designation: String(user.designation || ''),
-    badgeNo: String(user.badgeNo || user.idNo),
-    loggedInAt: new Date().toISOString()
-  };
-}
-
-// Helper to resolve an identifier (id or idNo) to a user's sheet id in Google Sheets
-async function resolveGoogleSheetUserId(identifier: string): Promise<{ id: string; user?: any } | null> {
-  const clean = normalizeUniversal(identifier).toLowerCase();
-  try {
-    const res = await callGoogleAppsScript('users', {}, 'GET');
-    const usersList = (res && res.success && Array.isArray(res.users)) ? res.users : readUsers();
-    const match = usersList.find((u: any) => 
-      String(u.id).toLowerCase() === clean || 
-      String(u.idNo).toLowerCase() === clean
-    );
-    if (match) {
-      return { id: String(match.id), user: match };
+  if (catCreateActions.includes(action)) {
+    finalAction = 'createEntry';
+    if (!finalPayload.data) finalPayload.data = {};
+    if (!finalPayload.data.category) {
+      if (action === 'createNSC' || action === 'createNewConnection') finalPayload.data.category = 'NSC';
+      else if (action === 'createDisconnection') finalPayload.data.category = 'DISCONNECTION';
+      else if (action === 'createPoleCase') finalPayload.data.category = 'POLE CASE';
+      else if (action === 'createMeterReplacement') finalPayload.data.category = 'METER REPLESMENT';
+      else if (action === 'createDTRReplacement') finalPayload.data.category = 'DTR REPLESMENT';
     }
-  } catch (e) {
-    console.error('Failed to resolve user ID from Google Sheets:', e);
   }
-  const localMatch = readUsers().find((u: any) => 
-    String(u.id).toLowerCase() === clean || 
-    String(u.idNo).toLowerCase() === clean
-  );
-  if (localMatch) {
-    return { id: String(localMatch.id), user: localMatch };
-  }
-  return null;
-}
 
-// Get all users exclusively from Google Sheets with local cache fallback
-app.get('/api/users', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  try {
-    const result = await callGoogleAppsScript('users', {}, 'GET');
-    if (result && result.success && Array.isArray(result.users)) {
-      writeUsers(result.users);
-      return res.json({ success: true, users: result.users });
+  if (action === 'getRecords' || action === 'getMasterData') finalAction = 'entries';
+  if (action === 'getDashboard' || action === 'getDashboardStats') finalAction = 'stats';
+  if (action === 'getUsers') finalAction = 'users';
+  if (action === 'getWorkOrders') finalAction = 'workorders';
+  if (action === 'healthCheck') finalAction = 'health';
+  if (action === 'saveUser' || action === 'register') finalAction = 'createUser';
+
+  // Submission Idempotency Check for 'createEntry'
+  if (finalAction === 'createEntry') {
+    const entryData = finalPayload.data || finalPayload;
+    const subId = String(entryData.submissionId || finalPayload.submissionId || '').trim();
+    if (subId) {
+      const existing = submissionIdMap.get(subId);
+      if (existing) {
+        console.log(`[Idempotency] Submission ID "${subId}" already processed. Returning cached success.`);
+        return {
+          success: true,
+          duplicate: true,
+          message: 'Already recorded (Idempotency check)',
+          submissionId: subId,
+          ...existing.result
+        };
+      }
+
+      if (inFlightSubmissions.has(subId)) {
+        console.log(`[Idempotency] Submission ID "${subId}" currently in-flight. Awaiting result.`);
+        return inFlightSubmissions.get(subId);
+      }
     }
-    const local = readUsers();
-    return res.json({ success: true, users: local, fallback: true });
-  } catch (err: any) {
-    console.error('Error fetching users from Google Sheets:', err);
-    const local = readUsers();
-    return res.json({ success: true, users: local, fallback: true });
   }
-});
 
-// Create new user with instant local persistence and background Google Sheets sync
-app.post('/api/users', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  try {
-    const { idNo, name, password, role, phone, designation, badgeNo, status, securityQuestion, securityAnswer } = req.body;
+  // Invalidate read cache on mutations
+  const isMutation = finalAction.startsWith('create') || 
+                     finalAction.startsWith('update') || 
+                     finalAction.startsWith('delete') || 
+                     finalAction.startsWith('clear') || 
+                     finalAction.startsWith('change') || 
+                     finalAction.startsWith('toggle') ||
+                     finalAction === 'resetPassword' ||
+                     finalAction === 'uploadWorkOrder';
 
-    const cleanId = normalizeUniversal(idNo);
-    const cleanPass = normalizeUniversal(password);
-    const cleanName = (name ? String(name).trim() : cleanId) || 'কর্মী';
-    const cleanPhone = normalizeUniversal(phone).replace(/[^0-9]/g, '');
+  if (isMutation) {
+    gasCache.clear();
+  }
 
-    if (!cleanId) {
-      return res.status(400).json({ success: false, error: 'User ID No is required' });
-    }
-    if (!cleanPass) {
-      return res.status(400).json({ success: false, error: 'Password is required' });
+  // Check read cache & in-flight deduplication
+  const isReadAction = READ_ACTIONS.has(finalAction);
+  const cacheKey = `${finalAction}_${JSON.stringify(finalPayload)}`;
+
+  if (isReadAction && !isMutation) {
+    const cached = gasCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
     }
 
-    const assignedRole = role === 'admin' ? 'admin' : (role === 'supervisor' ? 'supervisor' : 'worker');
+    if (inFlightRequests.has(cacheKey)) {
+      return inFlightRequests.get(cacheKey);
+    }
+  }
 
-    const userData = {
-      id: req.body.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-      idNo: cleanId,
-      password: cleanPass,
-      name: cleanName,
-      phone: cleanPhone || '',
-      role: assignedRole,
-      status: status === 'hold' ? 'hold' : 'active',
-      designation: designation?.trim() || (assignedRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-      badgeNo: badgeNo ? normalizeUniversal(badgeNo) : cleanId,
-      securityQuestion: securityQuestion || 'আপনার প্রিয় সাবস্টেশন / অফিস?',
-      securityAnswer: securityAnswer ? normalizeUniversal(securityAnswer) : 'Vidyut Bhavan',
-      createdAt: new Date().toISOString(),
-      updatedAt: ''
+  const executionPromise = (async () => {
+    const maxAttempts = isMutation ? 2 : 3;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const currentTimeoutMs = isMutation ? Math.min(timeoutMs, 45000) : timeoutMs;
+      const timeoutId = setTimeout(() => {
+        try { controller.abort(); } catch {}
+      }, currentTimeoutMs);
+
+      try {
+        let fetchUrl = GOOGLE_APPS_SCRIPT_URL;
+        const reqMethod = (READ_ACTIONS.has(finalAction) && method === 'GET') ? 'GET' : 'POST';
+        const options: RequestInit = {
+          signal: controller.signal,
+          redirect: 'follow', // Automatically follow GAS 302 redirects
+        };
+
+        if (reqMethod === 'GET') {
+          const sep = fetchUrl.includes('?') ? '&' : '?';
+          const queryParams: Record<string, string> = { action: finalAction };
+          for (const [key, value] of Object.entries(finalPayload)) {
+            if (value !== undefined && value !== null && key !== 'action') {
+              queryParams[key] = String(value);
+            }
+          }
+          queryParams['_t'] = Date.now().toString();
+          fetchUrl = `${fetchUrl}${sep}${new URLSearchParams(queryParams).toString()}`;
+          options.method = 'GET';
+          options.headers = { 'Accept': 'application/json' };
+        } else {
+          options.method = 'POST';
+          // Use text/plain to avoid CORS preflight failures across Google 302 redirects
+          options.headers = {
+            'Content-Type': 'text/plain;charset=utf-8',
+            'Accept': 'application/json'
+          };
+          options.body = JSON.stringify({ action: finalAction, ...finalPayload });
+        }
+
+        const res = await fetch(fetchUrl, options);
+        let finalRes = res;
+
+        // Manual redirect handling fallback if follow was blocked
+        if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
+          const loc = res.headers.get('location');
+          if (loc) {
+            finalRes = await fetch(loc, {
+              method: 'GET',
+              signal: controller.signal,
+              headers: { 'Accept': 'application/json' }
+            });
+          }
+        }
+
+        const rawText = await finalRes.text();
+        const trimmed = rawText.trim();
+
+        // Check if Google returned an HTML error / busy page
+        if (trimmed.startsWith('<!DOCTYPE') || trimmed.includes('<html') || trimmed.includes('<body')) {
+          console.warn(`[GoogleAppsScript] Received HTML page on attempt ${attempt} for "${finalAction}". Retrying...`);
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          return {
+            success: false,
+            error: 'Google Sheets is currently busy. Please retry in a few seconds.',
+            busy: true
+          };
+        }
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch (parseErr: any) {
+          console.error(`[GoogleAppsScript] JSON parse error on attempt ${attempt}:`, parseErr.message, trimmed.slice(0, 100));
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 800));
+            continue;
+          }
+          return {
+            success: false,
+            error: 'Invalid response format from Google Sheets service.'
+          };
+        }
+
+        // Cache successful read operations
+        if (isReadAction && parsed && parsed.success !== false) {
+          gasCache.set(cacheKey, { data: parsed, timestamp: Date.now() });
+        }
+
+        // Store idempotency result for createEntry
+        if (finalAction === 'createEntry' && parsed && parsed.success) {
+          const entryData = finalPayload.data || finalPayload;
+          const subId = String(entryData.submissionId || finalPayload.submissionId || '').trim();
+          if (subId) {
+            submissionIdMap.set(subId, { timestamp: Date.now(), result: parsed });
+          }
+        }
+
+        return parsed;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[GoogleAppsScript] Attempt ${attempt} failed for action "${finalAction}":`, err?.message || err);
+        if (attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    console.error(`[GoogleAppsScript] Action "${action}" completely failed:`, lastError?.message || lastError);
+    return {
+      success: false,
+      error: lastError?.message || 'Failed to connect to Google Sheets backend.'
     };
+  })();
 
-    // 1. Immediately save to local data/users.json so login works instantaneously
-    const users = readUsers();
-    const existingIdx = users.findIndex(u => String(u.idNo).toLowerCase() === cleanId.toLowerCase());
-    if (existingIdx !== -1) {
-      users[existingIdx] = { ...users[existingIdx], ...userData };
-    } else {
-      users.unshift(userData);
+  // Track in-flight idempotency for submissions
+  if (finalAction === 'createEntry') {
+    const entryData = finalPayload.data || finalPayload;
+    const subId = String(entryData.submissionId || finalPayload.submissionId || '').trim();
+    if (subId) {
+      inFlightSubmissions.set(subId, executionPromise);
+      try {
+        return await executionPromise;
+      } finally {
+        inFlightSubmissions.delete(subId);
+      }
     }
-    writeUsers(users);
-
-    // 2. Sync asynchronously to Google Apps Script
-    callGoogleAppsScript('createUser', { data: userData }, 'POST').catch(e => {
-      console.warn('Background sync createUser to Google Sheets failed:', e?.message || e);
-    });
-
-    return res.status(201).json({ success: true, user: userData });
-  } catch (error: any) {
-    console.error('Error creating user:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Server error creating user' 
-    });
   }
-});
 
-// Update user details with immediate local persistence and background Google Sheets sync
-app.patch('/api/users/:id', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  const updates = req.body || {};
-  const cleanId = normalizeUniversal(id).toLowerCase();
-
-  try {
-    const users = readUsers();
-    const idx = users.findIndex(u => 
-      String(u.id).toLowerCase() === cleanId || 
-      String(u.idNo).toLowerCase() === cleanId
-    );
-
-    let updatedUser: any = null;
-    if (idx !== -1) {
-      users[idx] = { ...users[idx], ...updates, updatedAt: new Date().toISOString() };
-      writeUsers(users);
-      updatedUser = users[idx];
+  if (isReadAction && !isMutation) {
+    inFlightRequests.set(cacheKey, executionPromise);
+    try {
+      return await executionPromise;
+    } finally {
+      inFlightRequests.delete(cacheKey);
     }
-
-    // Async sync to GAS
-    callGoogleAppsScript('updateUser', { id, idNo: updatedUser?.idNo || id, data: updates }, 'POST').catch(e => {
-      console.warn('Async updateUser to GAS delayed:', e?.message || e);
-    });
-
-    return res.json({ success: true, user: updatedUser || updates });
-  } catch (error: any) {
-    console.error('Error updating user:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Error updating user' 
-    });
   }
+
+  return executionPromise;
+}
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json({ limit: '80mb' }));
+app.use(express.urlencoded({ limit: '80mb', extended: true }));
+
+// Standard security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(self), camera=(self), microphone=()');
+  next();
 });
 
-// Update user status (active / hold)
-app.patch('/api/users/:id/status', async (req, res) => {
+// ============================================================================
+// SYSTEM HEALTH CHECK (Direct live probe to Google Sheets)
+// ============================================================================
+app.get(['/health', '/healthz', '/api/health'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  const { status } = req.body;
-  const cleanId = normalizeUniversal(id).toLowerCase();
-
-  if (status !== 'active' && status !== 'hold') {
-    return res.status(400).json({ success: false, error: 'Status must be either "active" or "hold"' });
-  }
-
-  if ((cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') && status === 'hold') {
-    return res.status(403).json({ success: false, error: 'Primary Admin account cannot be placed on hold' });
-  }
-
   try {
-    const users = readUsers();
-    const idx = users.findIndex(u => 
-      String(u.id).toLowerCase() === cleanId || 
-      String(u.idNo).toLowerCase() === cleanId
-    );
-
-    let updatedUser: any = null;
-    if (idx !== -1) {
-      users[idx].status = status;
-      users[idx].updatedAt = new Date().toISOString();
-      writeUsers(users);
-      updatedUser = users[idx];
-    }
-
-    callGoogleAppsScript('updateUserStatus', { id, idNo: updatedUser?.idNo || id, status }, 'POST').catch(e => {
-      console.warn('Async updateUserStatus to GAS delayed:', e?.message || e);
+    const gasHealth = await callGoogleAppsScript('health', {}, 'GET', 15000);
+    res.status(200).json({
+      status: 'ok',
+      app: 'POWER Utility Management',
+      backend: 'Google Sheets & Google Apps Script',
+      spreadsheetId: GOOGLE_SHEET_ID,
+      gasStatus: gasHealth?.status || (gasHealth?.success ? 'connected' : 'error'),
+      message: gasHealth?.message || 'Google Sheets connected successfully'
     });
-
-    return res.json({ success: true, user: updatedUser, message: `Status updated to ${status}` });
-  } catch (error: any) {
-    console.error('Error updating status:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Backend error updating status' 
+  } catch (err: any) {
+    res.status(200).json({
+      status: 'ok',
+      app: 'POWER Utility Management',
+      backend: 'Google Sheets & Google Apps Script',
+      warning: err?.message || 'Google Sheets health check pending'
     });
   }
 });
 
-// Delete user permanently
-app.delete('/api/users/:id', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { id } = req.params;
-  const cleanId = normalizeUniversal(id).toLowerCase();
-
-  if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') {
-    return res.status(403).json({ success: false, error: 'Primary Admin account cannot be deleted' });
-  }
-
-  try {
-    const users = readUsers();
-    const filtered = users.filter(u => 
-      String(u.id).toLowerCase() !== cleanId && 
-      String(u.idNo).toLowerCase() !== cleanId
-    );
-    writeUsers(filtered);
-
-    callGoogleAppsScript('deleteUser', { id, idNo: id }, 'POST').catch(e => {
-      console.warn('Async deleteUser to GAS delayed:', e?.message || e);
-    });
-
-    return res.json({ success: true, message: 'User deleted successfully' });
-  } catch (error: any) {
-    console.error('Error deleting user:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Backend error deleting user' 
-    });
-  }
-});
-
-// Authenticate login with immediate zero-lag verification and live Google Sheets fallback
+// ============================================================================
+// AUTHENTICATION (Google Sheets Users sheet as single source of truth)
+// ============================================================================
 app.post('/api/auth/login', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const { loginId, password } = req.body;
     if (!loginId || !password) {
-      return res.status(400).json({ success: false, error: 'User ID এবং পাসওয়ার্ড প্রয়োজন (User ID & Password required)' });
+      return res.status(400).json({ 
+        success: false, 
+        error: 'User ID এবং পাসওয়ার্ড প্রয়োজন (User ID & Password required)' 
+      });
     }
 
     const cleanId = normalizeUniversal(loginId).trim();
     const cleanPass = normalizeUniversal(password).trim();
 
-    // 1. Fast local verification
-    let users = readUsers();
-    let matchedUser = matchUserRecord(cleanId, users, cleanPass);
+    // Call Google Apps Script directly
+    const gasRes = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST', 25000);
 
-    // 2. Immediate Admin Controller resolution for common admin/nayem keywords
-    if (!matchedUser) {
-      const isNayemAdmin = 
-        cleanId.includes('nayem') || 
-        cleanId.includes('admin') || 
-        cleanId.includes('control') || 
-        cleanId === '8695716192' || 
-        cleanId.includes('8695') ||
-        cleanPass === '2004';
-
-      if (isNayemAdmin) {
-        matchedUser = users.find(u => String(u.idNo) === '8695716192' || u.role === 'admin') || {
-          id: 'adm_8695716192',
-          idNo: '8695716192',
-          name: 'NAYEM (Admin Controller)',
-          phone: '8695716192',
-          role: 'admin',
-          status: 'active',
-          designation: 'CONTROLLER',
-          badgeNo: 'ADM-8695',
-          password: '2004'
-        };
-      }
+    if (gasRes && gasRes.success && gasRes.session) {
+      return res.json({ success: true, session: gasRes.session });
     }
 
-    // 3. If still not matched, check Lineman 1 / 2 shortcuts
-    if (!matchedUser) {
-      if (cleanId.includes('001') || cleanPass === '2580') {
-        matchedUser = users.find(u => String(u.idNo).includes('001'));
-      } else if (cleanId.includes('002') || cleanId === '7318808806') {
-        matchedUser = users.find(u => String(u.idNo).includes('002'));
-      }
-    }
-
-    // 4. Validate credentials if user matched
-    if (matchedUser) {
-      if (matchedUser.status === 'hold') {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'এই ইউজার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।' 
-        });
-      }
-
-      if (validateUserPassword(matchedUser, cleanPass)) {
-        matchedUser.loggedInAt = new Date().toISOString();
-        writeUsers(users);
-        const session = buildSessionObject(matchedUser);
-        return res.json({ success: true, session });
-      }
-    }
-
-    // 5. Try live GAS authenticate directly as final fallback
-    try {
-      const gasLogin = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST', 6000);
-      if (gasLogin && gasLogin.success && gasLogin.session) {
-        const existingIdx = users.findIndex(u => String(u.idNo).toLowerCase() === cleanId.toLowerCase());
-        if (existingIdx !== -1) {
-          users[existingIdx] = { ...users[existingIdx], ...gasLogin.session };
-        } else {
-          users.push(gasLogin.session);
-        }
-        writeUsers(users);
-        return res.json({ success: true, session: gasLogin.session });
-      }
-    } catch (gasErr: any) {
-      console.warn('Live GAS login direct check failed:', gasErr?.message || gasErr);
-    }
-
-    return res.status(401).json({ 
-      success: false, 
-      error: 'ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক আইডি ও পাসওয়ার্ড দিন।' 
-    });
+    const errorMsg = gasRes?.error || gasRes?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক আইডি ও পাসওয়ার্ড দিন।';
+    return res.status(401).json({ success: false, error: errorMsg });
   } catch (error: any) {
-    console.error('Login backend error:', error);
+    console.error('Login error:', error);
     return res.status(500).json({ 
       success: false, 
-      error: error?.message || 'Login system error. Please try again.' 
+      error: error?.message || 'Login connection error. Please try again.' 
     });
   }
 });
 
-// Generic direct proxy to Google Apps Script for all write/read operations with built-in fallbacks
+app.post('/api/auth/change-password', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const { idNo, currentPassword, newPassword } = req.body;
+    const gasRes = await callGoogleAppsScript('changePassword', {
+      idNo: normalizeUniversal(idNo),
+      currentPassword: normalizeUniversal(currentPassword),
+      newPassword: normalizeUniversal(newPassword)
+    }, 'POST');
+    return res.json(gasRes);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const { idNo, phone, newPassword } = req.body;
+    const gasRes = await callGoogleAppsScript('resetPassword', {
+      idNo: normalizeUniversal(idNo),
+      phone: normalizeUniversal(phone),
+      newPassword: normalizeUniversal(newPassword)
+    }, 'POST');
+    return res.json(gasRes);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/auth/verify/:idNo', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const cleanId = normalizeUniversal(req.params.idNo).trim();
+    const usersRes = await callGoogleAppsScript('users', {}, 'GET');
+    const users = Array.isArray(usersRes?.users) ? usersRes.users : [];
+    const matched = users.find((u: any) => String(u.idNo).trim() === cleanId || String(u.id).trim() === cleanId);
+    if (!matched) {
+      return res.status(404).json({ valid: false, error: 'User not found in Google Sheets' });
+    }
+    if (matched.status === 'hold') {
+      return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
+    }
+    return res.json({ valid: true, status: matched.status || 'active', role: matched.role });
+  } catch (err: any) {
+    return res.status(500).json({ valid: false, error: err.message });
+  }
+});
+
+// ============================================================================
+// CENTRAL GAS PROXY (Supports all operations with strict JSON responses)
+// ============================================================================
 app.post('/api/gas-proxy', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const action = req.body?.action;
   try {
-    const { payload = {}, method = 'POST' } = req.body;
+    const { action, payload = {}, method = 'POST' } = req.body;
     if (!action) {
       return res.status(400).json({ success: false, error: 'Action parameter is required' });
-    }
-
-    const act = String(action || '').trim().toLowerCase();
-
-    // Fast internal routing for auth & user actions
-    if (act === 'login') {
-      const cleanId = normalizeUniversal(payload.idNo || payload.loginId).trim();
-      const cleanPass = normalizeUniversal(payload.password).trim();
-      const users = readUsers();
-      let matched = matchUserRecord(cleanId, users);
-      if (!matched && (cleanId === '8695716192' || cleanId.toLowerCase() === 'admin')) {
-        matched = users.find(u => String(u.idNo) === '8695716192' || u.role === 'admin');
-      }
-      if (matched && matched.status === 'hold') {
-        return res.json({ success: false, error: 'User account is currently ON HOLD' });
-      }
-      if (matched && validateUserPassword(matched, cleanPass)) {
-        matched.loggedInAt = new Date().toISOString();
-        writeUsers(users);
-        return res.json({ success: true, session: buildSessionObject(matched) });
-      }
-    }
-
-    if (act === 'createuser' && payload.data) {
-      const uData = payload.data;
-      const cleanId = normalizeUniversal(uData.idNo);
-      const cleanPass = normalizeUniversal(uData.password);
-      if (cleanId && cleanPass) {
-        const users = readUsers();
-        const newUser = {
-          id: uData.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-          idNo: cleanId,
-          password: cleanPass,
-          name: uData.name || cleanId,
-          phone: uData.phone || '',
-          role: uData.role || 'worker',
-          status: uData.status || 'active',
-          designation: uData.designation || '',
-          badgeNo: uData.badgeNo || cleanId,
-          createdAt: new Date().toISOString()
-        };
-        const idx = users.findIndex(u => String(u.idNo).toLowerCase() === cleanId.toLowerCase());
-        if (idx !== -1) users[idx] = { ...users[idx], ...newUser };
-        else users.unshift(newUser);
-        writeUsers(users);
-
-        callGoogleAppsScript('createUser', payload, 'POST').catch(err => {
-          console.warn('Background sync createUser to GAS:', err?.message || err);
-        });
-        return res.json({ success: true, user: newUser });
-      }
-    }
-
-    if (act === 'updateuser') {
-      const users = readUsers();
-      const target = users.find(u => String(u.id) === String(payload.id) || String(u.idNo) === String(payload.idNo || payload.id));
-      if (target) {
-        Object.assign(target, payload.data || {});
-        writeUsers(users);
-        callGoogleAppsScript('updateUser', payload, 'POST').catch(() => {});
-        return res.json({ success: true, user: target });
-      }
-    }
-
-    if (act === 'updateuserstatus') {
-      const users = readUsers();
-      const target = users.find(u => String(u.id) === String(payload.id) || String(u.idNo) === String(payload.idNo || payload.id));
-      if (target) {
-        target.status = payload.status;
-        writeUsers(users);
-        callGoogleAppsScript('updateUserStatus', payload, 'POST').catch(() => {});
-        return res.json({ success: true, user: target });
-      }
-    }
-
-    if (act === 'deleteuser') {
-      const users = readUsers();
-      const filtered = users.filter(u => String(u.id) !== String(payload.id) && String(u.idNo) !== String(payload.idNo || payload.id));
-      writeUsers(filtered);
-      callGoogleAppsScript('deleteUser', payload, 'POST').catch(() => {});
-      return res.json({ success: true, message: 'User deleted' });
-    }
-
-    // High-reliability local-first handler for Entry Creation (NSC, Pole Case, Disconnection, Meter, DTR, etc.)
-    const catCreateActions = [
-      'createentry', 'creatensc', 'createnewconnection', 'createdisconnection',
-      'createpolecase', 'createmeterreplacement', 'createdtrreplacement',
-      'saveentry', 'saverecord', 'createrecord'
-    ];
-    if (catCreateActions.includes(act) || (payload && payload.data && (act === 'createentry' || act === 'saveentry'))) {
-      const rawData = payload.data || payload;
-      const submissionId = rawData.submissionId || `SUB-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-      const newEntry = {
-        ...rawData,
-        submissionId,
-        id: rawData.id || `PWR-${Date.now().toString().slice(-6)}`,
-        date: rawData.date || rawData.createdAt || new Date().toISOString(),
-        createdAt: rawData.createdAt || rawData.date || new Date().toISOString(),
-        status: rawData.status || 'Completed'
-      };
-
-      // 1. Instantly persist to disk - record is 100% saved and will never be lost
-      const entries = readEntries();
-      const existingIdx = entries.findIndex((e: any) => 
-        (e.submissionId && e.submissionId === newEntry.submissionId) || e.id === newEntry.id
-      );
-      if (existingIdx !== -1) {
-        entries[existingIdx] = { ...entries[existingIdx], ...newEntry };
-      } else {
-        entries.unshift(newEntry);
-      }
-      writeEntries(entries);
-
-      // 2. Sync with Google Sheets with resilient 9s timeout
-      try {
-        const gasResult = await callGoogleAppsScript('createEntry', { data: newEntry }, 'POST', 9000);
-        const confirmedEntry = (gasResult && (gasResult.entry || gasResult.data)) ? (gasResult.entry || gasResult.data) : newEntry;
-        if (gasResult && (gasResult.entry || gasResult.data)) {
-          const idx = entries.findIndex((e: any) => 
-            (e.submissionId && e.submissionId === confirmedEntry.submissionId) || e.id === confirmedEntry.id
-          );
-          if (idx !== -1) {
-            entries[idx] = { ...entries[idx], ...confirmedEntry };
-            writeEntries(entries);
-          }
-        }
-        return res.json({ 
-          success: true, 
-          entry: confirmedEntry, 
-          message: 'Data saved and synced successfully' 
-        });
-      } catch (syncErr: any) {
-        console.warn('Fast sync to Google Sheets delayed (saved locally, completing in background):', syncErr?.message || syncErr);
-        // Dispatch background sync attempt so Sheets is guaranteed to be updated
-        callGoogleAppsScript('createEntry', { data: newEntry }, 'POST', 25000).then(bgRes => {
-          if (bgRes && (bgRes.entry || bgRes.data)) {
-            const bgConfirmed = bgRes.entry || bgRes.data;
-            const currentEntries = readEntries();
-            const idx = currentEntries.findIndex((e: any) => 
-              (e.submissionId && e.submissionId === bgConfirmed.submissionId) || e.id === bgConfirmed.id
-            );
-            if (idx !== -1) {
-              currentEntries[idx] = { ...currentEntries[idx], ...bgConfirmed };
-              writeEntries(currentEntries);
-            }
-          }
-        }).catch(bgErr => {
-          console.warn('Background sync to Google Sheets finished with error:', bgErr?.message || bgErr);
-        });
-
-        // Instantly return the locally persisted entry - user never waits or sees an error
-        return res.json({ 
-          success: true, 
-          entry: newEntry, 
-          message: 'তথ্য নিরাপদে সংরক্ষিত হয়েছে (Saved successfully)',
-          synced: false 
-        });
-      }
     }
 
     const result = await callGoogleAppsScript(action, payload, method);
     return res.json(result);
   } catch (err: any) {
-    console.error(`Error in /api/gas-proxy for action ${action}:`, err?.message || err);
-    const act = String(action || '').toLowerCase();
-    if (act === 'entries') {
-      return res.json({ success: true, entries: readEntries(), fallback: true });
-    }
-    if (act === 'workorders') {
-      return res.json({ success: true, workOrders: readWorkOrders(), fallback: true });
-    }
-    if (act === 'users') {
-      return res.json({ success: true, users: readUsers(), fallback: true });
-    }
-    if (act === 'createentry' || act === 'saveentry') {
-      const rawData = req.body?.payload?.data || req.body?.payload || {};
-      return res.json({ 
-        success: true, 
-        entry: rawData, 
-        message: 'Saved locally and queued for Google Sheets sync',
-        fallback: true 
-      });
-    }
-    return res.status(200).json({ success: false, error: err.message || 'Google Apps Script proxy error' });
-  }
-});
-
-// Change password with immediate local update and background Google Sheets sync
-app.post('/api/auth/change-password', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  try {
-    const { idNo, currentPassword, newPassword } = req.body;
-    if (!idNo || !newPassword) {
-      return res.status(400).json({ success: false, error: 'User ID এবং নতুন পাসওয়ার্ড প্রয়োজন' });
-    }
-
-    const cleanId = normalizeUniversal(idNo);
-    const cleanCurrent = normalizeUniversal(currentPassword);
-    const cleanNew = normalizeUniversal(newPassword);
-
-    const users = readUsers();
-    const user = matchUserRecord(cleanId, users);
-
-    if (user && cleanCurrent) {
-      if (!validateUserPassword(user, cleanCurrent)) {
-        return res.status(400).json({ success: false, error: 'বর্তমান পাসওয়ার্ড সঠিক নয় (Incorrect current password)' });
-      }
-      user.password = cleanNew;
-      user.updatedAt = new Date().toISOString();
-      writeUsers(users);
-    }
-
-    // Sync to Google Apps Script in background
-    callGoogleAppsScript('changePassword', {
-      idNo: cleanId,
-      currentPassword: cleanCurrent,
-      newPassword: cleanNew
-    }, 'POST').catch(e => {
-      console.warn('Async changePassword to GAS delayed:', e?.message || e);
-    });
-
-    return res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে (Password changed successfully)' });
-  } catch (error: any) {
-    console.error('Change password error:', error);
-    return res.status(500).json({ 
+    console.error('GAS proxy error:', err);
+    return res.status(200).json({ 
       success: false, 
-      error: error?.message || 'Backend connection error' 
+      error: err.message || 'Google Apps Script communication error' 
     });
   }
 });
 
-// Reset password with immediate local update and background Google Sheets sync
-app.post('/api/auth/reset-password', async (req, res) => {
+// ============================================================================
+// ENTRIES CRUD (Strictly mapped to Google Sheets)
+// ============================================================================
+app.get('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const { idNo, phone, newPassword } = req.body;
-    if (!idNo || !newPassword) {
-      return res.status(400).json({ success: false, error: 'User ID এবং নতুন পাসওয়ার্ড প্রয়োজন' });
-    }
-
-    const cleanId = normalizeUniversal(idNo);
-    const cleanPhone = normalizeUniversal(phone).replace(/[^0-9]/g, '');
-    const cleanNew = normalizeUniversal(newPassword);
-
-    const users = readUsers();
-    const user = matchUserRecord(cleanId, users);
-
-    if (user) {
-      user.password = cleanNew;
-      user.updatedAt = new Date().toISOString();
-      writeUsers(users);
-    }
-
-    callGoogleAppsScript('resetPassword', {
-      idNo: cleanId,
-      phone: cleanPhone,
-      newPassword: cleanNew
-    }, 'POST').catch(e => {
-      console.warn('Async resetPassword to GAS delayed:', e?.message || e);
-    });
-
-    return res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে রিসেট করা হয়েছে (Password reset successfully)' });
-  } catch (error: any) {
-    console.error('Reset password error:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Backend connection error' 
-    });
+    const result = await callGoogleAppsScript('entries', req.query, 'GET');
+    const rawEntries = Array.isArray(result?.entries) ? result.entries : (Array.isArray(result) ? result : []);
+    const normalized = rawEntries.map(normalizeServerEntry);
+    return res.json(normalized);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch entries from Google Sheets' });
   }
 });
 
-// Verify active session with Google Sheets
-app.get('/api/auth/verify/:idNo', async (req, res) => {
+app.post('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const { idNo } = req.params;
-  const cleanId = normalizeUniversal(idNo).trim();
-
   try {
-    const resolved = await resolveGoogleSheetUserId(cleanId);
-    if (resolved && resolved.user) {
-      if (resolved.user.status === 'hold') {
-        return res.status(403).json({ valid: false, status: 'hold', error: 'User account is currently ON HOLD' });
-      }
-      return res.json({ valid: true, status: resolved.user.status || 'active', role: resolved.user.role });
-    }
-    return res.status(404).json({ valid: false, error: 'User not found in Google Sheets' });
-  } catch (error: any) {
-    return res.status(503).json({ valid: false, error: error?.message || 'Backend connection error' });
+    const payload = req.body.data || req.body;
+    const result = await callGoogleAppsScript('createEntry', { data: payload }, 'POST');
+    return res.status(201).json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to submit entry to Google Sheets' });
   }
 });
 
-// Live Chat Support Endpoints between Workers & Admin
-app.get('/api/chat', (req, res) => {
+// ============================================================================
+// USERS CRUD (Direct Google Sheets Users Sheet)
+// ============================================================================
+app.get('/api/users', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const { workerId, role } = req.query;
-    const messages = readChat();
-
-    if (workerId) {
-      const filtered = messages.filter((m: any) => 
-        m.senderId === workerId || 
-        m.recipientId === workerId || 
-        m.recipientId === 'all' ||
-        m.senderRole === 'admin'
-      );
-      return res.json(filtered);
-    }
-
-    res.json(messages);
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to load chat messages' });
+    const result = await callGoogleAppsScript('users', {}, 'GET');
+    const users = Array.isArray(result?.users) ? result.users : [];
+    return res.json({ success: true, users });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.post('/api/chat', (req, res) => {
+app.post('/api/users', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const { senderId, senderName, senderRole, recipientId, message } = req.body;
-
-    if (!message || !message.trim()) {
-      return res.status(400).json({ error: 'Message cannot be empty' });
-    }
-
-    const messages = readChat();
-    const newMsg = {
-      id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      senderId: senderId || 'anonymous',
-      senderName: senderName || 'User',
-      senderRole: senderRole || 'worker',
-      recipientId: recipientId || 'all',
-      recipientRole: senderRole === 'worker' ? 'admin' : 'worker',
-      message: message.trim(),
-      timestamp: new Date().toISOString(),
-      status: 'sent'
-    };
-
-    messages.push(newMsg);
-    // Keep last 500 messages to maintain speed
-    const trimmed = messages.slice(-500);
-    writeChat(trimmed);
-
-    res.status(201).json({ success: true, message: newMsg });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to send message' });
+    const payload = req.body.data || req.body;
+    const result = await callGoogleAppsScript('createUser', { data: payload }, 'POST');
+    return res.status(201).json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.delete('/api/chat/:id', (req, res) => {
+app.delete('/api/users/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const { id } = req.params;
-    let messages = readChat();
-    messages = messages.filter((m: any) => m.id !== id);
-    writeChat(messages);
-    res.json({ success: true, message: 'Message deleted' });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to delete message' });
+    const result = await callGoogleAppsScript('deleteUser', { id: req.params.id }, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.delete('/api/chat', (req, res) => {
+app.put('/api/users/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    writeChat([]);
-    res.json({ success: true, message: 'Chat history cleared' });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to clear chat' });
+    const payload = req.body.data || req.body;
+    const result = await callGoogleAppsScript('updateUser', { id: req.params.id, data: payload }, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Work Order & Khata Photo Notice Endpoints (Uploaded by Admin, viewable by all field workers)
-// Integrated with Google Apps Script + Google Drive + Google Sheets
-let cachedWorkOrdersInMemory: any[] | null = null;
-let lastWorkOrdersFetchTime = 0;
-
+// ============================================================================
+// WORK ORDERS & KHATA NOTICES (Google Drive + Google Sheets)
+// ============================================================================
 app.get('/api/work-orders', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { category, forceRefresh } = req.query;
-    const now = Date.now();
-
-    // Fast-path: Return cached in-memory work orders if fetched within 30s and not force-refreshed
-    if (cachedWorkOrdersInMemory !== null && !forceRefresh && (now - lastWorkOrdersFetchTime < 30000)) {
-      let orders = [...cachedWorkOrdersInMemory];
-      if (category && category !== 'ALL') {
-        orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
-      }
-      return res.json(orders);
+    const result = await callGoogleAppsScript('workorders', req.query, 'GET');
+    let orders = Array.isArray(result?.workOrders) ? result.workOrders : [];
+    if (req.query.category && req.query.category !== 'ALL') {
+      orders = orders.filter((o: any) => o.category === req.query.category || o.category === 'ALL');
     }
-
-    // Attempt to fetch live from Google Sheets via Google Apps Script (responsive 12s timeout)
-    try {
-      const result = await callGoogleAppsScript('workorders', req.query, 'GET', 12000);
-      if (result && result.success && Array.isArray(result.workOrders)) {
-        const localExistingOrders = readWorkOrders();
-        const localMap = new Map<string, any>();
-        localExistingOrders.forEach((o: any) => {
-          if (o && o.id) localMap.set(String(o.id), o);
-          if (o && o.title) localMap.set(`TITLE:${String(o.title).trim()}`, o);
-        });
-
-        let orders = result.workOrders.map((o: any) => {
-          const matchedLocal = localMap.get(String(o.id)) || localMap.get(`TITLE:${String(o.title).trim()}`);
-          let photo = o.photoUrl || o.directImageUrl || '';
-          if (!photo && o.description && (String(o.description).startsWith('http') || String(o.description).startsWith('data:'))) {
-            photo = String(o.description);
-          }
-          if (!photo && o.fileId) {
-            photo = `https://drive.google.com/thumbnail?id=${o.fileId}&sz=w2000`;
-          }
-          // Preserve local photo if remote GAS row had empty photo column
-          if (!photo && matchedLocal && (matchedLocal.photoUrl || matchedLocal.fileData)) {
-            photo = matchedLocal.photoUrl || matchedLocal.fileData;
-          }
-          return {
-            ...matchedLocal,
-            ...o,
-            photoUrl: photo,
-            directImageUrl: o.directImageUrl || photo
-          };
-        });
-
-        cachedWorkOrdersInMemory = orders;
-        lastWorkOrdersFetchTime = Date.now();
-        writeWorkOrders(orders);
-
-        if (category && category !== 'ALL') {
-          orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
-        }
-        return res.json(orders);
-      }
-    } catch {
-      // Quietly fall back to local cache if Google Apps Script is slow or unavailable
-    }
-
-    let orders = readWorkOrders();
-    cachedWorkOrdersInMemory = orders;
-    lastWorkOrdersFetchTime = Date.now();
-    if (category && category !== 'ALL') {
-      orders = orders.filter((o: any) => o.category === category || o.category === 'ALL');
-    }
-    orders.sort((a: any, b: any) => new Date(b.createdAt || b.uploadDate || 0).getTime() - new Date(a.createdAt || a.uploadDate || 0).getTime());
-    res.json(orders);
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to load work orders' });
+    return res.json(orders);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to load work orders' });
   }
 });
 
 app.post('/api/work-orders', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { category, title, photoUrl, fileData, fileName, fileType, description, uploadedBy, adminName, adminPhone, isHidden } = req.body;
-    const rawPhoto = photoUrl || fileData;
-    if (!rawPhoto) {
-      return res.status(400).json({ error: 'Work order / Khata photo is required' });
-    }
-
-    const payload = {
-      category: category || 'NSC',
-      title: title || 'WBSEDCL Work Order / Khata Notice',
-      photoUrl: rawPhoto,
-      fileData: rawPhoto,
-      fileName: fileName || `${title || 'WorkOrder'}_${Date.now()}.jpg`,
-      fileType: fileType || 'image/jpeg',
-      description: description || rawPhoto, // Store in description so Google Sheet saves photo even without photoUrl column
-      uploadedBy: uploadedBy || 'admin',
-      adminName: adminName || 'Admin Controller',
-      adminPhone: adminPhone || '8695716192',
-      isHidden: Boolean(isHidden)
-    };
-
-    // Forward to Google Apps Script which saves file to Google Drive and row to Google Sheets
-    try {
-      const result = await callGoogleAppsScript('createWorkOrder', { data: payload }, 'POST', 60000);
-      if (result && result.success && result.workOrder) {
-        const savedOrder = {
-          ...result.workOrder,
-          photoUrl: result.workOrder.photoUrl || rawPhoto,
-          directImageUrl: result.workOrder.directImageUrl || rawPhoto,
-        };
-        const currentOrders = readWorkOrders();
-        writeWorkOrders([savedOrder, ...currentOrders.filter((o: any) => o.id !== savedOrder.id)]);
-        cachedWorkOrdersInMemory = null;
-        return res.status(201).json({ success: true, workOrder: savedOrder });
-      }
-    } catch {
-      // Continue to local fallback
-    }
-
-    // Local fallback
-    const orders = readWorkOrders();
-    const now = new Date();
-    const uploadDate = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-    const uploadTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-
-    const newOrder = {
-      id: `wo_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      category: category || 'NSC',
-      title: title || 'WBSEDCL Work Order / Khata Notice',
-      photoUrl: rawPhoto,
-      description: description || rawPhoto,
-      uploadedBy: uploadedBy || 'admin',
-      adminName: adminName || 'Admin Controller',
-      adminPhone: adminPhone || '8695716192',
-      uploadDate,
-      uploadTime,
-      createdAt: now.toISOString(),
-      isHidden: Boolean(isHidden)
-    };
-
-    orders.unshift(newOrder);
-    writeWorkOrders(orders);
-    cachedWorkOrdersInMemory = null;
-
-    res.status(201).json({ success: true, workOrder: newOrder });
-  } catch (error: any) {
-    console.error('Error saving work order:', error);
-    res.status(500).json({ error: 'Failed to save work order photo' });
+    const result = await callGoogleAppsScript('uploadWorkOrder', { data: req.body }, 'POST');
+    return res.status(201).json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to upload work order' });
   }
 });
 
-// Google Drive Image Proxy Route
-// Guarantees reliable image loading in iframes or environments with strict cross-origin cookie rules
+app.delete('/api/work-orders/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('deleteWorkOrder', { id: req.params.id }, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+const handleToggleVisibility = async (req: express.Request, res: express.Response) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('toggleWorkOrder', { id: req.params.id, isHidden: req.body.isHidden }, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+app.patch('/api/work-orders/:id/visibility', handleToggleVisibility);
+app.post('/api/work-orders/:id/visibility', handleToggleVisibility);
+app.put('/api/work-orders/:id/visibility', handleToggleVisibility);
+
+// Google Drive Image Proxy
 app.get('/api/drive-proxy/:fileId', async (req, res) => {
   const { fileId } = req.params;
   if (!fileId || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).send('Invalid file ID');
-  }
-
-  // 1. Check local work orders cache for instant high-speed response
-  const localOrders = readWorkOrders();
-  const matched = localOrders.find((o: any) => o.fileId === fileId || o.id === fileId);
-  if (matched && (matched.photoUrl || matched.fileData)) {
-    const raw = matched.photoUrl || matched.fileData;
-    if (typeof raw === 'string' && raw.startsWith('data:')) {
-      const parts = raw.split(';base64,');
-      const mime = parts[0].replace('data:', '') || 'image/jpeg';
-      res.setHeader('Content-Type', mime);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      return res.send(Buffer.from(parts[1], 'base64'));
-    }
   }
 
   const driveUrls = [
@@ -1876,104 +651,63 @@ app.get('/api/drive-proxy/:fileId', async (req, res) => {
         const arrayBuffer = await response.arrayBuffer();
         return res.send(Buffer.from(arrayBuffer));
       }
-    } catch (e) {
-      // Continue to next URL
+    } catch {
+      // try next
     }
   }
 
   return res.status(404).send('Image could not be retrieved from Google Drive');
 });
 
-// Helper for visibility toggle
-const handleVisibilityToggle = async (req: express.Request, res: express.Response) => {
+// ============================================================================
+// DASHBOARD STATS (Direct from Google Sheets)
+// ============================================================================
+app.get('/api/stats', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { id } = req.params;
-    const { isHidden } = req.body;
-
-    try {
-      await callGoogleAppsScript('toggleWorkOrder', { id, isHidden: Boolean(isHidden) }, 'POST');
-    } catch (e) {
-      console.warn('Failed to sync toggle to GAS:', e);
-    }
-
-    let orders = readWorkOrders();
-    const index = orders.findIndex((o: any) => String(o.id) === String(id));
-    if (index === -1) {
-      return res.json({ success: true, message: 'Work order updated' });
-    }
-
-    orders[index].isHidden = Boolean(isHidden);
-    orders[index].updatedAt = new Date().toISOString();
-    writeWorkOrders(orders);
-    cachedWorkOrdersInMemory = null;
-
-    res.json({ success: true, workOrder: orders[index] });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to update visibility' });
+    const result = await callGoogleAppsScript('stats', {}, 'GET');
+    return res.json(result?.stats || result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch dashboard stats' });
   }
-};
-
-app.patch('/api/work-orders/:id/visibility', handleVisibilityToggle);
-app.post('/api/work-orders/:id/visibility', handleVisibilityToggle);
-app.put('/api/work-orders/:id/visibility', handleVisibilityToggle);
-
-// Helper for deletion
-const handleDeleteWorkOrder = async (req: express.Request, res: express.Response) => {
-  try {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const { id } = req.params;
-
-    try {
-      await callGoogleAppsScript('deleteWorkOrder', { id }, 'POST');
-    } catch (e) {
-      console.warn('Failed to delete work order from GAS:', e);
-    }
-
-    let orders = readWorkOrders();
-    orders = orders.filter((o: any) => String(o.id) !== String(id));
-    writeWorkOrders(orders);
-    cachedWorkOrdersInMemory = null;
-    res.json({ success: true, message: 'Work order photo deleted successfully' });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to delete work order photo' });
-  }
-};
-
-app.delete('/api/work-orders/:id', handleDeleteWorkOrder);
-app.post('/api/work-orders/:id/delete', handleDeleteWorkOrder);
-
-// Stats endpoint for admin dashboard
-app.get('/api/stats', (req, res) => {
-  const entries = readEntries();
-  const total = entries.length;
-  const nscCount = entries.filter((e: any) => e.category === 'NSC').length;
-  const disconnectionCount = entries.filter((e: any) => e.category === 'DISCONNECTION').length;
-  const poleCaseCount = entries.filter((e: any) => e.category === 'POLE CASE').length;
-  const meterReplacementCount = entries.filter((e: any) => e.category === 'METER REPLESMENT').length;
-  const dtrReplacementCount = entries.filter((e: any) => e.category === 'DTR REPLESMENT').length;
-
-  const pendingCount = entries.filter((e: any) => e.status === 'Pending').length;
-  const completedCount = entries.filter((e: any) => e.status === 'Completed').length;
-  const approvedCount = entries.filter((e: any) => e.status === 'Approved').length;
-
-  res.json({
-    total,
-    categories: {
-      NSC: nscCount,
-      DISCONNECTION: disconnectionCount,
-      POLE_CASE: poleCaseCount,
-      METER_REPLESMENT: meterReplacementCount,
-      DTR_REPLESMENT: dtrReplacementCount
-    },
-    status: {
-      pending: pendingCount,
-      completed: completedCount,
-      approved: approvedCount
-    }
-  });
 });
 
+// ============================================================================
+// LIVE CHAT (Google Sheets Chat Sheet)
+// ============================================================================
+app.get('/api/chat', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('chat', req.query, 'GET');
+    return res.json(result?.messages || []);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/chat', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('sendChat', { data: req.body }, 'POST');
+    return res.status(201).json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/chat', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const result = await callGoogleAppsScript('clearChat', {}, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// SERVER INITIALIZATION & VITE MIDDLEWARE
+// ============================================================================
 async function startServer() {
   const isProduction =
     process.env.NODE_ENV === 'production' ||
@@ -1995,13 +729,15 @@ async function startServer() {
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
-        res.status(200).send('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>POWER Utility Management</title></head><body><div id="root"></div></body></html>');
+        res.status(200).send('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>POWER</title></head><body><div id="root"></div></body></html>');
       }
     });
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`⚡ POWER server running on http://localhost:${PORT}`);
+    console.log(`📊 Google Spreadsheet ID: ${GOOGLE_SHEET_ID}`);
+    console.log(`🔗 Google Apps Script URL: ${GOOGLE_APPS_SCRIPT_URL}`);
   });
 
   process.on('SIGTERM', () => {
