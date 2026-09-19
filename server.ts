@@ -431,15 +431,16 @@ app.get(['/health', '/healthz', '/api/health'], async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const { loginId, password } = req.body;
-    if (!loginId || !password) {
+    const rawId = req.body.loginId || req.body.idNo || req.body.userId;
+    const { password } = req.body;
+    if (!rawId || !password) {
       return res.status(400).json({ 
         success: false, 
         error: 'User ID এবং পাসওয়ার্ড প্রয়োজন (User ID & Password required)' 
       });
     }
 
-    const cleanId = normalizeUniversal(loginId).trim();
+    const cleanId = normalizeUniversal(rawId).trim();
     const cleanPass = normalizeUniversal(password).trim();
 
     // Call Google Apps Script directly
