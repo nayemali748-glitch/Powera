@@ -13,6 +13,9 @@ try {
 const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
 
+// Standard desktop browser User-Agent to prevent Google Edge Security Frontend (ESF) 403/interstitial blocks
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 // Cache & concurrency deduplication for Google Apps Script requests
 interface CacheEntry {
   data: any;
@@ -21,7 +24,7 @@ interface CacheEntry {
 const gasCache = new Map<string, CacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
 const CACHE_TTL_MS = 6000; // 6 seconds for high-frequency reads
-const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat']);
+const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat', 'logs']);
 
 // Strict Idempotency Submission Map (15 minutes TTL)
 interface IdempotencyRecord {
@@ -147,12 +150,14 @@ async function callGoogleAppsScript(
     }
   }
 
+  if (action === 'uploadWorkOrder') finalAction = 'createWorkOrder';
   if (action === 'getRecords' || action === 'getMasterData') finalAction = 'entries';
   if (action === 'getDashboard' || action === 'getDashboardStats') finalAction = 'stats';
   if (action === 'getUsers') finalAction = 'users';
   if (action === 'getWorkOrders') finalAction = 'workorders';
   if (action === 'healthCheck') finalAction = 'health';
   if (action === 'saveUser' || action === 'register') finalAction = 'createUser';
+  if (action === 'getChat') finalAction = 'chat';
 
   // Submission Idempotency Check for 'createEntry'
   if (finalAction === 'createEntry') {
@@ -220,10 +225,11 @@ async function callGoogleAppsScript(
 
       try {
         let fetchUrl = GOOGLE_APPS_SCRIPT_URL;
-        const reqMethod = (READ_ACTIONS.has(finalAction) && method === 'GET') ? 'GET' : 'POST';
+        // Strict method selection: READ_ACTIONS must use GET on Google Apps Script
+        const reqMethod = READ_ACTIONS.has(finalAction) ? 'GET' : 'POST';
         const options: RequestInit = {
           signal: controller.signal,
-          redirect: 'follow', // Automatically follow GAS 302 redirects
+          redirect: 'manual', // Never let Node auto-follow; handle 302 manually with browser User-Agent
         };
 
         if (reqMethod === 'GET') {
@@ -237,28 +243,36 @@ async function callGoogleAppsScript(
           queryParams['_t'] = Date.now().toString();
           fetchUrl = `${fetchUrl}${sep}${new URLSearchParams(queryParams).toString()}`;
           options.method = 'GET';
-          options.headers = { 'Accept': 'application/json' };
-        } else {
-          options.method = 'POST';
-          // Use text/plain to avoid CORS preflight failures across Google 302 redirects
           options.headers = {
-            'Content-Type': 'text/plain;charset=utf-8',
+            'User-Agent': BROWSER_USER_AGENT,
             'Accept': 'application/json'
           };
-          options.body = JSON.stringify({ action: finalAction, ...finalPayload });
+        } else {
+          options.method = 'POST';
+          // Use text/plain to avoid CORS preflight issues across Google redirects
+          options.headers = {
+            'Content-Type': 'text/plain;charset=utf-8',
+            'User-Agent': BROWSER_USER_AGENT,
+            'Accept': 'application/json'
+          };
+          const postData = (finalPayload.data && typeof finalPayload.data === 'object') ? finalPayload.data : finalPayload;
+          options.body = JSON.stringify({ action: finalAction, ...postData, data: postData });
         }
 
         const res = await fetch(fetchUrl, options);
         let finalRes = res;
 
-        // Manual redirect handling fallback if follow was blocked
-        if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
+        // Manual redirect handling for Google Apps Script 302/301/303/307 redirects
+        if (res.status === 301 || res.status === 302 || res.status === 303 || res.status === 307 || res.status === 308) {
           const loc = res.headers.get('location');
           if (loc) {
             finalRes = await fetch(loc, {
               method: 'GET',
               signal: controller.signal,
-              headers: { 'Accept': 'application/json' }
+              headers: {
+                'User-Agent': BROWSER_USER_AGENT,
+                'Accept': 'application/json'
+              }
             });
           }
         }
@@ -266,8 +280,8 @@ async function callGoogleAppsScript(
         const rawText = await finalRes.text();
         const trimmed = rawText.trim();
 
-        // Check if Google returned an HTML error / busy page
-        if (trimmed.startsWith('<!DOCTYPE') || trimmed.includes('<html') || trimmed.includes('<body')) {
+        // Check if Google returned an HTML error / login / busy page
+        if (trimmed.startsWith('<!DOCTYPE') || trimmed.includes('<html') || trimmed.includes('<body') || trimmed.includes('ppConfig')) {
           console.warn(`[GoogleAppsScript] Received HTML page on attempt ${attempt} for "${finalAction}". Retrying...`);
           if (attempt < maxAttempts) {
             await new Promise(r => setTimeout(r, 1000 * attempt));
