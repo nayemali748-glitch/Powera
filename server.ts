@@ -289,8 +289,13 @@ async function callGoogleAppsScript(
           }
           return {
             success: false,
-            error: 'Google Sheets is currently busy. Please retry in a few seconds.',
-            busy: true
+            data: null,
+            error: {
+              code: 'BACKEND_BUSY',
+              message: 'Google Sheets is currently busy. Please retry in a few seconds.'
+            },
+            busy: true,
+            requestId: `REQ-${Date.now()}`
           };
         }
 
@@ -305,7 +310,13 @@ async function callGoogleAppsScript(
           }
           return {
             success: false,
-            error: 'Invalid response format from Google Sheets service.'
+            data: null,
+            error: {
+              code: 'INVALID_JSON',
+              message: `Google Sheets returned non-JSON content (Status: ${finalRes.status})`
+            },
+            rawText: trimmed.slice(0, 200),
+            requestId: `REQ-${Date.now()}`
           };
         }
 
@@ -338,7 +349,12 @@ async function callGoogleAppsScript(
     console.error(`[GoogleAppsScript] Action "${action}" completely failed:`, lastError?.message || lastError);
     return {
       success: false,
-      error: lastError?.message || 'Failed to connect to Google Sheets backend.'
+      data: null,
+      error: {
+        code: 'CONNECTION_FAILED',
+        message: lastError?.message || 'Failed to connect to Google Sheets backend.'
+      },
+      requestId: `REQ-${Date.now()}`
     };
   })();
 
@@ -501,7 +517,12 @@ app.post('/api/gas-proxy', async (req, res) => {
   try {
     const { action, payload = {}, method = 'POST' } = req.body;
     if (!action) {
-      return res.status(400).json({ success: false, error: 'Action parameter is required' });
+      return res.status(400).json({
+        success: false,
+        data: null,
+        error: { code: 'INVALID_REQUEST', message: 'Action parameter is required' },
+        requestId: `REQ-${Date.now()}`
+      });
     }
 
     const result = await callGoogleAppsScript(action, payload, method);
@@ -509,8 +530,10 @@ app.post('/api/gas-proxy', async (req, res) => {
   } catch (err: any) {
     console.error('GAS proxy error:', err);
     return res.status(200).json({ 
-      success: false, 
-      error: err.message || 'Google Apps Script communication error' 
+      success: false,
+      data: null,
+      error: { code: 'PROXY_COMMUNICATION_ERROR', message: err.message || 'Google Apps Script communication error' },
+      requestId: `REQ-${Date.now()}`
     });
   }
 });
@@ -548,10 +571,30 @@ app.get('/api/users', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const result = await callGoogleAppsScript('users', {}, 'GET');
-    const users = Array.isArray(result?.users) ? result.users : [];
-    return res.json({ success: true, users });
+    let users: any[] = [];
+    if (Array.isArray(result?.users)) {
+      users = result.users;
+    } else if (result?.data && Array.isArray(result.data.users)) {
+      users = result.data.users;
+    } else if (result?.data && Array.isArray(result.data)) {
+      users = result.data;
+    } else if (Array.isArray(result)) {
+      users = result;
+    }
+    return res.json({
+      success: true,
+      data: { users },
+      users,
+      error: null,
+      requestId: result?.requestId || `REQ-${Date.now()}`
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      data: null,
+      error: { code: 'USERS_FETCH_ERROR', message: err.message },
+      requestId: `REQ-${Date.now()}`
+    });
   }
 });
 

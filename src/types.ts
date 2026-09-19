@@ -134,6 +134,7 @@ export interface UserSession {
 export interface UserAccount {
   id: string;
   idNo: string;
+  userId?: string;
   password: string;
   name: string;
   phone: string;
@@ -145,6 +146,7 @@ export interface UserAccount {
   securityAnswer?: string;
   createdAt: string;
   updatedAt?: string;
+  lastLogin?: string;
 }
 
 export interface ChatMessage {

@@ -223,12 +223,20 @@ function generateId(prefix) {
 }
 
 // Standard Output Helpers
+function jsonResponse(payload) {
+  return ContentService
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function out(data, message, reqId) {
+  const rId = reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
   const payload = {
     success: true,
     data: data,
+    error: null,
     message: message || 'Success',
-    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
+    requestId: rId
   };
   // Also shallow attach common properties for full backward compatibility
   if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -245,25 +253,31 @@ function out(data, message, reqId) {
   } else if (Array.isArray(data)) {
     payload.entries = data;
     payload.items = data;
+    payload.users = data;
   }
-  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+  return jsonResponse(payload);
 }
 
 function errOut(code, message, reqId) {
   const errMsg = message || 'An error occurred';
   const errCode = code || 'ERROR';
+  const rId = reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
   const payload = {
     success: false,
-    error: errMsg,
-    errorCode: errCode,
+    data: null,
+    error: {
+      code: errCode,
+      message: errMsg
+    },
     message: errMsg,
+    errorCode: errCode,
     details: {
       code: errCode,
       message: errMsg
     },
-    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
+    requestId: rId
   };
-  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+  return jsonResponse(payload);
 }
 
 // System Logging
@@ -626,8 +640,10 @@ function authenticateUser(idNo, password) {
 function getUsersList() {
   const raw = getSheetRows('Users');
   return raw.map(u => ({
-    id: 'usr_' + String(u['User ID'] || u.idNo),
+    id: 'usr_' + String(u['User ID'] || u.idNo || ''),
     idNo: String(u['User ID'] || u.idNo || ''),
+    userId: String(u['User ID'] || u.idNo || ''),
+    password: String(u['Password'] || u.password || (u['Password Hash'] ? '' : '')),
     name: String(u['Full Name'] || u.name || ''),
     phone: String(u['Phone'] || u.phone || ''),
     role: String(u['Role'] || u.role || 'worker'),

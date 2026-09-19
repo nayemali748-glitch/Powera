@@ -82,12 +82,15 @@ export async function callGasApi<T = any>(
   method: 'GET' | 'POST' = 'GET',
   timeoutMs = 45000
 ): Promise<T> {
-  // 1. In browser environment, always route through the Express /api/gas-proxy
-  if (typeof window !== 'undefined') {
+  const isBrowser = typeof window !== 'undefined';
+  let proxyError: Error | null = null;
+
+  // 1. In browser environment, attempt the high-performance Express server proxy first
+  if (isBrowser) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       try { controller.abort(); } catch {}
-    }, timeoutMs);
+    }, Math.min(timeoutMs, 30000));
 
     try {
       const res = await fetch('/api/gas-proxy', {
@@ -98,46 +101,55 @@ export async function callGasApi<T = any>(
       });
 
       const text = await res.text();
-      let data: any = {};
+      let data: any = null;
       try {
         data = JSON.parse(text);
       } catch {
-        if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
-          throw new Error('Google Sheets backend is currently busy. Please try again in a few seconds.');
-        }
-        throw new Error('Unexpected response format from Google Sheets service.');
+        console.warn(`[API Proxy] Non-JSON response for action "${action}" (Status ${res.status}):`, text.slice(0, 200));
       }
 
-      if (data && data.success === false && data.error) {
-        const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || data.message || 'Google Sheets request failed');
-        throw new Error(errMsg);
+      if (data && typeof data === 'object') {
+        if (data.success === false && data.error) {
+          const errMsg = typeof data.error === 'string' 
+            ? data.error 
+            : (data.error?.message || data.message || 'Google Sheets request failed');
+          const errCode = data.error?.code || data.errorCode || 'BACKEND_ERROR';
+          const err = new Error(errMsg);
+          (err as any).code = errCode;
+          (err as any).requestId = data.requestId;
+          throw err;
+        }
+        return data as T;
       }
-      return data as T;
+
+      proxyError = new Error(`Proxy returned status ${res.status}`);
     } catch (err: any) {
-      if (err && err.name === 'AbortError') {
-        throw new Error(`Request timed out for action "${action}". Please try again.`);
+      if (err && err.code) {
+        // Legitimate backend error from Google Apps Script (e.g. invalid credentials, duplicate)
+        throw err;
       }
-      throw err;
+      proxyError = err;
+      console.warn(`[API Proxy] Proxy unreachable for action "${action}", failing over to direct Google Apps Script:`, err?.message || err);
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  // 2. Server-side or Node direct execution
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    try { controller.abort(); } catch {}
+  // 2. Direct Google Apps Script Web App Connection (Resilient failover & serverless execution)
+  const directController = new AbortController();
+  const directTimeoutId = setTimeout(() => {
+    try { directController.abort(); } catch {}
   }, timeoutMs);
 
   try {
-    let url = GOOGLE_SCRIPT_WEB_APP_URL;
+    let fetchUrl = GOOGLE_SCRIPT_WEB_APP_URL;
     const options: RequestInit = {
-      signal: controller.signal,
-      redirect: 'manual',
+      signal: directController.signal,
+      redirect: 'follow',
     };
 
     if (method === 'GET') {
-      const sep = url.includes('?') ? '&' : '?';
+      const sep = fetchUrl.includes('?') ? '&' : '?';
       const queryParams: Record<string, string> = { action };
       for (const [key, value] of Object.entries(payload)) {
         if (value !== undefined && value !== null) {
@@ -145,12 +157,12 @@ export async function callGasApi<T = any>(
         }
       }
       queryParams['_t'] = Date.now().toString();
-      const params = new URLSearchParams(queryParams);
-      url = `${url}${sep}${params.toString()}`;
+      fetchUrl = `${fetchUrl}${sep}${new URLSearchParams(queryParams).toString()}`;
       options.method = 'GET';
       options.headers = { 'Accept': 'application/json' };
     } else {
       options.method = 'POST';
+      // Plain text content-type prevents browser CORS preflight blocks across Google redirects
       options.headers = {
         'Content-Type': 'text/plain;charset=utf-8',
         'Accept': 'application/json'
@@ -158,40 +170,56 @@ export async function callGasApi<T = any>(
       options.body = JSON.stringify({ action, ...payload });
     }
 
-    const res = await fetch(url, options);
+    const res = await fetch(fetchUrl, options);
     let finalRes = res;
-    if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
+
+    // Node manual redirect fallback if not auto-followed
+    if (res.status === 301 || res.status === 302 || res.status === 303 || res.status === 307 || res.status === 308) {
       const loc = res.headers.get('location');
       if (loc) {
-        finalRes = await fetch(loc, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
+        finalRes = await fetch(loc, { 
+          method: 'GET', 
+          signal: directController.signal, 
+          headers: { 'Accept': 'application/json' } 
+        });
       }
     }
 
-    const text = await finalRes.text();
-    if (text.trim().startsWith('<!DOCTYPE html') || text.includes('<html')) {
-      throw new Error('Google Sheets is temporarily locked or busy. Please try again.');
+    const rawText = await finalRes.text();
+    const trimmed = rawText.trim();
+
+    if (trimmed.startsWith('<!DOCTYPE') || trimmed.includes('<html') || trimmed.includes('ppConfig')) {
+      console.warn(`[GoogleAppsScript] HTML busy page received for action "${action}":`, trimmed.slice(0, 200));
+      throw new Error('Google Sheets ব্যাকএন্ড বর্তমানে ব্যস্ত আছে। অনুগ্রহ করে কয়েক সেকেন্ড পর আবার চেষ্টা করুন। (BACKEND_BUSY)');
     }
 
-    let data: any;
+    let parsed: any;
     try {
-      data = JSON.parse(text);
+      parsed = JSON.parse(trimmed);
     } catch {
-      throw new Error('Invalid JSON received from Google Sheets backend.');
+      console.error(`[GoogleAppsScript] Non-JSON response for action "${action}". Status: ${finalRes.status}. Body:`, trimmed.slice(0, 300));
+      throw new Error(`Google Sheets সার্ভিসের সাথে যোগাযোগে সমস্যা হয়েছে (Status: ${finalRes.status})। অনুগ্রহ করে আবার চেষ্টা করুন।`);
     }
 
-    if (data && data.success === false && data.error) {
-      const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || data.message || 'Google Sheets request failed');
-      throw new Error(errMsg);
+    if (parsed && parsed.success === false) {
+      const errMsg = typeof parsed.error === 'string'
+        ? parsed.error
+        : (parsed.error?.message || parsed.message || 'Google Sheets request failed');
+      const errCode = parsed.error?.code || parsed.errorCode || 'BACKEND_ERROR';
+      const err = new Error(errMsg);
+      (err as any).code = errCode;
+      (err as any).requestId = parsed.requestId;
+      throw err;
     }
 
-    return data as T;
+    return parsed as T;
   } catch (err: any) {
     if (err && err.name === 'AbortError') {
-      throw new Error(`Request timed out for action "${action}". Please try again.`);
+      throw new Error(`Google Sheets রিকোয়েস্টের সময় শেষ (Timeout) হয়েছে। আপনার ইন্টারনেট কানেকশন চেক করুন।`);
     }
     throw err;
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(directTimeoutId);
   }
 }
 
@@ -486,27 +514,88 @@ export async function fetchStats(): Promise<StatsResponse> {
 
 export async function fetchUsers(): Promise<UserAccount[]> {
   try {
-    const data = await callGasApi<{ success: boolean; users: UserAccount[] }>('users', {}, 'GET');
-    if (data && Array.isArray(data.users)) {
-      const validUsers = data.users.filter(u => u && (u.id || u.idNo || u.name));
+    let rawUsers: any[] = [];
+    let fetchSuccess = false;
+
+    // 1. In browser, try dedicated /api/users endpoint first
+    if (typeof window !== 'undefined') {
+      try {
+        const pRes = await fetch('/api/users');
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          if (pData && pData.success) {
+            if (Array.isArray(pData.users)) {
+              rawUsers = pData.users;
+              fetchSuccess = true;
+            } else if (pData.data && Array.isArray(pData.data.users)) {
+              rawUsers = pData.data.users;
+              fetchSuccess = true;
+            } else if (pData.data && Array.isArray(pData.data)) {
+              rawUsers = pData.data;
+              fetchSuccess = true;
+            }
+          }
+        }
+      } catch (proxyErr) {
+        console.warn('Dedicated /api/users fetch failed, trying central callGasApi:', proxyErr);
+      }
+    }
+
+    // 2. Call central API if not already fetched
+    if (!fetchSuccess) {
+      const data = await callGasApi<any>('users', {}, 'GET');
+      if (Array.isArray(data)) {
+        rawUsers = data;
+      } else if (data && Array.isArray(data.users)) {
+        rawUsers = data.users;
+      } else if (data && data.data && Array.isArray(data.data.users)) {
+        rawUsers = data.data.users;
+      } else if (data && data.data && Array.isArray(data.data)) {
+        rawUsers = data.data;
+      } else if (data && Array.isArray(data.items)) {
+        rawUsers = data.items;
+      }
+    }
+
+    if (Array.isArray(rawUsers) && rawUsers.length > 0) {
       const seen = new Set<string>();
       const uniqueUsers: UserAccount[] = [];
-      validUsers.forEach((u, idx) => {
-        const idKey = String(u.id || u.idNo || `usr-${idx + 1}`).trim();
-        if (!seen.has(idKey)) {
-          seen.add(idKey);
-          uniqueUsers.push({ ...u, id: idKey });
+
+      rawUsers.forEach((u, idx) => {
+        if (!u) return;
+        const idKey = String(u.idNo || u['User ID'] || u.userId || u.id || `usr-${idx + 1}`).trim();
+        if (!seen.has(idKey.toLowerCase())) {
+          seen.add(idKey.toLowerCase());
+          uniqueUsers.push({
+            id: u.id || `usr_${idKey}`,
+            idNo: idKey,
+            name: String(u.name || u['Full Name'] || idKey).trim(),
+            phone: String(u.phone || u['Phone'] || '').trim(),
+            role: (u.role || u['Role'] || 'worker') as 'admin' | 'worker' | 'supervisor',
+            status: (u.status || u['Status'] || 'active') as 'active' | 'hold',
+            designation: String(u.designation || u['Designation'] || ''),
+            badgeNo: String(u.badgeNo || u['Badge No'] || idKey),
+            password: String(u.password || u['Password'] || ''),
+            createdAt: String(u.createdAt || u['Created At'] || ''),
+            updatedAt: String(u.updatedAt || u['Updated At'] || ''),
+            lastLogin: String(u.lastLogin || u['Last Login'] || '')
+          });
         }
       });
+
       writeCache(USERS_CACHE_KEY, uniqueUsers);
       return uniqueUsers;
     }
-    throw new Error('Failed to load users from Google Sheets');
-  } catch (err: any) {
-    console.warn('fetchUsers using cache fallback:', err);
+
+    // Fall back to cache if empty array returned from network
     const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
     if (cached.length > 0) return cached;
-    throw new Error(err.message || 'Failed to fetch users from Google Sheets');
+    return [];
+  } catch (err: any) {
+    console.warn('fetchUsers using cache fallback due to error:', err);
+    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+    if (cached.length > 0) return cached;
+    throw new Error(err.message || 'Google Sheets থেকে ইউজারদের তালিকা লোড করা যায়নি');
   }
 }
 
