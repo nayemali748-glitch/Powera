@@ -1,4 +1,4 @@
-import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage } from '../types';
+import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage, DisconnectionTask, DisconnectionTaskStatus, DisconnectionStats } from '../types';
 import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
 import { deduplicateEntries, normalizeEntry } from '../utils/entryNormalizer';
 
@@ -458,22 +458,77 @@ export async function updateEntry(id: string, updates: Partial<PowerEntry>): Pro
   }
 }
 
-export async function deleteEntry(id: string, category?: string, submissionId?: string): Promise<boolean> {
-  try {
-    await callGasApi('deleteEntry', { id, category, submissionId }, 'POST');
-  } catch (e) {
-    console.warn('Delete entry notice:', e);
+export async function deleteEntry(
+  id: string, 
+  category?: string, 
+  submissionId?: string,
+  options?: { 
+    confirmCritical?: boolean; 
+    reason?: string; 
+    status?: string; 
+    meterNo?: string; 
+    sealNo?: string; 
+    entry?: any 
   }
+): Promise<boolean> {
+  const payload = { 
+    id, 
+    category, 
+    submissionId, 
+    confirmCritical: options?.confirmCritical,
+    reason: options?.reason,
+    status: options?.status,
+    meterNo: options?.meterNo,
+    sealNo: options?.sealNo,
+    entry: options?.entry
+  };
+
+  // Direct REST DELETE to /api/entries/:id
+  try {
+    const res = await fetch(`/api/entries/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.success === false) {
+      const errMsg = data?.error || data?.message || `Server rejected entry deletion (HTTP ${res.status})`;
+      throw new Error(errMsg);
+    }
+  } catch (err: any) {
+    if (err.message && (
+      err.message.includes('CRITICAL_RECORD') || 
+      err.message.includes('MANDATORY') || 
+      err.message.includes('PROTECT') ||
+      err.message.includes('Server rejected')
+    )) {
+      throw err;
+    }
+
+    // Fallback to gas-proxy
+    const gasRes = await callGasApi<{ success?: boolean; error?: any; message?: string }>('deleteEntry', payload, 'POST');
+    if (gasRes && gasRes.success === false) {
+      const msg = typeof gasRes.error === 'object' ? (gasRes.error?.message || JSON.stringify(gasRes.error)) : (gasRes.error || gasRes.message || 'Failed to delete entry');
+      throw new Error(msg);
+    }
+  }
+
   const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-  writeCache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== id));
+  writeCache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== id && e.submissionId !== id));
   return true;
 }
 
-export async function clearAllEntries(): Promise<boolean> {
+export async function clearAllEntries(confirmPhrase: string = 'CONFIRM_PERMANENT_WIPE'): Promise<boolean> {
   try {
-    await callGasApi('clearEntries', {}, 'POST');
-  } catch (e) {
+    const res = await callGasApi<{ success?: boolean; error?: any; message?: string }>('clearEntries', { confirmClearAll: confirmPhrase }, 'POST');
+    if (res && res.success === false) {
+      const msg = typeof res.error === 'object' ? (res.error?.message || JSON.stringify(res.error)) : (res.error || res.message || 'Server rejected bulk clear');
+      throw new Error(msg);
+    }
+  } catch (e: any) {
     console.warn('Clear entries notice:', e);
+    throw e;
   }
   writeCache(LOCAL_STORAGE_KEY, []);
   return true;
@@ -637,15 +692,57 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
   throw new Error('Failed to update user in Google Sheets');
 }
 
-export async function deleteUserAccount(id: string): Promise<boolean> {
-  const cleanId = id.toLowerCase();
-  if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') {
-    throw new Error('Primary Admin account cannot be deleted');
+export async function deleteUserAccount(
+  id: string,
+  options?: {
+    confirmDelete?: boolean;
+    confirmAdminDelete?: boolean;
+    reason?: string;
   }
-  const data = await callGasApi<{ success: boolean }>('deleteUser', { id }, 'POST');
+): Promise<boolean> {
+  const cleanId = String(id || '').toLowerCase().trim();
+  if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin' || cleanId === 'nayem') {
+    throw new Error('PRIMARY_ADMIN_PROTECTED: The Primary Admin account (8695716192) is permanently protected and cannot be deleted.');
+  }
+
+  const payload = {
+    id,
+    confirmDelete: options?.confirmDelete ?? true,
+    confirmAdminDelete: options?.confirmAdminDelete,
+    reason: options?.reason
+  };
+
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.success === false) {
+      const errMsg = data?.error || data?.message || `Server rejected user deletion (HTTP ${res.status})`;
+      throw new Error(errMsg);
+    }
+  } catch (err: any) {
+    if (err.message && (
+      err.message.includes('PRIMARY_ADMIN_PROTECTED') || 
+      err.message.includes('ADMIN_ACCOUNT_PROTECTED') ||
+      err.message.includes('MANDATORY_CONFIRMATION') ||
+      err.message.includes('Server rejected')
+    )) {
+      throw err;
+    }
+    const data = await callGasApi<{ success?: boolean; error?: any }>('deleteUser', payload, 'POST');
+    if (data && data.success === false) {
+      const msg = typeof data.error === 'object' ? data.error?.message : (data.error || 'Failed to delete user');
+      throw new Error(msg);
+    }
+  }
+
   const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-  writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id));
-  return Boolean(data.success);
+  writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
+  return true;
 }
 
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
@@ -1084,4 +1181,200 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
   const list = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
   writeCache(WORK_ORDERS_STORAGE_KEY, list.filter(item => String(item.id) !== String(id)));
   return true;
+}
+
+// ============================================================================
+// DISCONNECTION TASK MANAGEMENT SYSTEM (Google Sheets Source of Truth)
+// ============================================================================
+export const DISCONNECTION_TASKS_CACHE_KEY = 'power_disconnection_tasks_cache';
+
+export async function fetchDisconnectionTasks(params: {
+  workerId?: string;
+  workerName?: string;
+  role?: string;
+  search?: string;
+  status?: string;
+  includeArchived?: boolean;
+} = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
+  const queryParts: string[] = [];
+  if (params.workerId) queryParts.push(`workerId=${encodeURIComponent(params.workerId)}`);
+  if (params.workerName) queryParts.push(`workerName=${encodeURIComponent(params.workerName)}`);
+  if (params.role) queryParts.push(`role=${encodeURIComponent(params.role)}`);
+  if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
+  if (params.status) queryParts.push(`status=${encodeURIComponent(params.status)}`);
+  if (params.includeArchived) queryParts.push(`includeArchived=true`);
+
+  const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+
+  try {
+    const res = await fetch(`/api/disconnection-tasks${qs}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.tasks)) {
+        writeCache(DISCONNECTION_TASKS_CACHE_KEY, data.tasks);
+        return { tasks: data.tasks, stats: data.stats };
+      }
+    }
+  } catch (err) {
+    console.warn('Direct /api/disconnection-tasks call failed, trying GAS API fallback:', err);
+  }
+
+  // Fallback to direct callGasApi
+  try {
+    const gasData = await callGasApi<{ success: boolean; tasks: DisconnectionTask[]; stats: DisconnectionStats }>('getDisconnectionTasks', params, 'GET');
+    if (gasData && Array.isArray(gasData.tasks)) {
+      writeCache(DISCONNECTION_TASKS_CACHE_KEY, gasData.tasks);
+      return { tasks: gasData.tasks, stats: gasData.stats };
+    }
+  } catch (err) {
+    console.warn('GAS fetchDisconnectionTasks failed:', err);
+  }
+
+  // Fallback to cache
+  const cached = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
+  let filtered = cached;
+  if (params.role === 'worker' && (params.workerId || params.workerName)) {
+    const wId = String(params.workerId || '').toLowerCase().trim();
+    const wNm = String(params.workerName || '').toLowerCase().trim();
+    filtered = filtered.filter(t => {
+      const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
+      const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
+      return (wId && aId === wId) || (wNm && aNm === wNm) || (!aId && !aNm);
+    });
+  }
+  const total = filtered.length;
+  const completed = filtered.filter(t => t.taskStatus === 'COMPLETED').length;
+  const pending = filtered.filter(t => t.taskStatus === 'PENDING').length;
+  const inProg = filtered.filter(t => t.taskStatus === 'IN PROGRESS').length;
+
+  return {
+    tasks: filtered,
+    stats: {
+      totalTasks: total,
+      completedTasks: completed,
+      pendingTasks: pending,
+      inProgressTasks: inProg,
+      unableTasks: filtered.filter(t => t.taskStatus === 'UNABLE').length,
+      reportedTasks: filtered.filter(t => t.taskStatus === 'REPORTED').length,
+      cancelledTasks: filtered.filter(t => t.taskStatus === 'CANCELLED').length,
+      completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+      myAssignedTasks: total,
+      myCompletedTasks: completed,
+      myPendingTasks: pending,
+      myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
+    }
+  };
+}
+
+export async function uploadDisconnectionTasks(
+  tasks: Partial<DisconnectionTask>[],
+  adminInfo: { adminId: string; adminName: string }
+): Promise<{ success: boolean; count: number; message: string; tasks?: DisconnectionTask[] }> {
+  try {
+    const res = await fetch('/api/disconnection-tasks/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks, adminInfo })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch (err) {
+    console.warn('Server upload failed, trying GAS API:', err);
+  }
+
+  return callGasApi('uploadDisconnectionTasks', { tasks, adminInfo }, 'POST');
+}
+
+export async function submitDisconnectionTaskReport(report: {
+  taskId: string;
+  workerId: string;
+  workerName: string;
+  taskStatus: DisconnectionTaskStatus;
+  workerReport?: string;
+  workerRemarks?: string;
+  photoUrl?: string;
+  submissionId?: string;
+  paidAmount?: string;
+  paymentDate?: string;
+  paymentReference?: string;
+  meterReading?: string;
+  priority?: string;
+  assignedAgency?: string;
+}): Promise<{ success: boolean; message: string; taskId?: string; status?: string }> {
+  const finalSubId = report.submissionId || `SUB-DISC-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  const payload = { ...report, submissionId: finalSubId };
+
+  try {
+    const res = await fetch('/api/disconnection-tasks/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch (err) {
+    console.warn('Server report submission failed, trying GAS API:', err);
+  }
+
+  return callGasApi('submitDisconnectionReport', payload, 'POST');
+}
+
+export async function assignDisconnectionTask(
+  taskId: string,
+  workerId: string,
+  workerName: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch('/api/disconnection-tasks/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, workerId, workerName })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Server assign task failed, trying GAS API:', err);
+  }
+  return callGasApi('assignDisconnectionTask', { taskId, workerId, workerName }, 'POST');
+}
+
+export async function archiveDisconnectionTask(
+  taskId: string,
+  reason: string,
+  adminName: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch('/api/disconnection-tasks/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, reason, adminName })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Server archive task failed, trying GAS API:', err);
+  }
+  return callGasApi('archiveDisconnectionTask', { taskId, reason, adminName }, 'POST');
+}
+
+export async function restoreDisconnectionTask(taskId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch('/api/disconnection-tasks/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Server restore task failed, trying GAS API:', err);
+  }
+  return callGasApi('restoreDisconnectionTask', { taskId }, 'POST');
 }

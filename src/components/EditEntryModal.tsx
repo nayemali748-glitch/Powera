@@ -41,6 +41,16 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteKeyword, setDeleteKeyword] = useState('');
+  const [deleteAcknowledge, setDeleteAcknowledge] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const isCritical = Boolean(
+    entry.status === 'Approved' || 
+    entry.status === 'Completed' || 
+    (entry.meterNo && entry.sealNo)
+  );
 
   const handleChange = (field: keyof PowerEntry, val: any) => {
     setFormData((prev) => ({ ...prev, [field]: val }));
@@ -68,16 +78,48 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
   const handleDeleteClick = async () => {
     if (!deleteConfirm) {
       setDeleteConfirm(true);
+      setDeleteReason('');
+      setDeleteKeyword('');
+      setDeleteAcknowledge(false);
+      setDeleteError(null);
       return;
     }
 
+    if (isCritical) {
+      if (deleteKeyword.trim().toUpperCase() !== 'DELETE') {
+        setDeleteError(lang === 'bn' ? 'নিশ্চিত করতে "DELETE" টাইপ করুন' : 'Type "DELETE" to confirm');
+        return;
+      }
+      if (deleteReason.trim().length < 3) {
+        setDeleteError(lang === 'bn' ? 'ডিলিট করার সুনির্দিষ্ট কারণ আবশ্যক (কমপক্ষে ৩ অক্ষর)' : 'A specific reason (minimum 3 chars) is required');
+        return;
+      }
+      if (!deleteAcknowledge) {
+        setDeleteError(lang === 'bn' ? 'নিশ্চিতকরণ চেকবক্সে টিক দিন' : 'Please check the confirmation box');
+        return;
+      }
+    } else {
+      if (!deleteAcknowledge) {
+        setDeleteError(lang === 'bn' ? 'মুছে ফেলতে টিক দিন' : 'Please check the box to confirm deletion');
+        return;
+      }
+    }
+
     setLoading(true);
+    setDeleteError(null);
     try {
-      await deleteEntry(entry.id);
+      await deleteEntry(entry.id, entry.category, entry.submissionId, {
+        confirmCritical: isCritical,
+        reason: deleteReason.trim() || 'Admin confirmed deletion from edit modal',
+        status: entry.status,
+        meterNo: entry.meterNo,
+        sealNo: entry.sealNo,
+        entry: entry
+      });
       onDeleted(entry.id);
       onClose();
     } catch (err: any) {
-      setError('Failed to delete entry');
+      setDeleteError(err.message || 'Failed to delete entry');
       setLoading(false);
     }
   };
@@ -281,33 +323,6 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
               {isNsc && (
                 <>
                   <div>
-                    <label className="text-[11px] font-bold text-slate-600 block">{t.appliedLoad}</label>
-                    <input
-                      type="text"
-                      value={formData.appliedLoad || ''}
-                      onChange={(e) => handleChange('appliedLoad', e.target.value)}
-                      className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block">{t.phaseSupply}</label>
-                    <input
-                      type="text"
-                      value={formData.phase || ''}
-                      onChange={(e) => handleChange('phase', e.target.value)}
-                      className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block">{t.tariffCategory}</label>
-                    <input
-                      type="text"
-                      value={formData.tariffCategory || ''}
-                      onChange={(e) => handleChange('tariffCategory', e.target.value)}
-                      className="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white"
-                    />
-                  </div>
-                  <div>
                     <label className="text-[11px] font-bold text-slate-600 block">{t.meterNo}</label>
                     <input
                       type="text"
@@ -468,21 +483,115 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
             </div>
           </div>
 
-          {/* Delete confirmation message if triggered */}
+          {/* Delete confirmation panel if triggered */}
           {deleteConfirm && (
-            <div className="p-3.5 bg-red-50 border border-red-300 rounded-xl flex items-center justify-between gap-3 text-red-900">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
-                <span className="font-bold text-xs">{t.deleteConfirm}</span>
+            <div className="p-4 bg-red-50/90 border-2 border-red-300 rounded-2xl space-y-3 animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-2 text-red-900 font-bold text-xs pb-1 border-b border-red-200">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>
+                  {isCritical
+                    ? (lang === 'bn' ? 'গুরুত্বপূর্ণ প্রোডাকশন রেকর্ড ডিলিট সতর্কতা' : 'Critical Production Record Deletion Warning')
+                    : (lang === 'bn' ? 'রেকর্ড ডিলিট নিশ্চিতকরণ' : 'Confirm Record Deletion')}
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={handleDeleteClick}
-                disabled={loading}
-                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-xs shadow-xs cursor-pointer"
-              >
-                {t.delete}
-              </button>
+
+              {isCritical ? (
+                <div className="space-y-2.5">
+                  <p className="text-[11px] text-red-800 leading-relaxed">
+                    {lang === 'bn'
+                      ? `এই রেকর্ডটি অনুমোদিত বা সম্পন্ন (Status: "${entry.status}")। অসাবধানতাবশত ডিলিট ঠেকাতে সার্ভার স্তরের প্রমাণপত্র ও কারণ প্রয়োজন:`
+                      : `This is an active production record (Status: "${entry.status}"). Mandatory administrative authorization required:`}
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-red-900 uppercase tracking-wider mb-0.5">
+                        {lang === 'bn' ? '১. "DELETE" লিখুন:' : '1. Type "DELETE":'}
+                      </label>
+                      <input
+                        type="text"
+                        value={deleteKeyword}
+                        onChange={(e) => setDeleteKeyword(e.target.value)}
+                        placeholder="DELETE"
+                        className="w-full px-2.5 py-1.5 bg-white border border-red-300 rounded-lg text-xs font-mono font-bold text-red-900 outline-none focus:border-red-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-red-900 uppercase tracking-wider mb-0.5">
+                        {lang === 'bn' ? '২. ডিলিটের কারণ:' : '2. Administrative Reason:'}
+                      </label>
+                      <input
+                        type="text"
+                        value={deleteReason}
+                        onChange={(e) => setDeleteReason(e.target.value)}
+                        placeholder={lang === 'bn' ? 'কারণ লিখুন (কমপক্ষে ৩ অক্ষর)' : 'Specific reason'}
+                        className="w-full px-2.5 py-1.5 bg-white border border-red-300 rounded-lg text-xs text-slate-800 outline-none focus:border-red-600"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2 pt-0.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={deleteAcknowledge}
+                      onChange={(e) => setDeleteAcknowledge(e.target.checked)}
+                      className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-3.5 w-3.5 border-red-300 cursor-pointer"
+                    />
+                    <span className="text-[11px] text-red-900 font-medium">
+                      {lang === 'bn'
+                        ? 'আমি এই রেকর্ডটি স্থায়ীভাবে মুছে ফেলার বিষয়টি নিশ্চিত করছি।'
+                        : 'I acknowledge and confirm the permanent deletion of this record.'}
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <div>
+                  <label className="flex items-start gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={deleteAcknowledge}
+                      onChange={(e) => setDeleteAcknowledge(e.target.checked)}
+                      className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-3.5 w-3.5 border-red-300 cursor-pointer"
+                    />
+                    <span className="text-xs text-red-900 font-medium">
+                      {lang === 'bn'
+                        ? 'আমি নিশ্চিত যে এই রেকর্ডটি সম্পূর্ণভাবে মুছে ফেলতে চাই।'
+                        : 'I confirm that I want to delete this record permanently.'}
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {deleteError && (
+                <div className="p-2 bg-red-100 border border-red-300 rounded-lg text-[11px] text-red-900 font-medium">
+                  {deleteError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1 border-t border-red-200">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirm(false)}
+                  disabled={loading}
+                  className="px-3 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteClick}
+                  disabled={
+                    loading ||
+                    (isCritical
+                      ? (deleteKeyword.trim().toUpperCase() !== 'DELETE' || deleteReason.trim().length < 3 || !deleteAcknowledge)
+                      : !deleteAcknowledge)
+                  }
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white font-bold rounded-lg text-xs shadow-xs transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{loading ? (lang === 'bn' ? 'মুছে ফেলা হচ্ছে...' : 'Deleting...') : t.delete}</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -490,12 +599,18 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
           <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={handleDeleteClick}
+              onClick={() => {
+                if (deleteConfirm) {
+                  setDeleteConfirm(false);
+                } else {
+                  handleDeleteClick();
+                }
+              }}
               disabled={loading}
               className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Trash2 className="w-4 h-4" />
-              <span>{deleteConfirm ? t.cancel : t.delete}</span>
+              <span>{deleteConfirm ? (lang === 'bn' ? 'বাতিল' : 'Cancel') : t.delete}</span>
             </button>
 
             <div className="flex items-center gap-2">

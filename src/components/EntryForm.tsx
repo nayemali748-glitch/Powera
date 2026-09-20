@@ -22,15 +22,23 @@ import {
   ShieldCheck,
   Building,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  FileImage,
+  Maximize2,
+  Download,
+  Eye
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types';
-import { createEntry } from '../services/api';
+import { createEntry, fetchWorkOrders } from '../services/api';
 import { appendEntryToGoogleSheet } from '../services/googleSheets';
 import { Language, translations } from '../utils/translations';
 import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 import { compressImageFile } from '../utils/imageCompressor';
+import { DisconnectionTaskManagement } from './DisconnectionTaskManagement';
 
 interface EntryFormProps {
   category: CategoryType;
@@ -40,6 +48,7 @@ interface EntryFormProps {
   lang?: Language;
   currentUser?: UserSession | null;
   initialNotice?: WorkOrderNotice | null;
+  availableWorkOrders?: WorkOrderNotice[];
 }
 
 export const EntryForm: React.FC<EntryFormProps> = ({
@@ -50,6 +59,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   lang = 'en',
   currentUser,
   initialNotice,
+  availableWorkOrders,
 }) => {
   const t = translations[lang] || translations.en;
 
@@ -113,16 +123,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [meterMake, setMeterMake] = useState('Genus / Secure');
   const [earthResistance, setEarthResistance] = useState('');
 
-  // 2. DISCONNECTION
-  const [arrearAmount, setArrearAmount] = useState('');
-  const [disconnectionReason, setDisconnectionReason] = useState('বকেয়া বিল অনাদায়ে (Unpaid Arrear Default)');
-  const [finalReading, setFinalReading] = useState('');
-  const [noticeNo, setNoticeNo] = useState('');
-  const [disconnectionType, setDisconnectionType] = useState('Defaulter / Non-Payment');
-  const [cutoutSealed, setCutoutSealed] = useState(true);
-  const [cutoutSealNo, setCutoutSealNo] = useState('');
-  const [disconnectionActionTaken, setDisconnectionActionTaken] = useState('Service cable detached & cutout sealed');
-
   // 3. POLE CASE / MAINTENANCE
   const [issueType, setIssueType] = useState('ঝড়ে পোল ভাঙা / হেলে পড়া (Storm Damaged/Tilted)');
   const [priority, setPriority] = useState<'Urgent' | 'High' | 'Normal' | 'Low'>('High');
@@ -135,6 +135,37 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   // Selected Work Order Notice for NSC Entry
   const [selectedWorkOrderNotice, setSelectedWorkOrderNotice] = useState<WorkOrderNotice | null>(initialNotice || null);
+  const [nscWorkOrders, setNscWorkOrders] = useState<WorkOrderNotice[]>([]);
+  const [loadingWorkOrders, setLoadingWorkOrders] = useState<boolean>(false);
+  const [zoomModalNotice, setZoomModalNotice] = useState<WorkOrderNotice | null>(null);
+  const [zoomScale, setZoomScale] = useState<number>(1);
+
+  const loadNscWorkOrders = async (silent = false) => {
+    if (category !== 'NSC') return;
+    if (!silent) setLoadingWorkOrders(true);
+    try {
+      // Fetch all work orders to ensure none tagged as ALL or NSC are missed
+      const orders = await fetchWorkOrders();
+      const valid = (orders || []).filter(
+        (o) => !o.isHidden && (o.category === 'NSC' || o.category === 'ALL' || !o.category)
+      );
+      if (valid.length > 0) {
+        setNscWorkOrders(valid);
+        setSelectedWorkOrderNotice((prev) => {
+          if (prev) return prev;
+          const matched = valid[0];
+          if (matched?.title && !workOrderNo) {
+            setWorkOrderNo(matched.title);
+          }
+          return matched;
+        });
+      }
+    } catch (err) {
+      console.warn('Could not fetch work orders for NSC:', err);
+    } finally {
+      if (!silent) setLoadingWorkOrders(false);
+    }
+  };
 
   useEffect(() => {
     if (initialNotice) {
@@ -144,6 +175,33 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       }
     }
   }, [initialNotice]);
+
+  useEffect(() => {
+    if (category === 'NSC') {
+      if (availableWorkOrders && availableWorkOrders.length > 0) {
+        const filtered = availableWorkOrders.filter(
+          (o) => !o.isHidden && (o.category === 'NSC' || o.category === 'ALL' || !o.category)
+        );
+        if (filtered.length > 0) {
+          setNscWorkOrders(filtered);
+          if (!selectedWorkOrderNotice && !initialNotice) {
+            setSelectedWorkOrderNotice(filtered[0]);
+            if (filtered[0].title && !workOrderNo) {
+              setWorkOrderNo(filtered[0].title);
+            }
+          }
+        }
+      }
+      loadNscWorkOrders(Boolean(availableWorkOrders && availableWorkOrders.length > 0));
+    }
+  }, [category, availableWorkOrders]);
+
+  const handleSelectWorkOrder = (notice: WorkOrderNotice) => {
+    setSelectedWorkOrderNotice(notice);
+    if (notice.title) {
+      setWorkOrderNo(notice.title);
+    }
+  };
 
   // 4. METER REPLACEMENT
   const [oldMeterNo, setOldMeterNo] = useState('');
@@ -304,33 +362,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       if (!consumerName.trim()) {
         recordError('consumerName', 'input-consumer-name', 'গ্রাহকের পুরো নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
       }
-    } else if (category === 'DISCONNECTION') {
-      if (!substation.trim()) {
-        recordError('substation', 'input-substation', 'সাবস্টেশনের নাম প্রদান করুন', 'Substation name is required');
-      }
-      if (!feederName.trim()) {
-        recordError('feederName', 'input-feeder', 'ফিডারের নাম প্রদান করুন', 'Feeder name is required');
-      }
-      if (!consumerId.trim()) {
-        recordError('consumerId', 'input-consumer-id', 'বিচ্ছিন্নকরণ গ্রাহকের কনজিউমার আইডি (Consumer ID) বাধ্যতামূলক', 'Consumer ID is required');
-      } else if (consumerId.trim().length < 4) {
-        recordError('consumerId', 'input-consumer-id', 'সঠিক কনজিউমার আইডি লিখুন', 'Enter valid Consumer ID');
-      }
-      if (!meterNo.trim()) {
-        recordError('meterNo', 'input-meter-no', 'বিচ্ছিন্নকৃত মিটার নম্বর (Meter No) প্রদান করা বাধ্যতামূলক', 'Meter Number is required');
-      }
-      if (!consumerName.trim()) {
-        recordError('consumerName', 'input-consumer-name', 'গ্রাহকের নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
-      }
-      if (!arrearAmount.trim()) {
-        recordError('arrearAmount', 'input-arrear-amount', 'বকেয়া টাকার পরিমাণ (Arrear Amount) প্রদান করুন', 'Arrear Amount is required');
-      }
-      if (!finalReading.trim()) {
-        recordError('finalReading', 'input-final-reading', 'মিটারের ফাইনাল রিডিং (Final Reading) লিখুন', 'Final Meter Reading is required');
-      }
-      if (!address.trim()) {
-        recordError('address', 'input-address', 'গ্রাহকের ঠিকানা / স্থান প্রদান করুন', 'Premises/Address is required');
-      }
     } else if (category === 'METER REPLESMENT') {
       if (!consumerId.trim()) {
         recordError('consumerId', 'input-consumer-id', 'গ্রাহকের কনজিউমার আইডি (Consumer ID) প্রদান করা বাধ্যতামূলক', 'Consumer ID is required');
@@ -468,22 +499,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.poleNo = poleNo.trim();
       entryPayload.meterMake = meterMake.trim();
       entryPayload.earthResistance = earthResistance.trim();
-    } else if (category === 'DISCONNECTION') {
-      entryPayload.feederName = feederName.trim();
-      entryPayload.substation = substation.trim();
-      entryPayload.consumerId = consumerId.trim();
-      entryPayload.consumerName = consumerName.trim();
-      entryPayload.mobile = mobile.trim();
-      entryPayload.address = address.trim();
-      entryPayload.poleNo = poleNo.trim();
-      entryPayload.meterNo = meterNo.trim();
-      entryPayload.arrearAmount = arrearAmount.trim();
-      entryPayload.reason = disconnectionReason;
-      entryPayload.finalReading = finalReading.trim();
-      entryPayload.disconnectionType = disconnectionType;
-      entryPayload.cutoutSealed = cutoutSealed;
-      entryPayload.sealNo = cutoutSealNo.trim();
-      entryPayload.actionTaken = disconnectionActionTaken;
     } else if (category === 'POLE CASE') {
       entryPayload.feederName = feederName.trim();
       entryPayload.substation = substation.trim();
@@ -556,6 +571,16 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     }
   };
 
+  if (category === 'DISCONNECTION') {
+    return (
+      <DisconnectionTaskManagement
+        currentUser={currentUser}
+        lang={lang}
+        onBack={onBack}
+      />
+    );
+  }
+
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden animate-in fade-in duration-200">
       {/* Form Header */}
@@ -586,7 +611,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </div>
             <h2 className="text-lg sm:text-xl font-black text-white mt-1">
               {category === 'NSC' && t.nscTitle}
-              {category === 'DISCONNECTION' && t.disconnectionTitle}
               {category === 'POLE CASE' && t.poleCaseTitle}
               {category === 'METER REPLESMENT' && t.meterReplacementTitle}
               {category === 'DTR REPLESMENT' && t.dtrReplacementTitle}
@@ -611,8 +635,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         </div>
       )}
 
-      {/* Optional Linked Work Order Banner if selected by user */}
-      {selectedWorkOrderNotice && (
+      {/* 1. NON-NSC: Optional Linked Work Order Banner if selected by user */}
+      {category !== 'NSC' && selectedWorkOrderNotice && (
         <div className="mx-5 sm:mx-7 mt-5 p-3.5 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
           <div className="flex items-center gap-3 overflow-hidden">
             <img 
@@ -635,6 +659,238 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           >
             {lang === 'bn' ? 'বাতিল করুন' : 'Unlink'}
           </button>
+        </div>
+      )}
+
+      {/* 2. NSC: DEDICATED PROMINENT WORK ORDER & KHATA PHOTO SECTION (SHOWN AT THE TOP) */}
+      {category === 'NSC' && (
+        <div className="mx-4 sm:mx-7 mt-5 bg-gradient-to-br from-amber-50 via-white to-amber-50/60 border-2 border-amber-400 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3.5 animate-in fade-in">
+          {/* Header */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-amber-200 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs">
+                <FileImage className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm sm:text-base font-black text-slate-900 leading-tight">
+                    {lang === 'bn' ? '📋 অফিশিয়াল ওয়ার্ক অর্ডার ও খাতার ছবি' : '📋 Official Work Order & Khata Photo'}
+                  </h3>
+                  <span className="bg-amber-100 text-amber-900 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-amber-300">
+                    Live Photo
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 font-medium mt-0.5">
+                  {selectedWorkOrderNotice ? (
+                    <span className="font-bold text-amber-950 truncate inline-block max-w-[280px] sm:max-w-md">
+                      {selectedWorkOrderNotice.title} 
+                      {selectedWorkOrderNotice.uploadDate && ` • 📅 ${selectedWorkOrderNotice.uploadDate} ${selectedWorkOrderNotice.uploadTime || ''}`}
+                      {selectedWorkOrderNotice.adminName && ` • 👤 ${selectedWorkOrderNotice.adminName}`}
+                    </span>
+                  ) : (
+                    <span>{lang === 'bn' ? 'অ্যাডমিনের আপলোডকৃত ওয়ার্ক অর্ডার ও খাতার ছবি' : 'Work Order & Khata uploaded by Admin'}</span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {/* Refresh button */}
+              <button
+                type="button"
+                onClick={() => loadNscWorkOrders(false)}
+                disabled={loadingWorkOrders}
+                className="px-3 py-1.5 bg-white hover:bg-amber-50 text-slate-700 hover:text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+                title="Refresh Work Order Photo"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-amber-600 ${loadingWorkOrders ? 'animate-spin' : ''}`} />
+                <span>{lang === 'bn' ? 'রিফ্রেশ' : 'Refresh'}</span>
+              </button>
+
+              {/* Fullscreen Zoom button */}
+              {selectedWorkOrderNotice && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setZoomModalNotice(selectedWorkOrderNotice);
+                    setZoomScale(1);
+                  }}
+                  className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-lg text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                  <span>{lang === 'bn' ? '🔍 বড় করে দেখুন' : '🔍 Zoom / Full View'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* TOP OPTION: Work Order Name (ওয়ার্ক অর্ডার নাম / নম্বর) */}
+          <div className="bg-amber-100/90 dark:bg-slate-900 border-2 border-amber-400 rounded-xl p-3 sm:p-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
+              <label className="text-xs sm:text-sm font-black text-amber-950 dark:text-amber-300 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-amber-700" />
+                <span>{lang === 'bn' ? 'ওয়ার্ক অর্ডার নাম (Work Order Name / No)' : 'Work Order Name / No'} *</span>
+              </label>
+              {nscWorkOrders.length > 0 && (
+                <span className="text-[11px] font-bold text-amber-900 dark:text-amber-300 bg-amber-200/70 dark:bg-amber-950/70 px-2.5 py-0.5 rounded-full border border-amber-300">
+                  {lang === 'bn' ? `✓ ${nscWorkOrders.length} টি ওয়ার্ক অর্ডার উপলব্ধ` : `✓ ${nscWorkOrders.length} Work Orders Available`}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* Dropdown to select uploaded order */}
+              {nscWorkOrders.length > 0 && (
+                <div>
+                  <label className="block text-[10px] font-black text-slate-700 dark:text-slate-300 mb-1 uppercase tracking-wider">
+                    {lang === 'bn' ? 'তালিকা থেকে ওয়ার্ক অর্ডার সিলেক্ট করুন:' : 'Select Uploaded Work Order:'}
+                  </label>
+                  <select
+                    value={selectedWorkOrderNotice?.id || ''}
+                    onChange={(e) => {
+                      const found = nscWorkOrders.find((o) => o.id === e.target.value);
+                      if (found) {
+                        handleSelectWorkOrder(found);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-800 border-2 border-amber-400 rounded-lg text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-none cursor-pointer shadow-2xs"
+                  >
+                    {nscWorkOrders.map((order, idx) => (
+                      <option key={order.id} value={order.id}>
+                        {idx + 1}. {order.title} {order.uploadDate ? `(${order.uploadDate})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Text input to show/edit Work Order Name */}
+              <div className={nscWorkOrders.length === 0 ? 'sm:col-span-2' : ''}>
+                <label className="block text-[10px] font-black text-slate-700 dark:text-slate-300 mb-1 uppercase tracking-wider">
+                  {lang === 'bn' ? 'ওয়ার্ক অর্ডার নাম / নম্বর:' : 'Work Order Name / No:'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={workOrderNo}
+                  onChange={(e) => {
+                    setWorkOrderNo(e.target.value);
+                    clearError('workOrderNo');
+                  }}
+                  placeholder="e.g. WO-2026-98102"
+                  className={`w-full px-3 py-2 bg-white dark:bg-slate-800 border-2 rounded-lg text-xs font-mono font-black focus:ring-2 focus:outline-none shadow-2xs ${
+                    validationErrors.workOrderNo ? 'border-red-500 text-red-900' : 'border-amber-400 text-amber-950 dark:text-white focus:ring-amber-500'
+                  }`}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Photo Preview Container */}
+          {loadingWorkOrders && !selectedWorkOrderNotice ? (
+            <div className="h-48 sm:h-64 rounded-xl bg-slate-900 border border-slate-700 flex flex-col items-center justify-center text-slate-300 gap-3">
+              <RefreshCw className="w-7 h-7 text-amber-400 animate-spin" />
+              <p className="text-xs font-bold text-slate-300">
+                {lang === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতার ছবি লোড হচ্ছে...' : 'Loading Work Order & Khata Photo...'}
+              </p>
+            </div>
+          ) : selectedWorkOrderNotice ? (
+            <div className="space-y-2.5">
+              <div 
+                onClick={() => {
+                  setZoomModalNotice(selectedWorkOrderNotice);
+                  setZoomScale(1);
+                }}
+                className="relative rounded-xl overflow-hidden bg-slate-950 border-2 border-amber-400/80 shadow-md group cursor-pointer flex items-center justify-center min-h-[220px] max-h-[360px] sm:max-h-[440px]"
+                title="Click to zoom in full screen"
+              >
+                <img
+                  src={resolveWorkOrderImageUrl(selectedWorkOrderNotice)}
+                  alt={selectedWorkOrderNotice.title || 'Work Order Photo'}
+                  className="w-full max-h-[350px] sm:max-h-[430px] object-contain transition-transform duration-200 group-hover:scale-[1.01]"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (selectedWorkOrderNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                      target.src = `/api/drive-proxy/${selectedWorkOrderNotice.fileId}`;
+                    }
+                  }}
+                />
+
+                {/* Top-Right Badge: Linked Status */}
+                <div className="absolute top-2.5 right-2.5 bg-emerald-600/90 text-white text-[11px] font-black px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-md backdrop-blur-xs">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? '✓ সংযুক্ত খাতা' : '✓ Linked Khata'}</span>
+                </div>
+
+                {/* Bottom Overlay Hint */}
+                <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950/90 via-slate-950/60 to-transparent p-2.5 flex items-center justify-center text-white text-xs font-bold gap-2">
+                  <ZoomIn className="w-4 h-4 text-amber-400" />
+                  <span className="text-amber-200">
+                    {lang === 'bn' ? '🔍 ছবিতে ক্লিক করে ফুলস্ক্রিন জুম করুন (Click to zoom & inspect details)' : '🔍 Click photo to open Fullscreen Zoom'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Multiple Khata Pages / Work Orders Switcher */}
+              {nscWorkOrders.length > 1 && (
+                <div className="pt-1">
+                  <div className="text-[11px] font-bold text-slate-600 mb-1.5 flex items-center justify-between">
+                    <span>{lang === 'bn' ? 'অন্যান্য খাতার পাতা বা ওয়ার্ক অর্ডার সিলেক্ট করুন:' : 'Select other Khata pages or Work Orders:'}</span>
+                    <span className="text-amber-700 font-bold">{nscWorkOrders.length} টি ছবি রয়েছে</span>
+                  </div>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1.5 pt-0.5">
+                    {nscWorkOrders.map((order, idx) => {
+                      const isSelected = selectedWorkOrderNotice?.id === order.id;
+                      return (
+                        <button
+                          key={order.id}
+                          type="button"
+                          onClick={() => handleSelectWorkOrder(order)}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                            isSelected
+                              ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-xs ring-2 ring-amber-300'
+                              : 'bg-white text-slate-700 hover:bg-amber-50 border-slate-300'
+                          }`}
+                        >
+                          <img
+                            src={resolveWorkOrderImageUrl(order)}
+                            alt=""
+                            className="w-7 h-7 object-cover rounded border border-slate-300 shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                          <span className="truncate max-w-[150px] sm:max-w-[220px]">
+                            {idx + 1}. {order.title}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-4 bg-white rounded-xl border border-amber-200 text-center space-y-2">
+              <p className="text-xs font-bold text-amber-900">
+                {lang === 'bn'
+                  ? '⚠️ বর্তমানে কোনো অফিশিয়াল ওয়ার্ক অর্ডার বা খাতার ছবি আপলোড করা নেই।'
+                  : '⚠️ No official Work Order or Khata photos uploaded yet.'}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                {lang === 'bn'
+                  ? 'অ্যাডমিন ফটো আপলোড করার পর এখানে স্বয়ংক্রিয়ভাবে ভেসে উঠবে। আপনি চাইলে নিচের ফর্ম পূরণ চালিয়ে যেতে পারেন।'
+                  : 'Photos uploaded by admin will automatically appear here. You can proceed to fill the form below.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => loadNscWorkOrders(false)}
+                className="mt-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>{lang === 'bn' ? 'ছবি রিফ্রেশ করে দেখুন' : 'Check for New Photo'}</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -811,7 +1067,47 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {/* 1. NSC SPECIFIC FORM WITH DISTINCT COLOR CODED FIELDS */}
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
-              {/* 1. Lineman / Staff Name (Worker Name - Above Work Order No) -> VIBRANT BLUE CARD */}
+              {/* 1. Work Order No (SOB UPOR A WORK ORDER NAME) -> TEAL CARD */}
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workOrderNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-teal-50/80 border-2 border-teal-300 hover:border-teal-400'}`}>
+                <label className="block font-black text-teal-950 mb-1.5 text-xs flex items-center justify-between">
+                  <span>{t.workOrderNo} (Work Order Name / No) *</span>
+                  <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO</span>
+                </label>
+                <input
+                  id="input-work-order-no"
+                  type="text"
+                  required
+                  value={workOrderNo}
+                  onChange={(e) => {
+                    setWorkOrderNo(e.target.value);
+                    clearError('workOrderNo');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.workOrderNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-teal-300 text-teal-900 focus:ring-teal-500'}`}
+                  placeholder="e.g. WO-2026-98102"
+                />
+                {validationErrors.workOrderNo && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.workOrderNo}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* 2. Work Order Date -> TEAL CARD */}
+              <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
+                <label className="block font-black text-teal-950 mb-1.5 text-xs">
+                  {t.workOrderDate} *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={workOrderDate}
+                  onChange={(e) => setWorkOrderDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 font-bold focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                />
+              </div>
+
+              {/* 3. Lineman / Staff Name (Worker Name) -> VIBRANT BLUE CARD */}
               <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workerName ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-blue-50/80 border-2 border-blue-300 hover:border-blue-400'}`}>
                 <label className="block font-black text-blue-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.workerName} (Worker Name / Lineman) *</span>
@@ -837,7 +1133,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 )}
               </div>
 
-              {/* 2. Agency Name (Above Work Order No) -> VIBRANT AMBER / ORANGE CARD */}
+              {/* 4. Agency Name -> VIBRANT AMBER / ORANGE CARD */}
               <div className="bg-amber-50/80 border-2 border-amber-300 rounded-xl p-3.5 shadow-xs hover:border-amber-400 transition-colors">
                 <label className="block font-black text-amber-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.agencyName} (Agency Name)</span>
@@ -852,7 +1148,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 3. CCC Name (Above Work Order No) -> VIBRANT PURPLE CARD */}
+              {/* 5. CCC Name -> VIBRANT PURPLE CARD */}
               <div className="bg-purple-50/80 border-2 border-purple-300 rounded-xl p-3.5 shadow-xs hover:border-purple-400 transition-colors">
                 <label className="block font-black text-purple-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.cccName} (CCC Name)</span>
@@ -864,46 +1160,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   onChange={(e) => setCccName(e.target.value)}
                   className="w-full px-3 py-2 bg-white border-2 border-purple-300 rounded-lg text-purple-900 font-bold focus:ring-2 focus:ring-purple-500 focus:outline-none"
                   placeholder="e.g. CCC Office Name"
-                />
-              </div>
-
-              {/* 4. Work Order No -> TEAL CARD */}
-              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workOrderNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-teal-50/80 border-2 border-teal-300 hover:border-teal-400'}`}>
-                <label className="block font-black text-teal-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.workOrderNo} *</span>
-                  <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO</span>
-                </label>
-                <input
-                  id="input-work-order-no"
-                  type="text"
-                  required
-                  value={workOrderNo}
-                  onChange={(e) => {
-                    setWorkOrderNo(e.target.value);
-                    clearError('workOrderNo');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.workOrderNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-teal-300 text-teal-900 focus:ring-teal-500'}`}
-                  placeholder="e.g. WO-2026-98102"
-                />
-                {validationErrors.workOrderNo && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.workOrderNo}</span>
-                  </p>
-                )}
-              </div>
-
-              {/* 5. Work Order Date -> TEAL CARD */}
-              <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
-                <label className="block font-black text-teal-950 mb-1.5 text-xs">
-                  {t.workOrderDate} *
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={workOrderDate}
-                  onChange={(e) => setWorkOrderDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 font-bold focus:ring-2 focus:ring-teal-500 focus:outline-none"
                 />
               </div>
 
@@ -1078,63 +1334,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 14. Sanctioned Load (kW) -> CYAN CARD */}
-              <div className="bg-cyan-50/80 border-2 border-cyan-300 rounded-xl p-3.5 shadow-xs hover:border-cyan-400 transition-colors">
-                <label className="block font-black text-cyan-950 mb-1.5 text-xs">
-                  {t.appliedLoad}
-                </label>
-                <input
-                  type="text"
-                  value={appliedLoad}
-                  onChange={(e) => setAppliedLoad(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-cyan-300 rounded-lg text-cyan-900 font-bold focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  placeholder="e.g. 2 kW (যা প্রযোজ্য লিখুন)"
-                />
-              </div>
-
-              {/* 15. Supply Phase -> CYAN CARD */}
-              <div className="bg-cyan-50/80 border-2 border-cyan-300 rounded-xl p-3.5 shadow-xs hover:border-cyan-400 transition-colors">
-                <label className="block font-black text-cyan-950 mb-1.5 text-xs">
-                  {t.phaseSupply}
-                </label>
-                <input
-                  type="text"
-                  value={phase}
-                  onChange={(e) => setPhase(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-cyan-300 rounded-lg text-cyan-900 font-bold focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                  placeholder="e.g. 1-Phase / 3-Phase (যা প্রযোজ্য লিখুন)"
-                />
-              </div>
-
-              {/* 16. Tariff Class -> LIME CARD */}
-              <div className="bg-lime-50/80 border-2 border-lime-300 rounded-xl p-3.5 shadow-xs hover:border-lime-400 transition-colors">
-                <label className="block font-black text-lime-950 mb-1.5 text-xs">
-                  {t.tariffCategory}
-                </label>
-                <input
-                  type="text"
-                  value={tariffCategory}
-                  onChange={(e) => setTariffCategory(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-lime-300 rounded-lg text-lime-900 font-bold focus:ring-2 focus:ring-lime-500 focus:outline-none"
-                  placeholder="e.g. Domestic (A-Dom) / Commercial (B-Com)"
-                />
-              </div>
-
-              {/* 17. Service Cable Size & Length -> LIME CARD */}
-              <div className="bg-lime-50/80 border-2 border-lime-300 rounded-xl p-3.5 shadow-xs hover:border-lime-400 transition-colors">
-                <label className="block font-black text-lime-950 mb-1.5 text-xs">
-                  {t.serviceCableLength}
-                </label>
-                <input
-                  type="text"
-                  value={serviceCableLength}
-                  onChange={(e) => setServiceCableLength(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-lime-300 rounded-lg text-lime-900 font-bold focus:ring-2 focus:ring-lime-500 focus:outline-none"
-                  placeholder="e.g. 25 Meters (2Cx10 sq.mm PVC/Armoured)"
-                />
-              </div>
-
-              {/* 18. Premises / Village / GP Address -> SLATE CARD (Span 3) */}
+              {/* 14. Premises / Village / GP Address -> SLATE CARD (Span 3) */}
               <div className="bg-slate-100/90 border-2 border-slate-300 rounded-xl p-3.5 shadow-xs sm:col-span-2 lg:col-span-3 hover:border-slate-400 transition-colors">
                 <label className="block font-black text-slate-950 mb-1.5 text-xs">
                   {t.addressLocation} *
@@ -1149,7 +1349,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 19. Meter Install Date -> FUCHSIA CARD */}
+              {/* 15. Meter Install Date -> FUCHSIA CARD */}
               <div className="bg-fuchsia-50/80 border-2 border-fuchsia-300 rounded-xl p-3.5 shadow-xs hover:border-fuchsia-400 transition-colors">
                 <label className="block font-black text-fuchsia-950 mb-1.5 text-xs">
                   {t.meterInstallDate} *
@@ -1163,7 +1363,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 20. Inspection Agency Name -> FUCHSIA CARD */}
+              {/* 16. Inspection Agency Name -> FUCHSIA CARD */}
               <div className="bg-fuchsia-50/80 border-2 border-fuchsia-300 rounded-xl p-3.5 shadow-xs hover:border-fuchsia-400 transition-colors">
                 <label className="block font-black text-fuchsia-950 mb-1.5 text-xs">
                   {t.inspectionAgencyName}
@@ -1175,230 +1375,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   className="w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none"
                   placeholder="Third-party / Inspection Agency Name"
                 />
-              </div>
-            </div>
-          )}
-
-          {/* 2. DISCONNECTION SPECIFIC FORM */}
-          {category === 'DISCONNECTION' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.consumerId} *</span>
-                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
-                </label>
-                <input
-                  id="input-consumer-id"
-                  type="text"
-                  required
-                  value={consumerId}
-                  onChange={(e) => {
-                    setConsumerId(e.target.value);
-                    clearError('consumerId');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.consumerId ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="e.g. 100234567"
-                />
-                {validationErrors.consumerId && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.consumerId}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>{t.meterNo} (বিচ্ছিন্নকৃত মিটার) *</span>
-                  <span className="text-[10px] text-red-600 font-bold">বাধ্যতামূলক</span>
-                </label>
-                <input
-                  id="input-meter-no"
-                  type="text"
-                  required
-                  value={meterNo}
-                  onChange={(e) => {
-                    setMeterNo(e.target.value);
-                    clearError('meterNo');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.meterNo ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="e.g. WB26-981240"
-                />
-                {validationErrors.meterNo && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.meterNo}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.consumerName} *
-                </label>
-                <input
-                  id="input-consumer-name"
-                  type="text"
-                  required
-                  value={consumerName}
-                  onChange={(e) => {
-                    setConsumerName(e.target.value);
-                    clearError('consumerName');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-semibold focus:ring-2 focus:outline-none ${validationErrors.consumerName ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="Consumer Full Name"
-                />
-                {validationErrors.consumerName && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.consumerName}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.arrearAmount} *
-                </label>
-                <input
-                  id="input-arrear-amount"
-                  type="text"
-                  required
-                  value={arrearAmount}
-                  onChange={(e) => {
-                    setArrearAmount(e.target.value);
-                    clearError('arrearAmount');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg font-mono font-bold text-red-600 focus:ring-2 focus:outline-none ${validationErrors.arrearAmount ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="e.g. ₹ 7,850"
-                />
-                {validationErrors.arrearAmount && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.arrearAmount}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.finalReading} (kWh) *
-                </label>
-                <input
-                  id="input-final-reading"
-                  type="text"
-                  required
-                  value={finalReading}
-                  onChange={(e) => {
-                    setFinalReading(e.target.value);
-                    clearError('finalReading');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 font-mono font-bold focus:ring-2 focus:outline-none ${validationErrors.finalReading ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="e.g. 14230"
-                />
-                {validationErrors.finalReading && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.finalReading}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.noticeNo}
-                </label>
-                <input
-                  type="text"
-                  value={noticeNo}
-                  onChange={(e) => setNoticeNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="Sec 56 Notice: WB/DIS/2026/04"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.disconnectionType}
-                </label>
-                <select
-                  value={disconnectionType}
-                  onChange={(e) => setDisconnectionType(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
-                >
-                  <option value="Defaulter / Non-Payment">বকেয়া বিল খেলাপী (Unpaid Arrears)</option>
-                  <option value="Permanent Disconnection (PD)">স্থায়ী বিচ্ছিন্নকরণ (Permanent PD)</option>
-                  <option value="Consumer Voluntary Request">গ্রাহকের নিজস্ব আবেদন (Voluntary)</option>
-                  <option value="Unauthorized Theft / U/S 135">অবৈধ হুকিং ও বিদ্যুৎ চুরি (Section 135)</option>
-                  <option value="Safety Hazard / Fire Risk">নিরাপত্তা ঝুঁকি (Safety Hazard)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.cutoutSealed}
-                </label>
-                <div className="flex items-center gap-4 mt-2">
-                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
-                    <input
-                      type="checkbox"
-                      checked={cutoutSealed}
-                      onChange={(e) => setCutoutSealed(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded"
-                    />
-                    <span>{cutoutSealed ? 'হ্যাঁ (Sealed)' : 'না (Not Sealed)'}</span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.cutoutSealNo}
-                </label>
-                <input
-                  type="text"
-                  value={cutoutSealNo}
-                  onChange={(e) => setCutoutSealNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. CUT-SL-4412"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.poleNo}
-                </label>
-                <input
-                  type="text"
-                  value={poleNo}
-                  onChange={(e) => setPoleNo(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                  placeholder="e.g. Pole P-18 / Sub-Span"
-                />
-              </div>
-
-              <div className="sm:col-span-2 lg:col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">
-                  {t.addressLocation} *
-                </label>
-                <input
-                  id="input-address"
-                  type="text"
-                  required
-                  value={address}
-                  onChange={(e) => {
-                    setAddress(e.target.value);
-                    clearError('address');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-lg text-slate-900 focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-500 ring-2 ring-red-400' : 'border-slate-300 focus:ring-blue-500'}`}
-                  placeholder="Premises / Shop / Residence Address"
-                />
-                {validationErrors.address && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.address}</span>
-                  </p>
-                )}
               </div>
             </div>
           )}
@@ -2224,6 +2200,107 @@ export const EntryForm: React.FC<EntryFormProps> = ({
               <CheckCircle className="w-4 h-4" />
               <span>{t.okButton || 'ঠিক আছে (OK)'}</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* FULLSCREEN WORK ORDER & KHATA PHOTO ZOOM MODAL */}
+      {zoomModalNotice && (
+        <div className="fixed inset-0 z-50 bg-slate-950/92 backdrop-blur-md flex flex-col p-2 sm:p-4 animate-in fade-in">
+          {/* Modal Header */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 shadow-xl shrink-0">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-8 h-8 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-bold shrink-0">
+                <FileImage className="w-4 h-4" />
+              </div>
+              <div className="overflow-hidden">
+                <h4 className="text-sm font-black text-white truncate max-w-xs sm:max-w-md">
+                  {zoomModalNotice.title}
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  {zoomModalNotice.uploadDate && `📅 ${zoomModalNotice.uploadDate} ${zoomModalNotice.uploadTime || ''}`}
+                  {zoomModalNotice.adminName && ` • 👤 ${zoomModalNotice.adminName}`}
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Controls */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={() => setZoomScale((s) => Math.max(0.5, Number((s - 0.25).toFixed(2))))}
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold border border-slate-700 transition-colors cursor-pointer"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+
+              <span className="text-xs font-mono font-bold text-amber-400 px-2 py-1 bg-slate-800/80 rounded border border-slate-700 min-w-[50px] text-center">
+                {Math.round(zoomScale * 100)}%
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setZoomScale((s) => Math.min(3.5, Number((s + 0.25).toFixed(2))))}
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold border border-slate-700 transition-colors cursor-pointer"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setZoomScale(1)}
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold border border-slate-700 transition-colors cursor-pointer"
+                title="Reset Zoom (100%)"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+
+              <a
+                href={resolveWorkOrderImageUrl(zoomModalNotice)}
+                download={`Khata_${zoomModalNotice.title || 'Photo'}.jpg`}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold border border-slate-700 transition-colors cursor-pointer"
+                title="Open / Download"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setZoomModalNotice(null);
+                  setZoomScale(1);
+                }}
+                className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Modal Zoomable Image Area */}
+          <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950/80 rounded-xl mt-2 border border-slate-800">
+            <img
+              src={resolveWorkOrderImageUrl(zoomModalNotice)}
+              alt={zoomModalNotice.title}
+              style={{
+                transform: `scale(${zoomScale})`,
+                transformOrigin: 'center center',
+                transition: 'transform 0.15s ease-out',
+              }}
+              className="max-w-full max-h-[75vh] object-contain rounded-lg border border-slate-800 shadow-2xl"
+              referrerPolicy="no-referrer"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (zoomModalNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
+                  target.src = `/api/drive-proxy/${zoomModalNotice.fileId}`;
+                }
+              }}
+            />
           </div>
         </div>
       )}

@@ -163,7 +163,7 @@ export interface ChatMessage {
 
 export interface WorkOrderNotice {
   id: string;
-  category: CategoryType;
+  category: CategoryType | 'ALL';
   title: string;
   photoUrl: string;
   fileId?: string;
@@ -182,3 +182,81 @@ export interface WorkOrderNotice {
   createdAt: string;
   isHidden?: boolean;
 }
+
+export type DisconnectionTaskStatus = 
+  | 'PENDING' 
+  | 'DISCONNECT'
+  | 'DISPUTE'
+  | 'OFFICE TEAM'
+  | 'PAID'
+  | 'NOT FOUND'
+  | 'REISSUE'
+  | 'IN PROGRESS' 
+  | 'COMPLETED' 
+  | 'UNABLE' 
+  | 'REPORTED' 
+  | 'CANCELLED'
+  | 'ARCHIVED';
+
+export interface DisconnectionTask {
+  taskId: string;
+  consumerId: string;
+  consumerName: string;
+  accountNumber?: string;
+  meterNumber?: string;
+  consumerAddress?: string;
+  phoneNumber?: string;
+  area?: string;
+  disconnectionReason?: string;
+  assignedWorkerId?: string;
+  assignedWorkerName?: string;
+  taskStatus: DisconnectionTaskStatus;
+  workerReport?: string;
+  workerRemarks?: string;
+  reportDate?: string;
+  reportTime?: string;
+  submittedBy?: string;
+  createdAt: string;
+  updatedAt?: string;
+  completionPercentage?: number;
+  adminRemarks?: string;
+  photoUrl?: string;
+  archivedAt?: string;
+  archivedByAdmin?: string;
+  archiveReason?: string;
+  mruSection?: string;
+  cccFeeder?: string;
+  outstandingDue?: string;
+  dueDateRange?: string;
+  baseClass?: string;
+  deviceType?: string;
+  priority?: 'NORMAL' | 'URGENT' | string;
+  assignedAgency?: string;
+  paidAmount?: string;
+  paymentDate?: string;
+  paymentReference?: string;
+  meterReading?: string;
+  statusHistory?: any[] | string;
+}
+
+export interface DisconnectionStats {
+  totalTasks: number;
+  completedTasks: number;
+  pendingTasks: number;
+  inProgressTasks: number;
+  unableTasks: number;
+  reportedTasks: number;
+  cancelledTasks: number;
+  paidTasks?: number;
+  notFoundTasks?: number;
+  disputeTasks?: number;
+  officeTeamTasks?: number;
+  reissueTasks?: number;
+  urgentTasks?: number;
+  completionPercentage: number;
+  myAssignedTasks: number;
+  myCompletedTasks: number;
+  myPendingTasks: number;
+  myCompletionPercentage: number;
+}
+

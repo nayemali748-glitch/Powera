@@ -24,7 +24,7 @@ interface CacheEntry {
 const gasCache = new Map<string, CacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
 const CACHE_TTL_MS = 6000; // 6 seconds for high-frequency reads
-const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat', 'logs']);
+const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat', 'logs', 'disconnectiontasks', 'getDisconnectionTasks']);
 
 // Strict Idempotency Submission Map (15 minutes TTL)
 interface IdempotencyRecord {
@@ -191,7 +191,12 @@ async function callGoogleAppsScript(
                      finalAction.startsWith('change') || 
                      finalAction.startsWith('toggle') ||
                      finalAction === 'resetPassword' ||
-                     finalAction === 'uploadWorkOrder';
+                     finalAction === 'uploadWorkOrder' ||
+                     finalAction.startsWith('uploadDisconnection') ||
+                     finalAction.startsWith('submitDisconnection') ||
+                     finalAction.startsWith('assignDisconnection') ||
+                     finalAction.startsWith('archiveDisconnection') ||
+                     finalAction.startsWith('restoreDisconnection');
 
   if (isMutation) {
     gasCache.clear();
@@ -510,6 +515,139 @@ app.get('/api/auth/verify/:idNo', async (req, res) => {
   }
 });
 
+// Critical production record validation helper
+async function validateEntryDeletion(entryId: string, clientPayload: any): Promise<{ allowed: boolean; error?: string; isCritical?: boolean; record?: any }> {
+  const cleanId = String(entryId || '').trim();
+  if (!cleanId) {
+    return { allowed: false, error: 'Record ID is required for deletion.' };
+  }
+
+  // Fetch current entries to inspect record
+  let currentRecord: any = null;
+  try {
+    const cachedEntriesResult = await callGoogleAppsScript('entries', {}, 'GET');
+    const rawEntries = Array.isArray(cachedEntriesResult?.entries) 
+      ? cachedEntriesResult.entries 
+      : (Array.isArray(cachedEntriesResult) ? cachedEntriesResult : []);
+    
+    currentRecord = rawEntries.find((e: any) => {
+      const eId = String(e.id || e['Record ID'] || e['RecordID'] || e['ID'] || '').trim();
+      const subId = String(e.submissionId || e['Submission ID'] || e['SubmissionID'] || '').trim();
+      return (eId && eId === cleanId) || (subId && subId === cleanId);
+    });
+  } catch (err) {
+    console.warn('[Validation] Could not fetch entries to verify status, falling back to payload check:', err);
+  }
+
+  // Fallback to record info sent in payload if not found in fetched list
+  if (!currentRecord && clientPayload?.entry) {
+    currentRecord = clientPayload.entry;
+  }
+
+  const status = String(currentRecord?.status || currentRecord?.Status || clientPayload?.status || '').trim();
+  const meterNo = String(currentRecord?.meterNo || currentRecord?.['Meter No'] || clientPayload?.meterNo || '').trim();
+  const sealNo = String(currentRecord?.sealNo || currentRecord?.['Seal No'] || clientPayload?.sealNo || '').trim();
+  const applicationNo = String(currentRecord?.applicationNo || currentRecord?.['Application No'] || clientPayload?.applicationNo || '').trim();
+
+  // Determine if this is a critical production record
+  const isApproved = status.toLowerCase() === 'approved';
+  const isCompleted = status.toLowerCase() === 'completed';
+  const hasInstalledHardware = Boolean(meterNo && sealNo);
+  const isCritical = isApproved || isCompleted || hasInstalledHardware;
+
+  if (isCritical) {
+    const confirmCritical = Boolean(clientPayload?.confirmCritical === true || clientPayload?.confirmCritical === 'true');
+    const reason = String(clientPayload?.reason || clientPayload?.deletionReason || '').trim();
+
+    if (!confirmCritical) {
+      return {
+        allowed: false,
+        isCritical: true,
+        record: currentRecord,
+        error: `CRITICAL_RECORD_PROTECTION: Entry #${cleanId} is an official production record with status "${status || 'Completed'}". Deletion is blocked to prevent accidental data loss. Mandatory administrative override confirmation and deletion reason required.`
+      };
+    }
+
+    if (reason.length < 3) {
+      return {
+        allowed: false,
+        isCritical: true,
+        record: currentRecord,
+        error: `MANDATORY_REASON_REQUIRED: A specific reason (at least 3 characters) must be documented for deleting critical production record #${cleanId}.`
+      };
+    }
+  }
+
+  return { allowed: true, isCritical, record: currentRecord };
+}
+
+// User deletion validation helper
+async function validateUserDeletion(userId: string, clientPayload: any): Promise<{ allowed: boolean; error?: string }> {
+  const cleanId = String(userId || '').trim().toLowerCase();
+  if (!cleanId) {
+    return { allowed: false, error: 'User ID is required for deletion.' };
+  }
+
+  // Permanently block Primary Admin accounts
+  const PROTECTED_ADMIN_IDS = ['8695716192', 'adm_8695716192', 'admin', 'nayem'];
+  if (PROTECTED_ADMIN_IDS.includes(cleanId)) {
+    return {
+      allowed: false,
+      error: 'PRIMARY_ADMIN_PROTECTED: The Primary System Administrator account (8695716192 / admin) is permanently protected from deletion.'
+    };
+  }
+
+  // Fetch users to verify role and status
+  let userRecord: any = null;
+  try {
+    const usersResult = await callGoogleAppsScript('users', {}, 'GET');
+    const users = Array.isArray(usersResult?.users) 
+      ? usersResult.users 
+      : (Array.isArray(usersResult?.data?.users) ? usersResult.data.users : []);
+    
+    userRecord = users.find((u: any) => {
+      const uId = String(u.id || '').trim().toLowerCase();
+      const uIdNo = String(u.idNo || u['User ID'] || '').trim().toLowerCase();
+      return (uId && uId === cleanId) || (uIdNo && uIdNo === cleanId);
+    });
+  } catch (err) {
+    console.warn('[Validation] Could not fetch users to verify status:', err);
+  }
+
+  if (userRecord) {
+    const role = String(userRecord.role || userRecord.Role || '').toLowerCase();
+    const idNo = String(userRecord.idNo || userRecord['User ID'] || '').toLowerCase();
+    
+    if (PROTECTED_ADMIN_IDS.includes(idNo)) {
+      return {
+        allowed: false,
+        error: 'PRIMARY_ADMIN_PROTECTED: Primary Admin accounts cannot be deleted under any circumstances.'
+      };
+    }
+
+    if (role === 'admin' || role === 'controller') {
+      const confirmAdminDelete = Boolean(clientPayload?.confirmAdminDelete === true || clientPayload?.confirmAdminDelete === 'true');
+      if (!confirmAdminDelete) {
+        return {
+          allowed: false,
+          error: 'ADMIN_ACCOUNT_PROTECTED: Deleting an Administrator account requires explicit admin deletion confirmation.'
+        };
+      }
+    }
+  }
+
+  // Mandatory confirmation required for any user deletion to prevent accidental clicks
+  const confirmDelete = Boolean(clientPayload?.confirmDelete === true || clientPayload?.confirmDelete === 'true');
+  if (!confirmDelete) {
+    return {
+      allowed: false,
+      error: 'MANDATORY_CONFIRMATION_REQUIRED: Accidental user deletion blocked. Mandatory confirmation prompt acknowledgment required.'
+    };
+  }
+
+  return { allowed: true };
+}
+
 // ============================================================================
 // CENTRAL GAS PROXY (Supports all operations with strict JSON responses)
 // ============================================================================
@@ -524,6 +662,47 @@ app.post('/api/gas-proxy', async (req, res) => {
         error: { code: 'INVALID_REQUEST', message: 'Action parameter is required' },
         requestId: `REQ-${Date.now()}`
       });
+    }
+
+    // Server-side validation for record deletion
+    if (action === 'deleteEntry' || action === 'deleteRecord') {
+      const targetId = payload.id || payload.submissionId;
+      const validation = await validateEntryDeletion(targetId, payload);
+      if (!validation.allowed) {
+        return res.status(403).json({
+          success: false,
+          isCritical: validation.isCritical,
+          error: { code: 'CRITICAL_RECORD_PROTECTION', message: validation.error },
+          message: validation.error,
+          requestId: `REQ-${Date.now()}`
+        });
+      }
+    }
+
+    // Server-side validation for user deletion
+    if (action === 'deleteUser') {
+      const targetId = payload.id || payload.idNo;
+      const validation = await validateUserDeletion(targetId, payload);
+      if (!validation.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'USER_DELETION_PROTECTED', message: validation.error },
+          message: validation.error,
+          requestId: `REQ-${Date.now()}`
+        });
+      }
+    }
+
+    // Server-side safety guard against accidental bulk wipe
+    if (action === 'clearEntries' || action === 'clearAllEntries') {
+      if (payload.confirmClearAll !== 'CONFIRM_PERMANENT_WIPE') {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'BULK_CLEAR_BLOCKED', message: 'Bulk clearing of production database is blocked by server-side safety policy. Explicit confirmation phrase required.' },
+          message: 'Bulk clearing of production database is blocked by server-side safety policy.',
+          requestId: `REQ-${Date.now()}`
+        });
+      }
     }
 
     const result = await callGoogleAppsScript(action, payload, method);
@@ -562,6 +741,39 @@ app.post('/api/entries', async (req, res) => {
     return res.status(201).json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to submit entry to Google Sheets' });
+  }
+});
+
+app.delete('/api/entries/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const id = req.params.id;
+    const clientPayload = { ...req.query, ...req.body };
+    const validation = await validateEntryDeletion(id, clientPayload);
+    if (!validation.allowed) {
+      return res.status(403).json({
+        success: false,
+        isCritical: validation.isCritical,
+        error: validation.error
+      });
+    }
+
+    const payload = {
+      id,
+      category: clientPayload.category,
+      submissionId: clientPayload.submissionId,
+      confirmCritical: clientPayload.confirmCritical,
+      reason: clientPayload.reason
+    };
+    const result = await callGoogleAppsScript('deleteEntry', payload, 'POST');
+    gasCache.clear();
+    return res.json({
+      success: true,
+      message: `Record #${id} successfully deleted from production`,
+      result
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to delete entry' });
   }
 });
 
@@ -613,8 +825,29 @@ app.post('/api/users', async (req, res) => {
 app.delete('/api/users/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const result = await callGoogleAppsScript('deleteUser', { id: req.params.id }, 'POST');
-    return res.json(result);
+    const id = req.params.id;
+    const clientPayload = { ...req.query, ...req.body };
+    const validation = await validateUserDeletion(id, clientPayload);
+    if (!validation.allowed) {
+      return res.status(403).json({
+        success: false,
+        error: validation.error
+      });
+    }
+
+    const payload = {
+      id,
+      confirmDelete: true,
+      confirmAdminDelete: clientPayload.confirmAdminDelete,
+      reason: clientPayload.reason
+    };
+    const result = await callGoogleAppsScript('deleteUser', payload, 'POST');
+    gasCache.clear();
+    return res.json({
+      success: true,
+      message: `User #${id} successfully deleted`,
+      result
+    });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -760,6 +993,363 @@ app.delete('/api/chat', async (req, res) => {
     return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// DISCONNECTION TASKS (Direct Google Sheets + Resilience Fallback)
+// ============================================================================
+const localDisconnectionTasks: Map<string, any> = new Map();
+
+function computeLocalStats(tasks: any[], workerId?: string, workerName?: string) {
+  const totalTasks = tasks.length;
+  let completedTasks = 0;
+  let pendingTasks = 0;
+  let inProgressTasks = 0;
+  let unableTasks = 0;
+  let reportedTasks = 0;
+  let cancelledTasks = 0;
+  let paidTasks = 0;
+  let notFoundTasks = 0;
+  let disputeTasks = 0;
+  let officeTeamTasks = 0;
+  let reissueTasks = 0;
+  let urgentTasks = 0;
+
+  let myAssignedTasks = 0;
+  let myCompletedTasks = 0;
+  let myPendingTasks = 0;
+
+  const wId = String(workerId || '').toLowerCase().trim();
+  const wNm = String(workerName || '').toLowerCase().trim();
+
+  for (const t of tasks) {
+    const st = String(t.taskStatus || t.status || 'PENDING').toUpperCase();
+    if (st === 'COMPLETED' || st === 'DISCONNECT') completedTasks++;
+    else if (st === 'PENDING') pendingTasks++;
+    else if (st === 'PAID') paidTasks++;
+    else if (st === 'NOT FOUND') notFoundTasks++;
+    else if (st === 'DISPUTE') disputeTasks++;
+    else if (st === 'OFFICE TEAM') officeTeamTasks++;
+    else if (st === 'REISSUE') reissueTasks++;
+    else if (st === 'IN PROGRESS') inProgressTasks++;
+    else if (st === 'UNABLE') unableTasks++;
+    else if (st === 'REPORTED') reportedTasks++;
+    else if (st === 'CANCELLED') cancelledTasks++;
+
+    if (String(t.priority || '').toUpperCase() === 'URGENT') urgentTasks++;
+
+    const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
+    const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
+    const isMine = (wId && aId === wId) || (wNm && aNm === wNm);
+
+    if (isMine) {
+      myAssignedTasks++;
+      if (st === 'COMPLETED' || st === 'DISCONNECT' || st === 'PAID') myCompletedTasks++;
+      else if (st === 'PENDING' || st === 'IN PROGRESS') myPendingTasks++;
+    }
+  }
+
+  const completionPercentage = totalTasks > 0 ? Math.round(((completedTasks + paidTasks) / totalTasks) * 100) : 0;
+  const myCompletionPercentage = myAssignedTasks > 0 ? Math.round((myCompletedTasks / myAssignedTasks) * 100) : 0;
+
+  return {
+    totalTasks,
+    completedTasks,
+    pendingTasks,
+    inProgressTasks,
+    unableTasks,
+    reportedTasks,
+    cancelledTasks,
+    paidTasks,
+    notFoundTasks,
+    disputeTasks,
+    officeTeamTasks,
+    reissueTasks,
+    urgentTasks,
+    completionPercentage,
+    myAssignedTasks,
+    myCompletedTasks,
+    myPendingTasks,
+    myCompletionPercentage
+  };
+}
+
+app.get('/api/disconnection-tasks', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const query = req.query;
+  const role = String(query.role || '').toLowerCase();
+  const workerId = String(query.workerId || '').toLowerCase().trim();
+  const workerName = String(query.workerName || '').toLowerCase().trim();
+
+  try {
+    const result = await callGoogleAppsScript('getDisconnectionTasks', query, 'GET');
+    if (result && Array.isArray(result.tasks)) {
+      for (const t of result.tasks) {
+        if (t.taskId) localDisconnectionTasks.set(t.taskId, t);
+      }
+      return res.json({
+        success: true,
+        tasks: result.tasks,
+        stats: result.stats || computeLocalStats(result.tasks, workerId, workerName)
+      });
+    }
+  } catch (err: any) {
+    console.warn('[Disconnection] GAS fetch failed, using memory fallback:', err.message);
+  }
+
+  // Fallback to local map if GAS has not updated yet
+  let tasks = Array.from(localDisconnectionTasks.values());
+  const includeArchived = query.includeArchived === 'true';
+  if (!includeArchived) {
+    tasks = tasks.filter(t => !t.archivedAt && t.taskStatus !== 'ARCHIVED');
+  }
+
+  if (role === 'worker' && (workerId || workerName)) {
+    tasks = tasks.filter(t => {
+      const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
+      const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
+      return (workerId && aId === workerId) || (workerName && aNm === workerName) || (!aId && !aNm);
+    });
+  }
+
+  if (query.status && query.status !== 'ALL') {
+    const st = String(query.status).toUpperCase();
+    tasks = tasks.filter(t => String(t.taskStatus || '').toUpperCase() === st);
+  }
+
+  if (query.search) {
+    const q = String(query.search).toLowerCase().trim();
+    tasks = tasks.filter(t => {
+      const hay = `${t.taskId} ${t.consumerId} ${t.consumerName} ${t.accountNumber} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber} ${t.area} ${t.disconnectionReason} ${t.assignedWorkerName}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  const stats = computeLocalStats(tasks, workerId, workerName);
+  return res.json({ success: true, tasks: tasks.reverse(), stats });
+});
+
+app.post('/api/disconnection-tasks/upload', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const body = req.body;
+  const tasksArray = Array.isArray(body.tasks) ? body.tasks : (Array.isArray(body) ? body : []);
+  const adminInfo = body.adminInfo || {};
+
+  // Store locally immediately with deduplication by consumerId, accountNumber, or taskId
+  const processed: any[] = [];
+  let insertedCount = 0;
+  let updatedCount = 0;
+
+  for (let i = 0; i < tasksArray.length; i++) {
+    const raw = tasksArray[i];
+    const cId = String(raw.consumerId || raw['Consumer ID'] || '').trim().toLowerCase();
+    const aNo = String(raw.accountNumber || raw['Account Number'] || '').trim().toLowerCase();
+    const tId = String(raw.taskId || raw['Task ID'] || '').trim().toLowerCase();
+
+    let existingKey: string | null = null;
+    for (const [key, t] of localDisconnectionTasks.entries()) {
+      const matchCId = cId && String(t.consumerId || '').trim().toLowerCase() === cId;
+      const matchANo = aNo && String(t.accountNumber || '').trim().toLowerCase() === aNo;
+      const matchTId = tId && String(t.taskId || '').trim().toLowerCase() === tId;
+      if (matchCId || matchANo || matchTId) {
+        existingKey = key;
+        break;
+      }
+    }
+
+    if (existingKey) {
+      const prev = localDisconnectionTasks.get(existingKey)!;
+      const updated = {
+        ...prev,
+        ...raw,
+        taskId: prev.taskId,
+        updatedAt: new Date().toISOString()
+      };
+      localDisconnectionTasks.set(existingKey, updated);
+      processed.push(updated);
+      updatedCount++;
+    } else {
+      const taskId = String(raw.taskId || `TASK-DISC-${Date.now()}-${i + 1}`).trim();
+      const taskObj = {
+        ...raw,
+        taskId,
+        taskStatus: raw.taskStatus || 'PENDING',
+        priority: raw.priority || 'NORMAL',
+        createdAt: raw.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        completionPercentage: 0,
+        statusHistory: []
+      };
+      localDisconnectionTasks.set(taskId, taskObj);
+      processed.push(taskObj);
+      insertedCount++;
+    }
+  }
+
+  try {
+    const result = await callGoogleAppsScript('uploadDisconnectionTasks', { tasks: tasksArray, adminInfo }, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    console.warn('[Disconnection] GAS upload proxy error, stored locally:', err.message);
+    return res.json({
+      success: true,
+      count: processed.length,
+      insertedCount,
+      updatedCount,
+      message: `Processed ${processed.length} disconnection tasks (${insertedCount} new, ${updatedCount} updated)`,
+      tasks: processed
+    });
+  }
+});
+
+app.post('/api/disconnection-tasks/report', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const report = req.body;
+  const taskId = String(report.taskId || report.id || '').trim();
+  const subId = String(report.submissionId || report.requestId || '').trim();
+
+  // Check idempotency
+  if (subId && submissionIdMap.has(subId)) {
+    return res.json(submissionIdMap.get(subId)!.result);
+  }
+
+  const newStatus = String(report.taskStatus || 'COMPLETED').toUpperCase();
+
+  // Update local task
+  if (taskId && localDisconnectionTasks.has(taskId)) {
+    const t = localDisconnectionTasks.get(taskId)!;
+    const prevStatus = t.taskStatus || 'PENDING';
+    t.taskStatus = newStatus;
+    t.workerReport = report.workerReport || '';
+    t.workerRemarks = report.workerRemarks || '';
+    t.reportDate = report.reportDate || new Date().toLocaleDateString('en-GB');
+    t.reportTime = report.reportTime || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    t.submittedBy = report.submittedBy || report.workerName || report.workerId || '';
+    t.photoUrl = report.photoUrl || t.photoUrl || '';
+    if (report.paidAmount) t.paidAmount = report.paidAmount;
+    if (report.paymentDate) t.paymentDate = report.paymentDate;
+    if (report.paymentReference) t.paymentReference = report.paymentReference;
+    if (report.meterReading) t.meterReading = report.meterReading;
+    if (report.priority) t.priority = report.priority;
+    if (report.assignedAgency) t.assignedAgency = report.assignedAgency;
+    t.updatedAt = new Date().toISOString();
+    t.completionPercentage = (newStatus === 'COMPLETED' || newStatus === 'DISCONNECT' || newStatus === 'PAID') ? 100 : (newStatus === 'IN PROGRESS' ? 50 : 0);
+
+    // Append to status history
+    let history: any[] = [];
+    try {
+      history = Array.isArray(t.statusHistory) ? t.statusHistory : (typeof t.statusHistory === 'string' ? JSON.parse(t.statusHistory) : []);
+    } catch {
+      history = [];
+    }
+    history.push({
+      previousStatus: prevStatus,
+      newStatus,
+      workerId: report.workerId || '',
+      workerName: t.submittedBy,
+      timestamp: new Date().toISOString(),
+      remarks: report.workerRemarks || report.workerReport,
+      paidAmount: report.paidAmount || '',
+      meterReading: report.meterReading || '',
+      evidence: report.photoUrl || '',
+      requestId: subId
+    });
+    t.statusHistory = history;
+
+    localDisconnectionTasks.set(taskId, t);
+  }
+
+  let finalResult: any = {
+    success: true,
+    message: `Disconnection report submitted for Task #${taskId}`,
+    taskId,
+    status: newStatus
+  };
+
+  try {
+    const gasRes = await callGoogleAppsScript('submitDisconnectionReport', report, 'POST');
+    if (gasRes && gasRes.success) {
+      finalResult = gasRes;
+    }
+  } catch (err: any) {
+    console.warn('[Disconnection] GAS report error, local update persisted:', err.message);
+  }
+
+  if (subId) {
+    submissionIdMap.set(subId, { timestamp: Date.now(), result: finalResult });
+  }
+
+  return res.json(finalResult);
+});
+
+app.post('/api/disconnection-tasks/assign', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { taskId, workerId, workerName } = req.body;
+  if (taskId && localDisconnectionTasks.has(taskId)) {
+    const t = localDisconnectionTasks.get(taskId)!;
+    t.assignedWorkerId = workerId;
+    t.assignedWorkerName = workerName;
+    t.updatedAt = new Date().toISOString();
+    localDisconnectionTasks.set(taskId, t);
+  }
+  try {
+    const result = await callGoogleAppsScript('assignDisconnectionTask', req.body, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      message: `Task #${taskId} assigned to ${workerName || workerId}`,
+      taskId,
+      assignedWorkerId: workerId,
+      assignedWorkerName: workerName
+    });
+  }
+});
+
+app.post('/api/disconnection-tasks/archive', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { taskId, reason, adminName } = req.body;
+  if (taskId && localDisconnectionTasks.has(taskId)) {
+    const t = localDisconnectionTasks.get(taskId)!;
+    t.taskStatus = 'ARCHIVED';
+    t.archivedAt = new Date().toISOString();
+    t.archivedByAdmin = adminName || 'Admin';
+    t.archiveReason = reason || 'Archived by Admin';
+    localDisconnectionTasks.set(taskId, t);
+  }
+  try {
+    const result = await callGoogleAppsScript('archiveDisconnectionTask', req.body, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      message: `Task #${taskId} archived`,
+      taskId
+    });
+  }
+});
+
+app.post('/api/disconnection-tasks/restore', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const { taskId } = req.body;
+  if (taskId && localDisconnectionTasks.has(taskId)) {
+    const t = localDisconnectionTasks.get(taskId)!;
+    t.taskStatus = 'PENDING';
+    t.archivedAt = '';
+    t.archivedByAdmin = '';
+    t.archiveReason = '';
+    localDisconnectionTasks.set(taskId, t);
+  }
+  try {
+    const result = await callGoogleAppsScript('restoreDisconnectionTask', req.body, 'POST');
+    return res.json(result);
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      message: `Task #${taskId} restored from archive`,
+      taskId
+    });
   }
 });
 

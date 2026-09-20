@@ -83,6 +83,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [createdUserCard, setCreatedUserCard] = useState<{ idNo: string; password: string; name: string; role: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Mandatory User Deletion Confirmation State
+  const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
+  const [userDeleteConfirmText, setUserDeleteConfirmText] = useState('');
+  const [userDeleteReason, setUserDeleteReason] = useState('');
+  const [userDeleteAcknowledge, setUserDeleteAcknowledge] = useState(false);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [userDeleteError, setUserDeleteError] = useState<string | null>(null);
+
   // Fetch users when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -295,36 +303,89 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
-  const handleDeleteUser = async (userAcc: UserAccount) => {
-    if (userAcc.idNo === '8695716192' || userAcc.idNo === 'admin') {
-      alert('মুখ্য এডমিন আইডি (8695716192) মুছে ফেলা যাবে না!');
+  const isPrimaryAdminAccount = (user: UserAccount | null): boolean => {
+    if (!user) return false;
+    const cleanId = String(user.idNo || user.id || '').toLowerCase().trim();
+    return cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin' || cleanId === 'nayem';
+  };
+
+  const isAdminAccount = (user: UserAccount | null): boolean => {
+    if (!user) return false;
+    return String(user.role || '').toLowerCase() === 'admin';
+  };
+
+  const handleDeleteUserClick = (userAcc: UserAccount) => {
+    if (isPrimaryAdminAccount(userAcc)) {
+      alert('মুখ্য এডমিন আইডি (8695716192) সুরক্ষিত এবং কোনো অবস্থাতেই মুছে ফেলা যাবে না!');
       return;
     }
 
-    if (window.confirm(`আপনি কি নিশ্চিত যে "${userAcc.name}" (ID: ${userAcc.idNo}) এর একাউন্ট ডিলিট করতে চান? এই আইডি ও পাসওয়ার্ড দিয়ে আর কখনো লগইন করা যাবে না।`)) {
-      setLoading(true);
-      try {
-        await deleteUserAccount(userAcc.id || userAcc.idNo);
-        setUsers(prev => prev.filter(u => u.id !== userAcc.id && u.idNo !== userAcc.idNo));
-        
-        // Invalidate active session if matching deleted user
-        const currentSession = localStorage.getItem('power_user_session');
-        if (currentSession) {
-          try {
-            const parsed = JSON.parse(currentSession);
-            if (parsed.idNo === userAcc.idNo || parsed.id === userAcc.id) {
-              localStorage.removeItem('power_user_session');
-              localStorage.removeItem('power_worker_name');
-            }
-          } catch {}
-        }
+    setUserToDelete(userAcc);
+    setUserDeleteConfirmText('');
+    setUserDeleteReason('');
+    setUserDeleteAcknowledge(false);
+    setUserDeleteError(null);
+  };
 
-        setSuccess(`User ID "${userAcc.idNo}" স্থায়ীভাবে মুছে ফেলা হয়েছে।`);
-      } catch (err: any) {
-        setError(err.message || 'Failed to delete user account');
-      } finally {
-        setLoading(false);
+  const executeDeleteUser = async () => {
+    if (!userToDelete) return;
+    if (isPrimaryAdminAccount(userToDelete)) {
+      setUserDeleteError('মুখ্য এডমিন একাউন্ট মুছে ফেলা সম্পূর্ণ নিষিদ্ধ');
+      return;
+    }
+
+    const isAdmin = isAdminAccount(userToDelete);
+
+    if (isAdmin) {
+      if (userDeleteConfirmText.trim() !== userToDelete.idNo.trim() && userDeleteConfirmText.trim().toUpperCase() !== 'DELETE') {
+        setUserDeleteError(`এডমিন একাউন্ট ডিলিট নিশ্চিত করতে হুবহু "${userToDelete.idNo}" অথবা "DELETE" টাইপ করুন`);
+        return;
       }
+      if (userDeleteReason.trim().length < 3) {
+        setUserDeleteError('এডমিন একাউন্ট মুছে ফেলার সুনির্দিষ্ট কারণ উল্লেখ করা বাধ্যতামূলক (কমপক্ষে ৩ অক্ষর)');
+        return;
+      }
+      if (!userDeleteAcknowledge) {
+        setUserDeleteError('নিশ্চিতকরণ বক্সে টিক দিন');
+        return;
+      }
+    } else {
+      if (!userDeleteAcknowledge) {
+        setUserDeleteError('ইউজার ডিলিট নিশ্চিত করতে চেকবক্সে টিক দিন');
+        return;
+      }
+    }
+
+    setIsDeletingUser(true);
+    setUserDeleteError(null);
+
+    try {
+      await deleteUserAccount(userToDelete.id || userToDelete.idNo, {
+        confirmDelete: true,
+        confirmAdminDelete: isAdmin,
+        reason: userDeleteReason.trim() || 'Admin confirmed user removal'
+      });
+
+      setUsers(prev => prev.filter(u => u.id !== userToDelete.id && u.idNo !== userToDelete.idNo));
+      
+      // Invalidate active session if matching deleted user
+      const currentSession = localStorage.getItem('power_user_session');
+      if (currentSession) {
+        try {
+          const parsed = JSON.parse(currentSession);
+          if (parsed.idNo === userToDelete.idNo || parsed.id === userToDelete.id) {
+            localStorage.removeItem('power_user_session');
+            localStorage.removeItem('power_worker_name');
+          }
+        } catch {}
+      }
+
+      setSuccess(`User ID "${userToDelete.idNo}" (${userToDelete.name}) স্থায়ীভাবে মুছে ফেলা হয়েছে।`);
+      setUserToDelete(null);
+    } catch (err: any) {
+      setUserDeleteError(err.message || 'Failed to delete user account');
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -940,7 +1001,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             {!isPrimaryAdmin && (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteUser(u)}
+                                onClick={() => handleDeleteUserClick(u)}
                                 className="p-1.5 text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
                                 title="Delete ID permanently"
                               >
@@ -1219,6 +1280,216 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
             Close
           </button>
         </div>
+
+        {/* ========================================================================= */}
+        {/* MANDATORY USER DELETION CONFIRMATION MODAL                               */}
+        {/* ========================================================================= */}
+        {userToDelete && (
+          <div 
+            id="mandatory-user-deletion-modal"
+            className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150"
+            onClick={() => {
+              if (!isDeletingUser) setUserToDelete(null);
+            }}
+          >
+            <div 
+              className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-150"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className={`px-5 py-4 flex items-center justify-between text-white ${
+                isAdminAccount(userToDelete) ? 'bg-gradient-to-r from-red-600 to-rose-700' : 'bg-gradient-to-r from-slate-800 to-slate-900'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-white/20 rounded-xl">
+                    <ShieldAlert className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm tracking-wide">
+                      {isAdminAccount(userToDelete)
+                        ? 'এডমিন একাউন্ট ডিলিট নিশ্চিতকরণ'
+                        : 'ইউজার একাউন্ট ডিলিট নিশ্চিতকরণ'}
+                    </h3>
+                    <p className="text-[11px] text-white/80 font-mono">
+                      ID: {userToDelete.idNo} • {userToDelete.role.toUpperCase()}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isDeletingUser) setUserToDelete(null);
+                  }}
+                  disabled={isDeletingUser}
+                  className="p-1.5 hover:bg-white/20 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                {isAdminAccount(userToDelete) ? (
+                  <div className="p-3.5 bg-red-50 border-l-4 border-red-600 rounded-r-xl space-y-1">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-red-900">
+                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                      <span>প্রশাসনিক নিরাপত্তা নীতিমালা সক্রিয়</span>
+                    </div>
+                    <p className="text-xs text-red-700 leading-relaxed">
+                      এডমিন একাউন্ট ডিলিট করার ফলে এই ইউজারের প্রশাসনিক অনুমতি সম্পূর্ণ বাতিল হয়ে যাবে। অসাবধানতাবশত ডিলিট রোধে কারণ এবং আইডি নিশ্চিতকরণ বাধ্যতামূলক।
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      এই ইউজার আইডি মুছে ফেললে লাইনম্যান আর কখনো এই আইডি দিয়ে লগইন করতে পারবে না।
+                    </span>
+                  </div>
+                )}
+
+                {/* User Summary Box */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs space-y-1.5">
+                  <div className="flex justify-between items-center pb-1.5 border-b border-slate-200">
+                    <span className="text-slate-500 font-medium">ব্যবহারকারীর নাম:</span>
+                    <span className="font-bold text-slate-900">{userToDelete.name}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">ইউজার আইডি (ID No):</span>
+                    <span className="font-mono font-bold text-slate-900">{userToDelete.idNo}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">পদবী (Role):</span>
+                    <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
+                      isAdminAccount(userToDelete) ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                    }`}>
+                      {userToDelete.designation || userToDelete.role}
+                    </span>
+                  </div>
+                  {userToDelete.phone && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">ফোন নম্বর:</span>
+                      <span className="font-mono text-slate-800">{userToDelete.phone}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Mandatory Inputs for Admin Role */}
+                {isAdminAccount(userToDelete) ? (
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        ১. নিশ্চিত করতে টাইপ করুন "{userToDelete.idNo}" অথবা "DELETE":
+                        <span className="text-red-500 ml-1">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={userDeleteConfirmText}
+                        onChange={(e) => setUserDeleteConfirmText(e.target.value)}
+                        placeholder={userToDelete.idNo}
+                        className="w-full px-3 py-2 border-2 border-red-200 focus:border-red-500 rounded-xl text-xs font-mono font-bold outline-none bg-red-50/40 text-red-900"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        ২. ডিলিট করার প্রশাসনিক কারণ লিখুন:
+                        <span className="text-red-500 ml-1">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={userDeleteReason}
+                        onChange={(e) => setUserDeleteReason(e.target.value)}
+                        placeholder="যেমন: লাইনম্যান স্থানান্তর / পদত্যাগ"
+                        className="w-full px-3 py-2 border border-slate-300 focus:border-red-500 rounded-xl text-xs outline-none bg-white text-slate-800"
+                      />
+                    </div>
+
+                    <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={userDeleteAcknowledge}
+                        onChange={(e) => setUserDeleteAcknowledge(e.target.checked)}
+                        className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-4 w-4 border-slate-300 cursor-pointer"
+                      />
+                      <span className="text-xs text-slate-700 font-medium">
+                        আমি নিশ্চিত যে এই এডমিন অ্যাকাউন্টটির সমস্ত অ্যাক্সেস স্থায়ীভাবে বাতিল করতে চাই।
+                      </span>
+                    </label>
+                  </div>
+                ) : (
+                  <div className="pt-1">
+                    <label className="flex items-start gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={userDeleteAcknowledge}
+                        onChange={(e) => setUserDeleteAcknowledge(e.target.checked)}
+                        className="mt-0.5 rounded text-slate-900 focus:ring-slate-700 h-4 w-4 border-slate-300 cursor-pointer"
+                      />
+                      <span className="text-xs text-slate-700 font-medium">
+                        আমি নিশ্চিত যে "{userToDelete.name}" (ID: {userToDelete.idNo}) এর অ্যাকাউন্ট মুছে ফেলতে চাই।
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                {/* Server-Side Validation Error Display */}
+                {userDeleteError && (
+                  <div className="p-3 bg-red-100 border border-red-300 rounded-xl flex items-start gap-2 text-xs text-red-900 font-medium animate-in shake-1 duration-150">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold">সার্ভার ভ্যালিডেশন ত্রুটি: </span>
+                      <span>{userDeleteError}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setUserToDelete(null)}
+                  disabled={isDeletingUser}
+                  className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  বাতিল
+                </button>
+
+                <button
+                  type="button"
+                  id="confirm-delete-user-modal-btn"
+                  onClick={executeDeleteUser}
+                  disabled={
+                    isDeletingUser ||
+                    (isAdminAccount(userToDelete)
+                      ? ((userDeleteConfirmText.trim() !== userToDelete.idNo.trim() && userDeleteConfirmText.trim().toUpperCase() !== 'DELETE') ||
+                         userDeleteReason.trim().length < 3 ||
+                         !userDeleteAcknowledge)
+                      : !userDeleteAcknowledge)
+                  }
+                  className={`px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
+                    isAdminAccount(userToDelete)
+                      ? 'bg-red-600 hover:bg-red-700 disabled:bg-red-300'
+                      : 'bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300'
+                  } disabled:cursor-not-allowed`}
+                >
+                  {isDeletingUser ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>মুছে ফেলা হচ্ছে...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>ডিলিট নিশ্চিত করুন</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

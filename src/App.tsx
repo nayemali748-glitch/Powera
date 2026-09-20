@@ -998,6 +998,7 @@ export default function App() {
                     workerName={workerName}
                     currentUser={currentUser}
                     initialNotice={selectedWorkOrderForEntry}
+                    availableWorkOrders={workOrders}
                     onSuccess={(newEntry) => {
                       handleEntrySuccess(newEntry);
                       setSelectedWorkOrderForEntry(null);
