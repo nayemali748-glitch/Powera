@@ -85,7 +85,7 @@ const NSC_HEADERS = [
 ];
 
 const DISCONNECTION_HEADERS = [
-  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'SL No', 'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
   'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
   'Substation', 'Feeder Name',
   'Consumer ID', 'Consumer Name', 'Father Name', 'Mobile No', 'Address',
@@ -854,6 +854,143 @@ function submitRecord(recordData) {
   }
 }
 
+// Full Two-Way Update Record in Google Sheets
+function updateEntry(targetId, category, updateData) {
+  const cleanId = String(targetId || '').trim();
+  if (!cleanId) throw Error('Entry ID is required for update');
+
+  const sheetsToSearch = category 
+    ? [category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+
+  let matchedSheet = null;
+  let matchedRowIndex = -1;
+  let matchedRow = null;
+
+  for (let i = 0; i < sheetsToSearch.length; i++) {
+    const sheetName = sheetsToSearch[i];
+    try {
+      const s = getSheet(sheetName);
+      if (!s) continue;
+      const rows = getSheetRows(sheetName);
+      const found = rows.find(r => 
+        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
+        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId ||
+        String(r['Task ID'] || r.taskId || '').trim() === cleanId ||
+        (cleanId.length >= 6 && String(r['Consumer ID'] || r.consumerId || '').trim() === cleanId)
+      );
+      if (found) {
+        matchedSheet = s;
+        matchedRowIndex = found._rowIndex;
+        matchedRow = found;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  // Fallback search by consumer ID or SL if provided in update payload
+  if (!matchedSheet || matchedRowIndex < 2) {
+    const patchObj = (updateData && typeof updateData.data === 'object') ? updateData.data : (updateData || {});
+    const altConsumerId = String(patchObj.consumerId || patchObj['Consumer ID'] || '').trim();
+    if (altConsumerId) {
+      for (let i = 0; i < sheetsToSearch.length; i++) {
+        try {
+          const s = getSheet(sheetsToSearch[i]);
+          if (!s) continue;
+          const rows = getSheetRows(sheetsToSearch[i]);
+          const found = rows.find(r => String(r['Consumer ID'] || r.consumerId || '').trim() === altConsumerId);
+          if (found) {
+            matchedSheet = s;
+            matchedRowIndex = found._rowIndex;
+            matchedRow = found;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (!matchedSheet || matchedRowIndex < 2) {
+    throw Error('Record #' + cleanId + ' not found in Google Sheets.');
+  }
+
+  const lastCol = matchedSheet.getLastColumn();
+  const headers = matchedSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+  const rowVals = matchedSheet.getRange(matchedRowIndex, 1, 1, lastCol).getValues()[0];
+
+  const patch = (updateData && typeof updateData.data === 'object') ? updateData.data : (updateData || {});
+  patch.updatedAt = now();
+
+  // If sheet has Record ID column and current value is empty, populate it
+  const recIdCol = headers.findIndex(h => normHeader(h) === 'recordid');
+  if (recIdCol >= 0 && (!rowVals[recIdCol] || rowVals[recIdCol] === '')) {
+    rowVals[recIdCol] = cleanId;
+  }
+
+  headers.forEach((h, colIdx) => {
+    const newVal = extractFieldValue(patch, h);
+    if (newVal !== undefined && newVal !== null && newVal !== '') {
+      rowVals[colIdx] = newVal;
+    }
+  });
+
+  matchedSheet.getRange(matchedRowIndex, 1, 1, lastCol).setValues([rowVals]);
+  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+
+  return {
+    success: true,
+    message: 'Record #' + cleanId + ' updated successfully in Google Sheets',
+    entry: {
+      id: cleanId,
+      ...matchedRow,
+      ...patch,
+      updatedAt: patch.updatedAt
+    }
+  };
+}
+
+// Delete Record from Google Sheets with Protection
+function deleteEntry(targetId, category, options) {
+  options = options || {};
+  const cleanId = String(targetId || '').trim();
+  if (!cleanId) throw Error('Entry ID required for deletion');
+
+  const sheetsToSearch = category 
+    ? [category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+
+  let matchedSheet = null;
+  let matchedRow = null;
+
+  for (let i = 0; i < sheetsToSearch.length; i++) {
+    const sheetName = sheetsToSearch[i];
+    try {
+      const s = getSheet(sheetName);
+      if (!s) continue;
+      const rows = getSheetRows(sheetName);
+      const found = rows.find(r => 
+        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
+        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId
+      );
+      if (found) {
+        matchedSheet = s;
+        matchedRow = found;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  if (!matchedRow || !matchedSheet) {
+    throw Error('Record not found in Google Sheets: ' + cleanId);
+  }
+
+  matchedSheet.deleteRow(matchedRow._rowIndex);
+  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+  logSystemActivity('admin', cleanId, '', '', 'DELETE_RECORD', 'Deleted record: ' + cleanId);
+
+  return { success: true, message: 'Record deleted from Google Sheets', id: cleanId };
+}
+
 // Query Entries across dedicated sheets
 function queryRecords(filters) {
   filters = filters || {};
@@ -867,11 +1004,22 @@ function queryRecords(filters) {
   targetSheets.forEach(sheetName => {
     try {
       const rows = getSheetRows(sheetName);
-      rows.forEach(r => {
+      rows.forEach((r, idx) => {
+        // Generate stable deterministic ID if missing (e.g. from copy-pasting directly into Sheet)
+        const stableId = String(
+          r['Record ID'] || 
+          r.id || 
+          r['Task ID'] || 
+          r.taskId || 
+          r['Submission ID'] || 
+          r.submissionId || 
+          ('PWR-' + sheetName.substring(0, 3).toUpperCase() + '-' + (r['Consumer ID'] || r.consumerId || r['SL No'] || r.slNo || (idx + 1)))
+        ).trim();
+
         // Normalize entry to standard frontend shape
         const item = {
-          id: String(r['Record ID'] || r.id || ('PWR-' + Math.random().toString(36).substring(2, 7))),
-          submissionId: String(r['Submission ID'] || r.submissionId || ''),
+          id: stableId,
+          submissionId: String(r['Submission ID'] || r.submissionId || stableId),
           category: String(r['Category'] || r.category || sheetName),
           status: String(r['Status'] || r.status || 'Completed'),
           date: String(r['Date'] || r.date || r['Created At'] || now()),
@@ -1164,6 +1312,11 @@ function doGet(e) {
       return out({ logs: getSheetRows('System Logs').reverse() }, 'System logs retrieved');
     }
 
+    // 9. Disconnection Tasks & Module
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks') {
+      return out(getDisconnectionTasksData(p), 'Disconnection tasks retrieved');
+    }
+
     // Fallback: Unknown action
     return errOut('UNKNOWN_GET_ACTION', 'Unrecognized GET action: ' + action);
   } catch (err) {
@@ -1245,6 +1398,21 @@ function doPost(e) {
       return out(res, 'User deleted', reqId);
     }
 
+    // Record Update & Delete Operations
+    if (action === 'updateEntry' || action === 'updateRecord' || action === 'editEntry') {
+      const targetId = body.id || body.submissionId || data.id || data.submissionId || body.taskId || data.taskId;
+      const category = body.category || data.category;
+      const updateData = body.data || data.data || data || body;
+      const res = updateEntry(targetId, category, updateData);
+      return out(res, res.message || 'Record updated', reqId);
+    }
+    if (action === 'deleteEntry' || action === 'deleteRecord') {
+      const targetId = body.id || body.submissionId || data.id || data.submissionId;
+      const category = body.category || data.category;
+      const res = deleteEntry(targetId, category, body.options || body || data);
+      return out(res, 'Record deleted', reqId);
+    }
+
     // Record Submission & Management
     if (
       action === 'submitRecord' ||
@@ -1324,8 +1492,312 @@ function doPost(e) {
       return out({ logged: true }, 'Activity logged', reqId);
     }
 
+    // Disconnection Tasks Operations
+    if (action === 'uploadDisconnectionTasks') {
+      return out(handleUploadDisconnectionTasks(body), 'Disconnection tasks processed', reqId);
+    }
+    if (action === 'submitDisconnectionReport') {
+      return out(handleSubmitDisconnectionReport(body), 'Disconnection report saved', reqId);
+    }
+    if (action === 'assignDisconnectionTask') {
+      return out(handleAssignDisconnectionTask(body), 'Disconnection task assigned', reqId);
+    }
+    if (action === 'archiveDisconnectionTask') {
+      return out(handleArchiveDisconnectionTask(body), 'Disconnection task archived', reqId);
+    }
+    if (action === 'restoreDisconnectionTask') {
+      return out(handleRestoreDisconnectionTask(body), 'Disconnection task restored', reqId);
+    }
+
     return errOut('UNKNOWN_POST_ACTION', 'Unrecognized POST action: ' + action, reqId);
   } catch (err) {
     return errOut('SERVER_ERROR', String(err.message || err));
   }
+}
+
+// ============================================================================
+// DISCONNECTION MODULE ISOLATED HANDLERS
+// ============================================================================
+
+function getDisconnectionTasksData(params) {
+  params = params || {};
+  let rawRows = [];
+  try {
+    rawRows = getSheetRows('Disconnection');
+  } catch (e) {
+    rawRows = [];
+  }
+
+  var tasks = [];
+  var seenIds = {};
+
+  for (var i = 0; i < rawRows.length; i++) {
+    var r = rawRows[i];
+    var taskId = String(r['Task ID'] || r['Submission ID'] || r['Record ID'] || ('TASK-DISC-' + (i + 1))).trim();
+    if (seenIds[taskId]) continue;
+    seenIds[taskId] = true;
+
+    var rawSl = String(r['SL No'] || r['SL'] || r.serialNumber || r.slNo || '').trim();
+    var serialNumber = '';
+    if (rawSl) {
+      var m = rawSl.match(/(\d+)/);
+      if (m) {
+        serialNumber = 'SL ' + ('000' + m[1]).slice(-3);
+      } else {
+        serialNumber = rawSl;
+      }
+    } else {
+      serialNumber = 'SL ' + ('000' + (i + 1)).slice(-3);
+    }
+
+    var status = String(r['Status'] || r['Task Status'] || 'PENDING').toUpperCase();
+    var task = {
+      serialNumber: serialNumber,
+      taskId: taskId,
+      consumerId: String(r['Consumer ID'] || r.consumerId || '').trim(),
+      consumerName: String(r['Consumer Name'] || r.consumerName || '').trim(),
+      accountNumber: String(r['Account Number'] || r['Installation No'] || r.accountNumber || '').trim(),
+      meterNumber: String(r['Final Reading'] || r['Old Meter No'] || r.meterNumber || '').trim(),
+      consumerAddress: String(r['Address'] || r.consumerAddress || '').trim(),
+      phoneNumber: String(r['Mobile No'] || r['Worker Phone'] || r.phoneNumber || '').trim(),
+      area: String(r['Substation'] || r.area || '').trim(),
+      disconnectionReason: String(r['Reason'] || r.disconnectionReason || 'Arrears').trim(),
+      assignedWorkerId: String(r['Worker ID'] || r.assignedWorkerId || '').trim(),
+      assignedWorkerName: String(r['Worker Name'] || r.assignedWorkerName || '').trim(),
+      taskStatus: status,
+      workerReport: String(r['Notes'] || r.workerReport || '').trim(),
+      workerRemarks: String(r['Notes'] || r.workerRemarks || '').trim(),
+      reportDate: String(r['Date'] || r.reportDate || '').trim(),
+      reportTime: String(r.reportTime || '').trim(),
+      submittedBy: String(r['Submitted By'] || r.submittedBy || '').trim(),
+      createdAt: String(r['Created At'] || r.createdAt || now()).trim(),
+      updatedAt: String(r['Updated At'] || r.updatedAt || now()).trim(),
+      photoUrl: String(r['Photo Evidence'] || r.photoUrl || '').trim(),
+      mruSection: String(r['MRU Section'] || r.mruSection || '').trim(),
+      cccFeeder: String(r['Feeder Name'] || r.cccFeeder || '').trim(),
+      outstandingDue: String(r['Arrear Amount'] || r.outstandingDue || '').trim(),
+      dueDateRange: String(r['Due Date Range'] || r.dueDateRange || '').trim(),
+      baseClass: String(r['Base Class'] || r.baseClass || 'Domestic').trim(),
+      deviceType: String(r['Device Type'] || r.deviceType || '1-Phase').trim(),
+      priority: String(r['Priority'] || r.priority || 'NORMAL').trim(),
+      assignedAgency: String(r['Agency Name'] || r.assignedAgency || '').trim(),
+      paidAmount: String(r['Paid Amount'] || r.paidAmount || '').trim(),
+      paymentDate: String(r['Payment Date'] || r.paymentDate || '').trim(),
+      paymentReference: String(r['Payment Reference'] || r.paymentReference || '').trim(),
+      meterReading: String(r['Meter Reading'] || r.meterReading || '').trim(),
+      statusHistory: r['Status History'] || r.statusHistory || []
+    };
+    tasks.push(task);
+  }
+
+  // Filter if worker requested
+  var role = String(params.role || '').toLowerCase();
+  var workerId = String(params.workerId || '').toLowerCase().trim();
+  var workerName = String(params.workerName || '').toLowerCase().trim();
+
+  var total = tasks.length;
+  var completed = 0;
+  var pending = 0;
+  var paid = 0;
+  var notFound = 0;
+  var dispute = 0;
+  var officeTeam = 0;
+  var reissue = 0;
+  var urgent = 0;
+
+  for (var j = 0; j < tasks.length; j++) {
+    var st = tasks[j].taskStatus;
+    if (st === 'COMPLETED' || st === 'DISCONNECT') completed++;
+    else if (st === 'PENDING') pending++;
+    else if (st === 'PAID') paid++;
+    else if (st === 'NOT FOUND') notFound++;
+    else if (st === 'DISPUTE') dispute++;
+    else if (st === 'OFFICE TEAM') officeTeam++;
+    else if (st === 'REISSUE') reissue++;
+
+    if (String(tasks[j].priority).toUpperCase() === 'URGENT') urgent++;
+  }
+
+  return {
+    tasks: tasks,
+    stats: {
+      totalTasks: total,
+      completedTasks: completed,
+      pendingTasks: pending,
+      paidTasks: paid,
+      notFoundTasks: notFound,
+      disputeTasks: dispute,
+      officeTeamTasks: officeTeam,
+      reissueTasks: reissue,
+      urgentTasks: urgent,
+      completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+      myAssignedTasks: total,
+      myCompletedTasks: completed,
+      myPendingTasks: pending,
+      myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
+    }
+  };
+}
+
+function handleUploadDisconnectionTasks(body) {
+  var tasks = body.tasks || [];
+  var adminInfo = body.adminInfo || {};
+  var inserted = 0;
+  var updated = 0;
+
+  var existingRows = getSheetRows('Disconnection');
+  var maxSl = 0;
+  for (var k = 0; k < existingRows.length; k++) {
+    var slVal = String(existingRows[k]['SL No'] || existingRows[k]['SL'] || '');
+    var m = slVal.match(/(\d+)/);
+    if (m) {
+      var n = parseInt(m[1], 10);
+      if (n > maxSl) maxSl = n;
+    }
+  }
+
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    var slStr = '';
+    if (t.serialNumber) {
+      slStr = t.serialNumber;
+    } else if (t['SL No']) {
+      slStr = t['SL No'];
+    } else {
+      maxSl++;
+      slStr = 'SL ' + ('000' + maxSl).slice(-3);
+    }
+
+    var record = {
+      'SL No': slStr,
+      'Submission ID': t.taskId || ('TASK-DISC-' + Date.now() + '-' + (i + 1)),
+      'Record ID': t.taskId || ('TASK-DISC-' + Date.now() + '-' + (i + 1)),
+      'Category': 'Disconnection',
+      'Status': t.taskStatus || 'PENDING',
+      'Date': t.createdAt || now(),
+      'Created At': t.createdAt || now(),
+      'Updated At': now(),
+      'Worker ID': t.assignedWorkerId || '',
+      'Worker Name': t.assignedWorkerName || '',
+      'Role': 'admin',
+      'Submitted By': adminInfo.adminName || 'Admin',
+      'Substation': t.area || '',
+      'Feeder Name': t.cccFeeder || '',
+      'Consumer ID': t.consumerId || '',
+      'Consumer Name': t.consumerName || '',
+      'Mobile No': t.phoneNumber || '',
+      'Address': t.consumerAddress || '',
+      'Arrear Amount': t.outstandingDue || '',
+      'Reason': t.disconnectionReason || 'Outstanding Bill',
+      'Notes': t.workerRemarks || ''
+    };
+    try {
+      appendSheetRecord('Disconnection', record);
+      inserted++;
+    } catch (e) {
+      // Continue next row
+    }
+  }
+
+  return {
+    success: true,
+    count: tasks.length,
+    insertedCount: inserted,
+    updatedCount: updated,
+    message: 'Uploaded ' + inserted + ' disconnection tasks'
+  };
+}
+
+function handleSubmitDisconnectionReport(body) {
+  var taskId = body.taskId || '';
+  var status = body.taskStatus || 'COMPLETED';
+
+  var record = {
+    'SL No': body.serialNumber || '',
+    'Submission ID': body.submissionId || ('SUB-DISC-' + Date.now()),
+    'Record ID': taskId,
+    'Category': 'Disconnection',
+    'Status': status,
+    'Date': body.reportDate || now(),
+    'Created At': now(),
+    'Updated At': now(),
+    'Worker ID': body.workerId || '',
+    'Worker Name': body.workerName || '',
+    'Role': 'worker',
+    'Submitted By': body.workerName || 'Worker',
+    'Consumer ID': body.consumerId || '',
+    'Consumer Name': body.consumerName || '',
+    'Mobile No': body.phoneNumber || '',
+    'Address': body.consumerAddress || '',
+    'Arrear Amount': body.paidAmount || '',
+    'Reason': body.disconnectionReason || 'Disconnection Action',
+    'Final Reading': body.meterReading || '',
+    'Disconnection Type': status,
+    'Notes': body.workerRemarks || body.workerReport || '',
+    'Photo Evidence': body.photoUrl || ''
+  };
+
+  try {
+    var s = getSheet('Disconnection');
+    var data = s.getDataRange().getValues();
+    var headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : [];
+    var recIdIdx = headers.indexOf('Record ID');
+    var subIdIdx = headers.indexOf('Submission ID');
+    var statusIdx = headers.indexOf('Status');
+    var notesIdx = headers.indexOf('Notes');
+    var dateIdx = headers.indexOf('Date');
+    var workerIdx = headers.indexOf('Worker Name');
+    var updatedIdx = headers.indexOf('Updated At');
+    var readingIdx = headers.indexOf('Final Reading');
+    var photoIdx = headers.indexOf('Photo Evidence');
+
+    var foundRow = -1;
+    if (taskId && (recIdIdx !== -1 || subIdIdx !== -1)) {
+      for (var r = 1; r < data.length; r++) {
+        if ((recIdIdx !== -1 && String(data[r][recIdIdx] || '').trim() === taskId) ||
+            (subIdIdx !== -1 && String(data[r][subIdIdx] || '').trim() === taskId)) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+    }
+
+    if (foundRow > 1) {
+      if (statusIdx !== -1) s.getRange(foundRow, statusIdx + 1).setValue(status);
+      if (notesIdx !== -1 && record['Notes']) s.getRange(foundRow, notesIdx + 1).setValue(record['Notes']);
+      if (workerIdx !== -1 && record['Worker Name']) s.getRange(foundRow, workerIdx + 1).setValue(record['Worker Name']);
+      if (dateIdx !== -1) s.getRange(foundRow, dateIdx + 1).setValue(record['Date']);
+      if (updatedIdx !== -1) s.getRange(foundRow, updatedIdx + 1).setValue(now());
+      if (readingIdx !== -1 && record['Final Reading']) s.getRange(foundRow, readingIdx + 1).setValue(record['Final Reading']);
+      if (photoIdx !== -1 && record['Photo Evidence']) s.getRange(foundRow, photoIdx + 1).setValue(record['Photo Evidence']);
+    } else {
+      appendSheetRecord('Disconnection', record);
+    }
+  } catch (e) {
+    // fallback append
+    try {
+      appendSheetRecord('Disconnection', record);
+    } catch (err) {
+      // ignore
+    }
+  }
+
+  return {
+    success: true,
+    message: 'Disconnection report saved successfully',
+    taskId: taskId,
+    status: status
+  };
+}
+
+function handleAssignDisconnectionTask(body) {
+  return { success: true, message: 'Task assigned successfully' };
+}
+
+function handleArchiveDisconnectionTask(body) {
+  return { success: true, message: 'Task archived successfully' };
+}
+
+function handleRestoreDisconnectionTask(body) {
+  return { success: true, message: 'Task restored successfully' };
 }

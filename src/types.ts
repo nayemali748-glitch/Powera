@@ -113,7 +113,7 @@ export interface StatsResponse {
   };
 }
 
-export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance' | 'work-orders';
+export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance' | 'work-orders' | 'disconnection';
 
 export type SyncMode = 'auto' | 'manual';
 
@@ -186,6 +186,7 @@ export interface WorkOrderNotice {
 export type DisconnectionTaskStatus = 
   | 'PENDING' 
   | 'DISCONNECT'
+  | 'ALREADY DISCONNECTED'
   | 'DISPUTE'
   | 'OFFICE TEAM'
   | 'PAID'
@@ -199,6 +200,7 @@ export type DisconnectionTaskStatus =
   | 'ARCHIVED';
 
 export interface DisconnectionTask {
+  serialNumber?: string; // e.g. "SL 001", "SL 002"
   taskId: string;
   consumerId: string;
   consumerName: string;
@@ -239,24 +241,35 @@ export interface DisconnectionTask {
   statusHistory?: any[] | string;
 }
 
+export interface WorkerPerformanceStat {
+  workerName: string;
+  assigned: number;
+  completed: number;
+  pending: number;
+  reportsSubmitted: number;
+  completionRate: number;
+}
+
 export interface DisconnectionStats {
   totalTasks: number;
   completedTasks: number;
   pendingTasks: number;
-  inProgressTasks: number;
-  unableTasks: number;
-  reportedTasks: number;
-  cancelledTasks: number;
+  disconnectedTasks?: number;
   paidTasks?: number;
   notFoundTasks?: number;
   disputeTasks?: number;
   officeTeamTasks?: number;
   reissueTasks?: number;
   urgentTasks?: number;
+  inProgressTasks: number;
+  unableTasks: number;
+  reportedTasks: number;
+  cancelledTasks: number;
   completionPercentage: number;
   myAssignedTasks: number;
   myCompletedTasks: number;
   myPendingTasks: number;
   myCompletionPercentage: number;
+  workerPerformance?: WorkerPerformanceStat[];
 }
 

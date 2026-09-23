@@ -65,6 +65,7 @@ interface AdminDashboardProps {
   lang?: Language;
   onOpenLanguageModal?: () => void;
   syncMode?: SyncMode;
+  onNavigateToDisconnection?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -75,6 +76,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   lang = 'bn',
   onOpenLanguageModal,
   syncMode = 'auto',
+  onNavigateToDisconnection,
 }) => {
   const t = translations[lang] || translations.en;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
@@ -91,11 +93,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [sheetsSyncMessage, setSheetsSyncMessage] = useState<string | null>(null);
   const [currentSheetUrl, setCurrentSheetUrl] = useState<string | null>(() => getSavedSpreadsheetUrl());
 
-  // Mandatory Record Deletion Confirmation State
+  // Record Deletion Confirmation State
   const [entryToDelete, setEntryToDelete] = useState<PowerEntry | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState<string>('');
-  const [deleteReason, setDeleteReason] = useState<string>('');
-  const [deleteAcknowledge, setDeleteAcknowledge] = useState<boolean>(false);
   const [isDeletingEntry, setIsDeletingEntry] = useState<boolean>(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -530,13 +529,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const isCriticalRecord = (entry: PowerEntry | null): boolean => {
-    if (!entry) return false;
-    const st = String(entry.status || '').toLowerCase();
-    const hasHardware = Boolean(entry.meterNo && entry.sealNo);
-    return st === 'approved' || st === 'completed' || hasHardware;
-  };
-
   const handleDelete = (entryOrId: PowerEntry | string) => {
     let target: PowerEntry | undefined;
     if (typeof entryOrId === 'string') {
@@ -552,51 +544,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     setEntryToDelete(target);
-    setDeleteConfirmText('');
-    setDeleteReason('');
-    setDeleteAcknowledge(false);
     setDeleteError(null);
   };
 
   const executeDeleteEntry = async () => {
     if (!entryToDelete) return;
-    const isCritical = isCriticalRecord(entryToDelete);
-
-    if (isCritical) {
-      if (deleteConfirmText.trim().toUpperCase() !== 'DELETE') {
-        setDeleteError(lang === 'bn' 
-          ? 'নিশ্চিত করতে হুবহু "DELETE" টাইপ করুন' 
-          : 'Type "DELETE" exactly to confirm');
-        return;
-      }
-      if (deleteReason.trim().length < 3) {
-        setDeleteError(lang === 'bn' 
-          ? 'ডিলিট করার সুস্পষ্ট কারণ উল্লেখ করা বাধ্যতামূলক (কমপক্ষে ৩ অক্ষর)' 
-          : 'A specific reason (minimum 3 characters) is required for critical production records');
-        return;
-      }
-      if (!deleteAcknowledge) {
-        setDeleteError(lang === 'bn' 
-          ? 'সচেতনতা চেকবক্সে টিক দিন' 
-          : 'Please acknowledge the confirmation checkbox');
-        return;
-      }
-    } else {
-      if (!deleteAcknowledge) {
-        setDeleteError(lang === 'bn' 
-          ? 'ডিলিট নিশ্চিত করতে চেকবক্সে টিক দিন' 
-          : 'Please check the confirmation box');
-        return;
-      }
-    }
 
     setIsDeletingEntry(true);
     setDeleteError(null);
 
     try {
       await deleteEntry(entryToDelete.id, entryToDelete.category, entryToDelete.submissionId, {
-        confirmCritical: isCritical,
-        reason: deleteReason.trim() || 'Admin confirmed deletion',
+        confirmCritical: true,
+        reason: 'Confirmed by Admin',
         status: entryToDelete.status,
         meterNo: entryToDelete.meterNo,
         sealNo: entryToDelete.sealNo,
@@ -609,7 +569,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEntryToDelete(null);
       onRefresh();
     } catch (err: any) {
-      setDeleteError(err.message || 'ডিলিট করতে ব্যর্থ হয়েছে (Failed to delete entry)');
+      setDeleteError(err.message || (lang === 'bn' ? 'ডিলিট করতে ব্যর্থ হয়েছে' : 'Failed to delete entry'));
     } finally {
       setIsDeletingEntry(false);
     }
@@ -1376,6 +1336,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <FileImage className="w-3.5 h-3.5" />
                   <span>{showWorkOrdersManager ? 'Hide Khata Slips' : 'NSC Khata Slips'}</span>
+                </button>
+              )}
+
+              {selectedCategory === 'DISCONNECTION' && onNavigateToDisconnection && (
+                <button
+                  id="admin-open-disconnection-btn"
+                  onClick={onNavigateToDisconnection}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                  title="Open Full Disconnection Module (Consumer List, Upload, Reports)"
+                >
+                  <PowerOff className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? '⚡ ডিসকানেকশন মডিউল (লিস্ট ও রিপোর্ট)' : '⚡ Open Disconnection Module'}</span>
                 </button>
               )}
             </div>
@@ -2286,18 +2258,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className={`px-5 py-4 flex items-center justify-between text-white ${
-              isCriticalRecord(entryToDelete) ? 'bg-gradient-to-r from-red-600 to-rose-700' : 'bg-gradient-to-r from-slate-800 to-slate-900'
-            }`}>
+            <div className="px-5 py-4 flex items-center justify-between text-white bg-gradient-to-r from-red-600 to-rose-700">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-white/20 rounded-xl backdrop-blur-xs">
-                  <ShieldAlert className="w-5 h-5 text-white" />
+                  <Trash2 className="w-5 h-5 text-white" />
                 </div>
                 <div>
                   <h3 className="font-black text-sm tracking-wide">
-                    {isCriticalRecord(entryToDelete)
-                      ? (lang === 'bn' ? 'নিশ্চিতকরণ: গুরুত্বপূর্ণ রেকর্ড ডিলিট' : 'Confirm: Critical Record Deletion')
-                      : (lang === 'bn' ? 'রেকর্ড ডিলিট নিশ্চিতকরণ' : 'Confirm Record Deletion')}
+                    {lang === 'bn' ? 'রেকর্ড ডিলিট নিশ্চিতকরণ' : 'Confirm Record Deletion'}
                   </h3>
                   <p className="text-[11px] text-white/80 font-mono">
                     ID: #{entryToDelete.id || entryToDelete.submissionId} • {entryToDelete.category}
@@ -2318,29 +2286,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* Modal Body */}
             <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-              {/* Critical Alert Banner */}
-              {isCriticalRecord(entryToDelete) ? (
-                <div className="p-3.5 bg-red-50 border-l-4 border-red-600 rounded-r-xl space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-red-900">
-                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                    <span>{lang === 'bn' ? 'সার্ভার-সাইড প্রোটেকশন সক্রিয়' : 'Server-Side Protection Active'}</span>
-                  </div>
-                  <p className="text-xs text-red-700 leading-relaxed">
-                    {lang === 'bn'
-                      ? `এই রেকর্ডটির বর্তমান স্ট্যাটাস "${entryToDelete.status || 'Completed'}" এবং এটি ফিল্ড-ভেরিফায়েড প্রোডাকশন ডাটা। অসাবধানতাবশত ডিলিট ঠেকাতে সার্ভার নীতি অনুযায়ী প্রশাসনিক কারণ ও কোড নিশ্চিতকরণ বাধ্যতামূলক।`
-                      : `This is a verified production record (Status: "${entryToDelete.status || 'Completed'}"). Server safety policies strictly mandate manual verification and documented administrative justification.`}
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-900">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-xs text-red-950">
+                    {lang === 'bn' ? 'আপনি কি নিশ্চিত যে এই রেকর্ডটি ডিলিট করতে চান?' : 'Are you sure you want to permanently delete this record?'}
+                  </p>
+                  <p className="text-[11px] text-red-700 mt-0.5">
+                    {lang === 'bn' 
+                      ? 'ডিলিট নিশ্চিত করলে এই রেকর্ডটি Google Sheets এবং সিস্টেম থেকে সম্পূর্ণভাবে মুছে যাবে।'
+                      : 'Once confirmed, this record will be permanently deleted from Google Sheets and the system.'}
                   </p>
                 </div>
-              ) : (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span>
-                    {lang === 'bn'
-                      ? 'এই রেকর্ডটি Google Sheets এবং স্থানীয় ডাটাবেস থেকে স্থায়ীভাবে মুছে যাবে।'
-                      : 'This record will be permanently purged from Google Sheets and the system.'}
-                  </span>
-                </div>
-              )}
+              </div>
 
               {/* Record Summary Card */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs space-y-2">
@@ -2380,75 +2338,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Mandatory Inputs for Critical Record */}
-              {isCriticalRecord(entryToDelete) ? (
-                <div className="space-y-3 pt-1">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {lang === 'bn' ? '১. নিশ্চিত করতে টাইপ করুন "DELETE":' : '1. Type "DELETE" to confirm:'}
-                      <span className="text-red-500 ml-1">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={deleteConfirmText}
-                      onChange={(e) => setDeleteConfirmText(e.target.value)}
-                      placeholder="DELETE"
-                      className="w-full px-3 py-2 border-2 border-red-200 focus:border-red-500 rounded-xl text-xs font-mono font-bold tracking-wider outline-none bg-red-50/40 text-red-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {lang === 'bn' ? '২. ডিলিট করার প্রশাসনিক কারণ লিখুন:' : '2. Administrative Deletion Reason:'}
-                      <span className="text-red-500 ml-1">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={deleteReason}
-                      onChange={(e) => setDeleteReason(e.target.value)}
-                      placeholder={lang === 'bn' ? 'যেমন: ভুল ডুপ্লিকেট এন্ট্রি / বাতিল কাজ' : 'e.g. Duplicate entry submitted by mistake'}
-                      className="w-full px-3 py-2 border border-slate-300 focus:border-red-500 rounded-xl text-xs outline-none bg-white text-slate-800"
-                    />
-                  </div>
-
-                  <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={deleteAcknowledge}
-                      onChange={(e) => setDeleteAcknowledge(e.target.checked)}
-                      className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-4 w-4 border-slate-300 cursor-pointer"
-                    />
-                    <span className="text-xs text-slate-700 font-medium">
-                      {lang === 'bn'
-                        ? 'আমি নিশ্চিত যে এই প্রোডাকশন রেকর্ডটি মুছে ফেলার পূর্ণ দায়ভার আমি গ্রহণ করছি।'
-                        : 'I confirm that I understand this is an active production record and accept permanent deletion.'}
-                    </span>
-                  </label>
-                </div>
-              ) : (
-                <div className="pt-1">
-                  <label className="flex items-start gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={deleteAcknowledge}
-                      onChange={(e) => setDeleteAcknowledge(e.target.checked)}
-                      className="mt-0.5 rounded text-slate-900 focus:ring-slate-700 h-4 w-4 border-slate-300 cursor-pointer"
-                    />
-                    <span className="text-xs text-slate-700 font-medium">
-                      {lang === 'bn'
-                        ? 'আমি নিশ্চিত যে এই রেকর্ডটি সম্পূর্ণভাবে মুছে ফেলতে চাই।'
-                        : 'I confirm that I want to delete this record permanently.'}
-                    </span>
-                  </label>
-                </div>
-              )}
-
               {/* Server-Side Validation / Error Callout */}
               {deleteError && (
                 <div className="p-3 bg-red-100/90 border border-red-300 rounded-xl flex items-start gap-2 text-xs text-red-900 font-medium animate-in shake-1 duration-150">
                   <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <span className="font-bold">{lang === 'bn' ? 'সার্ভার ভ্যালিডেশন ব্যর্থ:' : 'Server Validation Error:'} </span>
+                    <span className="font-bold">{lang === 'bn' ? 'ত্রুটি:' : 'Error:'} </span>
                     <span>{deleteError}</span>
                   </div>
                 </div>
@@ -2459,28 +2354,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2.5">
               <button
                 type="button"
+                id="admin-cancel-delete-entry-btn"
                 onClick={() => setEntryToDelete(null)}
                 disabled={isDeletingEntry}
                 className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
               >
-                {lang === 'bn' ? 'বাতিল (Cancel)' : 'Cancel'}
+                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
               </button>
 
               <button
                 type="button"
                 id="admin-confirm-delete-entry-btn"
                 onClick={executeDeleteEntry}
-                disabled={
-                  isDeletingEntry ||
-                  (isCriticalRecord(entryToDelete)
-                    ? (deleteConfirmText.trim().toUpperCase() !== 'DELETE' || deleteReason.trim().length < 3 || !deleteAcknowledge)
-                    : !deleteAcknowledge)
-                }
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
-                  isCriticalRecord(entryToDelete)
-                    ? 'bg-red-600 hover:bg-red-700 disabled:bg-red-300'
-                    : 'bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300'
-                } disabled:cursor-not-allowed`}
+                disabled={isDeletingEntry}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition-all shadow-xs cursor-pointer bg-red-600 hover:bg-red-700 disabled:bg-red-400 disabled:cursor-not-allowed"
               >
                 {isDeletingEntry ? (
                   <>

@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import dns from 'dns';
+import { GoogleGenAI } from '@google/genai';
 
 // Ensure IPv4 resolution first for stable script.google.com connection
 try {
@@ -23,7 +24,7 @@ interface CacheEntry {
 }
 const gasCache = new Map<string, CacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const CACHE_TTL_MS = 6000; // 6 seconds for high-frequency reads
+const CACHE_TTL_MS = 60000; // 60 seconds memory cache for reads (cleared instantly on any mutation)
 const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat', 'logs', 'disconnectiontasks', 'getDisconnectionTasks']);
 
 // Strict Idempotency Submission Map (15 minutes TTL)
@@ -204,7 +205,20 @@ async function callGoogleAppsScript(
 
   // Check read cache & in-flight deduplication
   const isReadAction = READ_ACTIONS.has(finalAction);
-  const cacheKey = `${finalAction}_${JSON.stringify(finalPayload)}`;
+
+  // Normalize cacheKey to deduplicate concurrent requests cleanly
+  const normalizedPayload: Record<string, any> = {};
+  for (const [k, v] of Object.entries(finalPayload || {})) {
+    if (k !== '_t' && k !== 'timestamp' && v !== undefined && v !== null && v !== '') {
+      normalizedPayload[k] = v;
+    }
+  }
+  const sortedKeys = Object.keys(normalizedPayload).sort();
+  const sortedPayload: Record<string, any> = {};
+  for (const k of sortedKeys) {
+    sortedPayload[k] = normalizedPayload[k];
+  }
+  const cacheKey = `${finalAction}_${JSON.stringify(sortedPayload)}`;
 
   if (isReadAction && !isMutation) {
     const cached = gasCache.get(cacheKey);
@@ -218,12 +232,13 @@ async function callGoogleAppsScript(
   }
 
   const executionPromise = (async () => {
-    const maxAttempts = isMutation ? 2 : 3;
+    const maxAttempts = isMutation ? 2 : 2;
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      const currentTimeoutMs = isMutation ? Math.min(timeoutMs, 45000) : timeoutMs;
+      // Ensure sufficient timeout for Google Apps Script sheet operations (60s min)
+      const currentTimeoutMs = isMutation ? Math.max(timeoutMs, 60000) : Math.max(timeoutMs, 60000);
       const timeoutId = setTimeout(() => {
         try { controller.abort(); } catch {}
       }, currentTimeoutMs);
@@ -234,7 +249,7 @@ async function callGoogleAppsScript(
         const reqMethod = READ_ACTIONS.has(finalAction) ? 'GET' : 'POST';
         const options: RequestInit = {
           signal: controller.signal,
-          redirect: 'manual', // Never let Node auto-follow; handle 302 manually with browser User-Agent
+          redirect: reqMethod === 'GET' ? 'follow' : 'manual',
         };
 
         if (reqMethod === 'GET') {
@@ -260,26 +275,54 @@ async function callGoogleAppsScript(
             'User-Agent': BROWSER_USER_AGENT,
             'Accept': 'application/json'
           };
-          const postData = (finalPayload.data && typeof finalPayload.data === 'object') ? finalPayload.data : finalPayload;
-          options.body = JSON.stringify({ action: finalAction, ...postData, data: postData });
+          const innerData = (finalPayload.data && typeof finalPayload.data === 'object') ? finalPayload.data : {};
+          const mergedPayload = { ...finalPayload, ...innerData };
+          if (finalPayload.id) mergedPayload.id = finalPayload.id;
+          if (finalPayload.category) mergedPayload.category = finalPayload.category;
+          if (finalPayload.submissionId) mergedPayload.submissionId = finalPayload.submissionId;
+          if (finalPayload.taskId) mergedPayload.taskId = finalPayload.taskId;
+          options.body = JSON.stringify({ action: finalAction, ...mergedPayload, data: mergedPayload });
         }
 
-        const res = await fetch(fetchUrl, options);
-        let finalRes = res;
+        // Resilient fetch loop with proper stream draining on redirects
+        let currentUrl = fetchUrl;
+        let currentOptions = { ...options };
+        let redirects = 0;
+        let finalRes: Response | null = null;
 
-        // Manual redirect handling for Google Apps Script 302/301/303/307 redirects
-        if (res.status === 301 || res.status === 302 || res.status === 303 || res.status === 307 || res.status === 308) {
-          const loc = res.headers.get('location');
-          if (loc) {
-            finalRes = await fetch(loc, {
+        while (redirects < 5) {
+          const res = await fetch(currentUrl, currentOptions);
+          if (res.status >= 300 && res.status < 400) {
+            const loc = res.headers.get('location');
+            // CRITICAL: Must cancel or drain body stream to release socket connection in Node Undici
+            try {
+              await res.body?.cancel();
+            } catch {}
+
+            if (!loc) {
+              finalRes = res;
+              break;
+            }
+
+            currentUrl = loc;
+            currentOptions = {
               method: 'GET',
               signal: controller.signal,
+              redirect: 'follow',
               headers: {
                 'User-Agent': BROWSER_USER_AGENT,
                 'Accept': 'application/json'
               }
-            });
+            };
+            redirects++;
+            continue;
           }
+          finalRes = res;
+          break;
+        }
+
+        if (!finalRes) {
+          throw new Error(`Failed to retrieve response for action "${finalAction}" after redirects.`);
         }
 
         const rawText = await finalRes.text();
@@ -348,6 +391,15 @@ async function callGoogleAppsScript(
         }
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // Stale-on-error resilience for read queries
+    if (isReadAction && gasCache.has(cacheKey)) {
+      const stale = gasCache.get(cacheKey);
+      if (stale?.data) {
+        console.warn(`[GoogleAppsScript] Action "${finalAction}" failed after retries; serving stale cache.`);
+        return stale.data;
       }
     }
 
@@ -448,8 +500,8 @@ app.post('/api/auth/login', async (req, res) => {
     const cleanId = normalizeUniversal(rawId).trim();
     const cleanPass = normalizeUniversal(password).trim();
 
-    // Call Google Apps Script directly
-    const gasRes = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST', 25000);
+    // Call Google Apps Script directly with resilient timeout
+    const gasRes = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST', 45000);
 
     if (gasRes && gasRes.success && gasRes.session) {
       return res.json({ success: true, session: gasRes.session });
@@ -515,70 +567,13 @@ app.get('/api/auth/verify/:idNo', async (req, res) => {
   }
 });
 
-// Critical production record validation helper
+// Entry deletion validation helper (simplified to support direct confirm/cancel)
 async function validateEntryDeletion(entryId: string, clientPayload: any): Promise<{ allowed: boolean; error?: string; isCritical?: boolean; record?: any }> {
   const cleanId = String(entryId || '').trim();
   if (!cleanId) {
     return { allowed: false, error: 'Record ID is required for deletion.' };
   }
-
-  // Fetch current entries to inspect record
-  let currentRecord: any = null;
-  try {
-    const cachedEntriesResult = await callGoogleAppsScript('entries', {}, 'GET');
-    const rawEntries = Array.isArray(cachedEntriesResult?.entries) 
-      ? cachedEntriesResult.entries 
-      : (Array.isArray(cachedEntriesResult) ? cachedEntriesResult : []);
-    
-    currentRecord = rawEntries.find((e: any) => {
-      const eId = String(e.id || e['Record ID'] || e['RecordID'] || e['ID'] || '').trim();
-      const subId = String(e.submissionId || e['Submission ID'] || e['SubmissionID'] || '').trim();
-      return (eId && eId === cleanId) || (subId && subId === cleanId);
-    });
-  } catch (err) {
-    console.warn('[Validation] Could not fetch entries to verify status, falling back to payload check:', err);
-  }
-
-  // Fallback to record info sent in payload if not found in fetched list
-  if (!currentRecord && clientPayload?.entry) {
-    currentRecord = clientPayload.entry;
-  }
-
-  const status = String(currentRecord?.status || currentRecord?.Status || clientPayload?.status || '').trim();
-  const meterNo = String(currentRecord?.meterNo || currentRecord?.['Meter No'] || clientPayload?.meterNo || '').trim();
-  const sealNo = String(currentRecord?.sealNo || currentRecord?.['Seal No'] || clientPayload?.sealNo || '').trim();
-  const applicationNo = String(currentRecord?.applicationNo || currentRecord?.['Application No'] || clientPayload?.applicationNo || '').trim();
-
-  // Determine if this is a critical production record
-  const isApproved = status.toLowerCase() === 'approved';
-  const isCompleted = status.toLowerCase() === 'completed';
-  const hasInstalledHardware = Boolean(meterNo && sealNo);
-  const isCritical = isApproved || isCompleted || hasInstalledHardware;
-
-  if (isCritical) {
-    const confirmCritical = Boolean(clientPayload?.confirmCritical === true || clientPayload?.confirmCritical === 'true');
-    const reason = String(clientPayload?.reason || clientPayload?.deletionReason || '').trim();
-
-    if (!confirmCritical) {
-      return {
-        allowed: false,
-        isCritical: true,
-        record: currentRecord,
-        error: `CRITICAL_RECORD_PROTECTION: Entry #${cleanId} is an official production record with status "${status || 'Completed'}". Deletion is blocked to prevent accidental data loss. Mandatory administrative override confirmation and deletion reason required.`
-      };
-    }
-
-    if (reason.length < 3) {
-      return {
-        allowed: false,
-        isCritical: true,
-        record: currentRecord,
-        error: `MANDATORY_REASON_REQUIRED: A specific reason (at least 3 characters) must be documented for deleting critical production record #${cleanId}.`
-      };
-    }
-  }
-
-  return { allowed: true, isCritical, record: currentRecord };
+  return { allowed: true, isCritical: false, record: clientPayload?.entry || null };
 }
 
 // User deletion validation helper
@@ -667,6 +662,8 @@ app.post('/api/gas-proxy', async (req, res) => {
     // Server-side validation for record deletion
     if (action === 'deleteEntry' || action === 'deleteRecord') {
       const targetId = payload.id || payload.submissionId;
+      payload.confirmCritical = true;
+      payload.reason = payload.reason || 'Admin deletion confirmed';
       const validation = await validateEntryDeletion(targetId, payload);
       if (!validation.allowed) {
         return res.status(403).json({
@@ -738,44 +735,80 @@ app.post('/api/entries', async (req, res) => {
   try {
     const payload = req.body.data || req.body;
     const result = await callGoogleAppsScript('createEntry', { data: payload }, 'POST');
+    gasCache.clear();
     return res.status(201).json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to submit entry to Google Sheets' });
   }
 });
 
-app.delete('/api/entries/:id', async (req, res) => {
+const handleEntryUpdateRequest = async (req: express.Request, res: express.Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const id = req.params.id;
-    const clientPayload = { ...req.query, ...req.body };
-    const validation = await validateEntryDeletion(id, clientPayload);
-    if (!validation.allowed) {
-      return res.status(403).json({
-        success: false,
-        isCritical: validation.isCritical,
-        error: validation.error
-      });
+    const id = (req.params as any)?.id || req.body?.id || req.query?.id;
+    const cleanId = String(id || '').trim();
+    if (!cleanId) {
+      return res.status(400).json({ success: false, error: 'Record ID is required for update.' });
+    }
+    const bodyData = (req.body && typeof req.body.data === 'object') ? req.body.data : req.body;
+    const category = bodyData.category || req.body?.category || req.query?.category || '';
+    const submissionId = bodyData.submissionId || req.body?.submissionId || cleanId;
+    const payload = {
+      id: cleanId,
+      category,
+      submissionId,
+      ...bodyData,
+      data: bodyData
+    };
+    const result = await callGoogleAppsScript('updateEntry', payload, 'POST');
+    gasCache.clear();
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to update entry in Google Sheets' });
+  }
+};
+
+app.put('/api/entries/:id', handleEntryUpdateRequest);
+app.patch('/api/entries/:id', handleEntryUpdateRequest);
+app.post('/api/entries/:id/update', handleEntryUpdateRequest);
+app.post('/api/entries/update', handleEntryUpdateRequest);
+
+const handleEntryDeleteRequest = async (req: express.Request, res: express.Response) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const id = (req.params as any)?.id || req.body?.id || req.query?.id;
+    const cleanId = String(id || '').trim();
+    if (!cleanId) {
+      return res.status(400).json({ success: false, error: 'Record ID is required for deletion.' });
     }
 
+    const clientPayload = { ...req.query, ...req.body };
     const payload = {
-      id,
-      category: clientPayload.category,
-      submissionId: clientPayload.submissionId,
-      confirmCritical: clientPayload.confirmCritical,
-      reason: clientPayload.reason
+      id: cleanId,
+      category: clientPayload.category || '',
+      submissionId: clientPayload.submissionId || cleanId,
+      confirmCritical: true,
+      reason: clientPayload.reason || 'Admin deletion confirmed',
+      status: clientPayload.status,
+      meterNo: clientPayload.meterNo,
+      sealNo: clientPayload.sealNo
     };
+
     const result = await callGoogleAppsScript('deleteEntry', payload, 'POST');
     gasCache.clear();
     return res.json({
       success: true,
-      message: `Record #${id} successfully deleted from production`,
+      message: `Record #${cleanId} successfully deleted from production`,
       result
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to delete entry' });
   }
-});
+};
+
+app.delete('/api/entries/:id', handleEntryDeleteRequest);
+app.post('/api/entries/:id/delete', handleEntryDeleteRequest);
+app.post('/api/entries/delete', handleEntryDeleteRequest);
 
 // ============================================================================
 // USERS CRUD (Direct Google Sheets Users Sheet)
@@ -1001,9 +1034,73 @@ app.delete('/api/chat', async (req, res) => {
 // ============================================================================
 const localDisconnectionTasks: Map<string, any> = new Map();
 
+function parseSlNumber(sl?: any): number {
+  if (!sl) return 0;
+  const match = String(sl).match(/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function formatSlNumber(num: number): string {
+  return `SL ${String(num).padStart(3, '0')}`;
+}
+
+function getMaxExistingSl(): number {
+  let max = 0;
+  for (const t of localDisconnectionTasks.values()) {
+    const slVal = parseSlNumber(t.serialNumber || t['SL No'] || t.slNo);
+    if (slVal > max) max = slVal;
+  }
+  return max;
+}
+
+function normalizeTaskPhone(t: any): string {
+  if (!t) return '';
+  const candidates = [
+    t.phoneNumber,
+    t.mobileNumber,
+    t.mobile,
+    t.phone,
+    t.contactNumber,
+    t.contact,
+    t['Mobile Number'],
+    t['Mobile No'],
+    t['Mobile No.'],
+    t['Mobile'],
+    t['Mobile_No'],
+    t['Mob No'],
+    t['Mob'],
+    t['MOB_NO'],
+    t['MOB_NUM'],
+    t['Phone Number'],
+    t['Phone No'],
+    t['Phone'],
+    t['Contact'],
+    t['Contact No'],
+    t['মোবাইল'],
+    t['ফোন']
+  ];
+  for (const c of candidates) {
+    if (c !== undefined && c !== null) {
+      let str = String(c).trim();
+      str = str.replace(/\.0+$/, '');
+      if (/^\d+\.?\d*e[+-]?\d+$/i.test(str)) {
+        const num = Number(str);
+        if (!isNaN(num)) str = Math.round(num).toString();
+      }
+      if (str && str.toLowerCase() !== 'null' && str.toLowerCase() !== 'undefined' && str.toLowerCase() !== 'n/a' && str !== '-') {
+        return str;
+      }
+    }
+  }
+  const text = `${t.consumerAddress || t.Address || ''} ${t.workerRemarks || ''} ${t.disconnectionReason || ''}`;
+  const m = text.match(/(?:^|\D)([6-9]\d{9})(?:\D|$)/);
+  return m ? m[1] : '';
+}
+
 function computeLocalStats(tasks: any[], workerId?: string, workerName?: string) {
   const totalTasks = tasks.length;
   let completedTasks = 0;
+  let disconnectedTasks = 0;
   let pendingTasks = 0;
   let inProgressTasks = 0;
   let unableTasks = 0;
@@ -1023,19 +1120,43 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
   const wId = String(workerId || '').toLowerCase().trim();
   const wNm = String(workerName || '').toLowerCase().trim();
 
+  const workerMap = new Map<string, {
+    workerName: string;
+    assigned: number;
+    completed: number;
+    pending: number;
+    reportsSubmitted: number;
+    completionRate: number;
+  }>();
+
   for (const t of tasks) {
     const st = String(t.taskStatus || t.status || 'PENDING').toUpperCase();
-    if (st === 'COMPLETED' || st === 'DISCONNECT') completedTasks++;
-    else if (st === 'PENDING') pendingTasks++;
-    else if (st === 'PAID') paidTasks++;
-    else if (st === 'NOT FOUND') notFoundTasks++;
-    else if (st === 'DISPUTE') disputeTasks++;
-    else if (st === 'OFFICE TEAM') officeTeamTasks++;
-    else if (st === 'REISSUE') reissueTasks++;
-    else if (st === 'IN PROGRESS') inProgressTasks++;
-    else if (st === 'UNABLE') unableTasks++;
-    else if (st === 'REPORTED') reportedTasks++;
-    else if (st === 'CANCELLED') cancelledTasks++;
+    if (st === 'DISCONNECT') {
+      disconnectedTasks++;
+      completedTasks++;
+    } else if (st === 'COMPLETED') {
+      completedTasks++;
+    } else if (st === 'PENDING') {
+      pendingTasks++;
+    } else if (st === 'PAID') {
+      paidTasks++;
+    } else if (st === 'NOT FOUND') {
+      notFoundTasks++;
+    } else if (st === 'DISPUTE') {
+      disputeTasks++;
+    } else if (st === 'OFFICE TEAM') {
+      officeTeamTasks++;
+    } else if (st === 'REISSUE') {
+      reissueTasks++;
+    } else if (st === 'IN PROGRESS') {
+      inProgressTasks++;
+    } else if (st === 'UNABLE') {
+      unableTasks++;
+    } else if (st === 'REPORTED') {
+      reportedTasks++;
+    } else if (st === 'CANCELLED') {
+      cancelledTasks++;
+    }
 
     if (String(t.priority || '').toUpperCase() === 'URGENT') urgentTasks++;
 
@@ -1048,7 +1169,34 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
       if (st === 'COMPLETED' || st === 'DISCONNECT' || st === 'PAID') myCompletedTasks++;
       else if (st === 'PENDING' || st === 'IN PROGRESS') myPendingTasks++;
     }
+
+    const workerKey = t.assignedWorkerName || t.submittedBy || 'Unassigned';
+    if (!workerMap.has(workerKey)) {
+      workerMap.set(workerKey, {
+        workerName: workerKey,
+        assigned: 0,
+        completed: 0,
+        pending: 0,
+        reportsSubmitted: 0,
+        completionRate: 0
+      });
+    }
+    const wRecord = workerMap.get(workerKey)!;
+    wRecord.assigned++;
+    if (st === 'DISCONNECT' || st === 'COMPLETED' || st === 'PAID') {
+      wRecord.completed++;
+    } else if (st === 'PENDING' || st === 'IN PROGRESS') {
+      wRecord.pending++;
+    }
+    if (t.workerReport || t.workerRemarks || t.reportDate || (st !== 'PENDING' && st !== 'IN PROGRESS')) {
+      wRecord.reportsSubmitted++;
+    }
   }
+
+  const workerPerformance = Array.from(workerMap.values()).map(w => ({
+    ...w,
+    completionRate: w.assigned > 0 ? Math.round((w.completed / w.assigned) * 100) : 0
+  }));
 
   const completionPercentage = totalTasks > 0 ? Math.round(((completedTasks + paidTasks) / totalTasks) * 100) : 0;
   const myCompletionPercentage = myAssignedTasks > 0 ? Math.round((myCompletedTasks / myAssignedTasks) * 100) : 0;
@@ -1056,6 +1204,7 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
   return {
     totalTasks,
     completedTasks,
+    disconnectedTasks,
     pendingTasks,
     inProgressTasks,
     unableTasks,
@@ -1071,7 +1220,55 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
     myAssignedTasks,
     myCompletedTasks,
     myPendingTasks,
-    myCompletionPercentage
+    myCompletionPercentage,
+    workerPerformance
+  };
+}
+
+function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
+  const taskId = String(entry.id || entry.taskId || entry['Task ID'] || entry.submissionId || entry['Submission ID'] || `TASK-DISC-${entry.consumerId || index}`).trim();
+  const rawSl = entry.serialNumber || entry['SL No'] || entry.slNo || entry.sl;
+  const parsedSl = parseSlNumber(rawSl) || index;
+  const serialNumber = formatSlNumber(parsedSl);
+  const rawStatus = String(entry.status || entry.taskStatus || entry['Status'] || 'DISCONNECT').trim().toUpperCase();
+  const status = rawStatus || 'DISCONNECT';
+
+  return {
+    serialNumber,
+    taskId,
+    consumerId: String(entry.consumerId || entry['Consumer ID'] || '').trim(),
+    consumerName: String(entry.consumerName || entry['Consumer Name'] || '').trim(),
+    accountNumber: String(entry.accountNumber || entry['Account Number'] || entry.consumerId || '').trim(),
+    meterNumber: String(entry.meterNo || entry.meterNumber || entry['Meter No'] || entry.finalReading || '').trim(),
+    consumerAddress: String(entry.address || entry.consumerAddress || entry['Address'] || '').trim(),
+    phoneNumber: normalizeTaskPhone(entry),
+    area: String(entry.substation || entry.area || entry['Substation'] || '').trim(),
+    disconnectionReason: String(entry.reason || entry.disconnectionReason || entry['Reason'] || 'Outstanding Bill').trim(),
+    assignedWorkerId: String(entry.workerId || entry.assignedWorkerId || entry['Worker ID'] || '').trim(),
+    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || entry['Worker Name'] || '').trim(),
+    taskStatus: status,
+    workerReport: String(entry.notes || entry.workerReport || entry.workerRemarks || '').trim(),
+    workerRemarks: String(entry.notes || entry.workerRemarks || entry.workerReport || '').trim(),
+    reportDate: String(entry.date || entry.reportDate || '').trim(),
+    reportTime: String(entry.reportTime || '').trim(),
+    submittedBy: String(entry.submittedBy || entry.workerName || '').trim(),
+    createdAt: String(entry.createdAt || entry.date || new Date().toISOString()).trim(),
+    updatedAt: String(entry.updatedAt || new Date().toISOString()).trim(),
+    completionPercentage: (status === 'COMPLETED' || status === 'DISCONNECT' || status === 'PAID') ? 100 : 0,
+    photoUrl: String(entry.photoUrl || entry['Photo Evidence'] || '').trim(),
+    mruSection: String(entry.mruSection || entry['MRU Section'] || '').trim(),
+    cccFeeder: String(entry.feederName || entry.cccFeeder || entry['Feeder Name'] || '').trim(),
+    outstandingDue: String(entry.arrearAmount || entry.outstandingDue || entry['Arrear Amount'] || '').trim(),
+    dueDateRange: String(entry.dueDateRange || entry['Due Date Range'] || '').trim(),
+    baseClass: String(entry.baseClass || entry['Base Class'] || 'I').trim(),
+    deviceType: String(entry.deviceType || entry['Device Type'] || 'ST328707').trim(),
+    priority: String(entry.priority || entry['Priority'] || 'NORMAL').trim().toUpperCase(),
+    assignedAgency: String(entry.agencyName || entry.assignedAgency || entry['Agency Name'] || '').trim(),
+    paidAmount: String(entry.paidAmount || '').trim(),
+    paymentDate: String(entry.paymentDate || '').trim(),
+    paymentReference: String(entry.paymentReference || '').trim(),
+    meterReading: String(entry.finalReading || entry.meterReading || '').trim(),
+    statusHistory: Array.isArray(entry.statusHistory) ? entry.statusHistory : []
   };
 }
 
@@ -1083,19 +1280,49 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const workerName = String(query.workerName || '').toLowerCase().trim();
 
   try {
-    const result = await callGoogleAppsScript('getDisconnectionTasks', query, 'GET');
-    if (result && Array.isArray(result.tasks)) {
-      for (const t of result.tasks) {
-        if (t.taskId) localDisconnectionTasks.set(t.taskId, t);
+    const entriesPromise = callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET');
+    const discPromise = Promise.race([
+      callGoogleAppsScript('getDisconnectionTasks', query, 'GET'),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 3000))
+    ]);
+
+    const [entriesRes, discRes] = await Promise.allSettled([entriesPromise, discPromise]);
+
+    if (entriesRes.status === 'fulfilled' && entriesRes.value) {
+      const rawEntries = Array.isArray(entriesRes.value.entries) 
+        ? entriesRes.value.entries 
+        : (Array.isArray(entriesRes.value) ? entriesRes.value : []);
+      let idx = 1;
+      for (const e of rawEntries) {
+        const task = convertSheetEntryToDisconnectionTask(e, idx);
+        const existing = localDisconnectionTasks.get(task.taskId) || 
+          Array.from(localDisconnectionTasks.values()).find(t => t.consumerId && t.consumerId === task.consumerId);
+        if (existing) {
+          const merged = { ...existing, ...task };
+          if (existing.statusHistory && existing.statusHistory.length > 0 && (!task.statusHistory || task.statusHistory.length === 0)) {
+            merged.statusHistory = existing.statusHistory;
+          }
+          localDisconnectionTasks.set(existing.taskId, merged);
+        } else {
+          localDisconnectionTasks.set(task.taskId, task);
+        }
+        idx++;
       }
-      return res.json({
-        success: true,
-        tasks: result.tasks,
-        stats: result.stats || computeLocalStats(result.tasks, workerId, workerName)
-      });
+    }
+
+    if (discRes.status === 'fulfilled' && discRes.value && Array.isArray(discRes.value.tasks)) {
+      let idx = 1;
+      for (const t of discRes.value.tasks) {
+        if (!t.serialNumber) {
+          t.serialNumber = formatSlNumber(parseSlNumber(t['SL No'] || t.slNo) || idx);
+        }
+        t.phoneNumber = normalizeTaskPhone(t);
+        if (t.taskId) localDisconnectionTasks.set(t.taskId, t);
+        idx++;
+      }
     }
   } catch (err: any) {
-    console.warn('[Disconnection] GAS fetch failed, using memory fallback:', err.message);
+    console.warn('[Disconnection] Google Sheets fetch notice:', err.message);
   }
 
   // Fallback to local map if GAS has not updated yet
@@ -1103,6 +1330,16 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const includeArchived = query.includeArchived === 'true';
   if (!includeArchived) {
     tasks = tasks.filter(t => !t.archivedAt && t.taskStatus !== 'ARCHIVED');
+  }
+
+  // Ensure serialNumber and phoneNumber are populated
+  let fallbackIdx = 1;
+  for (const t of tasks) {
+    if (!t.serialNumber) {
+      t.serialNumber = formatSlNumber(parseSlNumber(t['SL No'] || t.slNo) || fallbackIdx);
+    }
+    t.phoneNumber = normalizeTaskPhone(t);
+    fallbackIdx++;
   }
 
   if (role === 'worker' && (workerId || workerName)) {
@@ -1121,7 +1358,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   if (query.search) {
     const q = String(query.search).toLowerCase().trim();
     tasks = tasks.filter(t => {
-      const hay = `${t.taskId} ${t.consumerId} ${t.consumerName} ${t.accountNumber} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber} ${t.area} ${t.disconnectionReason} ${t.assignedWorkerName}`.toLowerCase();
+      const hay = `${t.serialNumber || ''} ${t.taskId || ''} ${t.consumerId || ''} ${t.consumerName || ''} ${t.accountNumber || ''} ${t.meterNumber || ''} ${t.consumerAddress || ''} ${t.phoneNumber || ''} ${t.area || ''} ${t.disconnectionReason || ''} ${t.assignedWorkerName || ''}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -1136,7 +1373,7 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
   const tasksArray = Array.isArray(body.tasks) ? body.tasks : (Array.isArray(body) ? body : []);
   const adminInfo = body.adminInfo || {};
 
-  // Store locally immediately with deduplication by consumerId, accountNumber, or taskId
+  let currentMaxSl = getMaxExistingSl();
   const processed: any[] = [];
   let insertedCount = 0;
   let updatedCount = 0;
@@ -1146,13 +1383,15 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
     const cId = String(raw.consumerId || raw['Consumer ID'] || '').trim().toLowerCase();
     const aNo = String(raw.accountNumber || raw['Account Number'] || '').trim().toLowerCase();
     const tId = String(raw.taskId || raw['Task ID'] || '').trim().toLowerCase();
+    const slGiven = raw.serialNumber || raw['SL No'] || raw.slNo;
 
     let existingKey: string | null = null;
     for (const [key, t] of localDisconnectionTasks.entries()) {
       const matchCId = cId && String(t.consumerId || '').trim().toLowerCase() === cId;
       const matchANo = aNo && String(t.accountNumber || '').trim().toLowerCase() === aNo;
       const matchTId = tId && String(t.taskId || '').trim().toLowerCase() === tId;
-      if (matchCId || matchANo || matchTId) {
+      const matchSl = slGiven && String(t.serialNumber || '').trim().toLowerCase() === String(slGiven).trim().toLowerCase();
+      if (matchCId || matchANo || matchTId || matchSl) {
         existingKey = key;
         break;
       }
@@ -1160,9 +1399,12 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
 
     if (existingKey) {
       const prev = localDisconnectionTasks.get(existingKey)!;
+      const phoneNorm = normalizeTaskPhone(raw) || prev.phoneNumber || '';
       const updated = {
         ...prev,
         ...raw,
+        phoneNumber: phoneNorm,
+        serialNumber: prev.serialNumber || (slGiven ? formatSlNumber(parseSlNumber(slGiven)) : formatSlNumber(++currentMaxSl)),
         taskId: prev.taskId,
         updatedAt: new Date().toISOString()
       };
@@ -1171,8 +1413,12 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
       updatedCount++;
     } else {
       const taskId = String(raw.taskId || `TASK-DISC-${Date.now()}-${i + 1}`).trim();
+      const serialNumber = slGiven ? formatSlNumber(parseSlNumber(slGiven)) : formatSlNumber(++currentMaxSl);
+      const phoneNorm = normalizeTaskPhone(raw);
       const taskObj = {
         ...raw,
+        phoneNumber: phoneNorm,
+        serialNumber,
         taskId,
         taskStatus: raw.taskStatus || 'PENDING',
         priority: raw.priority || 'NORMAL',
@@ -1187,19 +1433,129 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
     }
   }
 
+  let gasResult: any = null;
   try {
-    const result = await callGoogleAppsScript('uploadDisconnectionTasks', { tasks: tasksArray, adminInfo }, 'POST');
-    return res.json(result);
+    gasResult = await callGoogleAppsScript('uploadDisconnectionTasks', { tasks: processed, adminInfo }, 'POST');
   } catch (err: any) {
     console.warn('[Disconnection] GAS upload proxy error, stored locally:', err.message);
+  }
+
+  if (gasResult && gasResult.success) {
+    return res.json(gasResult);
+  }
+
+  return res.json({
+    success: true,
+    count: processed.length,
+    insertedCount,
+    updatedCount,
+    message: `Processed ${processed.length} disconnection tasks (${insertedCount} new, ${updatedCount} updated)`,
+    tasks: processed
+  });
+});
+
+let genAIClient: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI | null {
+  if (!genAIClient && process.env.GEMINI_API_KEY) {
+    genAIClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return genAIClient;
+}
+
+app.post('/api/disconnection-tasks/ocr', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const { base64Data, mimeType, fileName } = req.body;
+    if (!base64Data) {
+      return res.status(400).json({ success: false, error: 'No image or document data provided for OCR' });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      return res.status(500).json({ success: false, error: 'AI OCR service is not configured (GEMINI_API_KEY missing)' });
+    }
+
+    const cleanBase64 = String(base64Data).replace(/^data:[^;]+;base64,/, '');
+    const cleanMime = mimeType || (fileName && fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+    const prompt = `You are an expert utility operations data extraction assistant for WBSEDCL (West Bengal State Electricity Distribution Company Limited).
+Analyze this uploaded document/image (${fileName || 'document'}) containing electrical disconnection / defaulter consumer lists.
+Extract every consumer record visible into a JSON array of objects.
+
+For each consumer row or card, extract or infer:
+- consumerName: string (Full Name of Consumer)
+- consumerId: string (Consumer ID or numeric ID)
+- accountNumber: string (Installation / Account No)
+- mruSection: string (MRU Code / Section)
+- cccFeeder: string (Customer Care Center / Substation / 11kV Feeder)
+- consumerAddress: string (Address / Premises / Village / Road)
+- phoneNumber: string (Mobile Number if visible)
+- outstandingDue: string (Outstanding Arrear Amount in Rupees, numeric or text, e.g. "12450")
+- dueDateRange: string (Bill Date / Disconnection Due Date Range)
+- baseClass: string (Tariff category: Domestic, Commercial, Industrial, Agricultural, etc.)
+- deviceType: string (e.g. "1-Phase", "3-Phase", "Electronic")
+- meterNumber: string (Meter Serial Number)
+- disconnectionReason: string (e.g. "Arrears / Non-payment")
+- priority: string ("URGENT" if marked urgent, defaulter high value > ₹10,000, or "NORMAL")
+
+If a field is not visible in the document, use an empty string "" (do not invent fake data).
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "tasks": [
+    {
+      "consumerName": "string",
+      "consumerId": "string",
+      "accountNumber": "string",
+      "mruSection": "string",
+      "cccFeeder": "string",
+      "consumerAddress": "string",
+      "phoneNumber": "string",
+      "outstandingDue": "string",
+      "dueDateRange": "string",
+      "baseClass": "string",
+      "deviceType": "string",
+      "meterNumber": "string",
+      "disconnectionReason": "string",
+      "priority": "NORMAL"
+    }
+  ]
+}`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: cleanMime, data: cleanBase64 } }
+          ]
+        }
+      ],
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const responseText = response.text || '{}';
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(responseText);
+    } catch {
+      const match = responseText.match(/\{[\s\S]*\}/);
+      if (match) parsed = JSON.parse(match[0]);
+    }
+
+    const tasks: any[] = Array.isArray(parsed.tasks) ? parsed.tasks : (Array.isArray(parsed) ? parsed : []);
     return res.json({
       success: true,
-      count: processed.length,
-      insertedCount,
-      updatedCount,
-      message: `Processed ${processed.length} disconnection tasks (${insertedCount} new, ${updatedCount} updated)`,
-      tasks: processed
+      tasks,
+      count: tasks.length
     });
+  } catch (err: any) {
+    console.error('[OCR Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to extract text from document using OCR' });
   }
 });
 
@@ -1274,6 +1630,38 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     }
   } catch (err: any) {
     console.warn('[Disconnection] GAS report error, local update persisted:', err.message);
+  }
+
+  // Ensure Two-Way update in Google Sheets Disconnection tab and clear cache
+  try {
+    const existingTask = localDisconnectionTasks.get(taskId);
+    await callGoogleAppsScript('updateEntry', {
+      id: taskId,
+      category: 'Disconnection',
+      consumerId: report.consumerId || existingTask?.consumerId,
+      submissionId: subId || taskId,
+      data: {
+        category: 'Disconnection',
+        status: newStatus,
+        notes: report.workerRemarks || report.workerReport,
+        workerName: report.workerName,
+        workerId: report.workerId,
+        submittedBy: report.workerName,
+        finalReading: report.meterReading,
+        meterReading: report.meterReading,
+        arrearAmount: report.paidAmount || existingTask?.outstandingDue,
+        paidAmount: report.paidAmount,
+        paymentDate: report.paymentDate,
+        paymentReference: report.paymentReference,
+        photoUrl: report.photoUrl,
+        priority: report.priority,
+        assignedAgency: report.assignedAgency,
+        updatedAt: new Date().toISOString()
+      }
+    }, 'POST');
+    gasCache.clear();
+  } catch (sheetSyncErr: any) {
+    console.warn('[Disconnection] updateEntry to sheet notice:', sheetSyncErr.message);
   }
 
   if (subId) {

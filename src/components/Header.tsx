@@ -16,7 +16,8 @@ import {
   CheckCircle2, 
   Home,
   Globe,
-  BarChart3
+  BarChart3,
+  PowerOff
 } from 'lucide-react';
 import { CornerOptionKey, UserSession, ActiveTab } from '../types';
 import { Language, translations } from '../utils/translations';
@@ -179,6 +180,21 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600" />
             <span>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
+          </button>
+
+          {/* Disconnection Module Direct Tab */}
+          <button
+            id="nav-tab-disconnection"
+            onClick={() => setActiveTab('disconnection')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'disconnection'
+                ? 'bg-rose-600 text-white shadow-xs font-bold ring-1 ring-rose-700'
+                : 'text-rose-700 hover:text-rose-950 hover:bg-rose-50'
+            }`}
+            title="Disconnection Management & Consumer List"
+          >
+            <PowerOff className="w-3.5 h-3.5" />
+            <span>{currentLanguage === 'bn' ? 'ডিসকানেকশন' : 'Disconnection'}</span>
           </button>
 
           {isAdmin && (

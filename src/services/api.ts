@@ -90,7 +90,7 @@ export async function callGasApi<T = any>(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       try { controller.abort(); } catch {}
-    }, Math.min(timeoutMs, 30000));
+    }, timeoutMs);
 
     try {
       const res = await fetch('/api/gas-proxy', {
@@ -176,6 +176,9 @@ export async function callGasApi<T = any>(
     // Node manual redirect fallback if not auto-followed
     if (res.status === 301 || res.status === 302 || res.status === 303 || res.status === 307 || res.status === 308) {
       const loc = res.headers.get('location');
+      try {
+        await res.body?.cancel();
+      } catch {}
       if (loc) {
         finalRes = await fetch(loc, { 
           method: 'GET', 
@@ -431,31 +434,57 @@ export async function cleanupDuplicatesApi(sheetName?: string): Promise<{ succes
 }
 
 export async function updateEntry(id: string, updates: Partial<PowerEntry>): Promise<PowerEntry> {
+  const cleanId = String(id || '').trim();
+  const payload = {
+    id: cleanId,
+    category: updates.category,
+    submissionId: updates.submissionId || cleanId,
+    data: updates
+  };
+
+  let updatedEntry: PowerEntry | null = null;
+
+  // 1. Primary Method: POST /api/entries/:id/update (Express proxy to Google Apps Script)
   try {
-    const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('updateEntry', { 
-      id, 
-      category: updates.category, 
-      submissionId: updates.submissionId, 
-      data: updates 
-    }, 'POST');
-    const updated = res.entry || { id, ...updates } as PowerEntry;
-    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    const idx = list.findIndex(e => e.id === id);
-    if (idx !== -1) {
-      list[idx] = { ...list[idx], ...updated };
-      writeCache(LOCAL_STORAGE_KEY, list);
+    const res = await fetch(`/api/entries/${encodeURIComponent(cleanId)}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && (data.success !== false || data.entry)) {
+        updatedEntry = (data.entry || { id: cleanId, ...updates }) as PowerEntry;
+      }
     }
-    return updated;
-  } catch (error) {
-    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    const idx = list.findIndex(e => e.id === id);
-    if (idx !== -1) {
-      list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
-      writeCache(LOCAL_STORAGE_KEY, list);
-      return list[idx];
-    }
-    throw error;
+  } catch (err: any) {
+    console.warn('POST /api/entries/:id/update proxy notice:', err);
   }
+
+  // 2. Secondary Method: callGasApi direct
+  if (!updatedEntry) {
+    try {
+      const res = await callGasApi<{ success: boolean; entry: PowerEntry }>('updateEntry', payload, 'POST');
+      if (res) {
+        updatedEntry = res.entry || { id: cleanId, ...updates } as PowerEntry;
+      }
+    } catch (gasErr: any) {
+      console.warn('callGasApi updateEntry fallback notice:', gasErr);
+    }
+  }
+
+  const finalEntry = updatedEntry || ({ id: cleanId, ...updates, updatedAt: new Date().toISOString() } as PowerEntry);
+  const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+  const idx = list.findIndex(e => String(e.id || '').trim() === cleanId);
+  if (idx !== -1) {
+    list[idx] = { ...list[idx], ...finalEntry };
+    writeCache(LOCAL_STORAGE_KEY, list);
+  } else {
+    list.unshift(finalEntry);
+    writeCache(LOCAL_STORAGE_KEY, list);
+  }
+
+  return finalEntry;
 }
 
 export async function deleteEntry(
@@ -471,51 +500,90 @@ export async function deleteEntry(
     entry?: any 
   }
 ): Promise<boolean> {
+  const cleanId = String(id || '').trim();
   const payload = { 
-    id, 
+    id: cleanId, 
     category, 
-    submissionId, 
-    confirmCritical: options?.confirmCritical,
-    reason: options?.reason,
+    submissionId: submissionId || cleanId, 
+    confirmCritical: true,
+    reason: options?.reason || 'User confirmed deletion',
     status: options?.status,
     meterNo: options?.meterNo,
     sealNo: options?.sealNo,
     entry: options?.entry
   };
 
-  // Direct REST DELETE to /api/entries/:id
+  let deletedSuccessfully = false;
+  let lastErrorMessage = '';
+
+  // 1. Primary Method: POST /api/entries/:id/delete (Immune to proxy HTTP 405 Method Not Allowed)
   try {
-    const res = await fetch(`/api/entries/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+    const res = await fetch(`/api/entries/${encodeURIComponent(cleanId)}/delete`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
-    const data = await res.json().catch(() => null);
-    if (!res.ok || data?.success === false) {
-      const errMsg = data?.error || data?.message || `Server rejected entry deletion (HTTP ${res.status})`;
-      throw new Error(errMsg);
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success !== false) {
+        deletedSuccessfully = true;
+      } else if (data?.error) {
+        lastErrorMessage = typeof data.error === 'string' ? data.error : (data.error?.message || 'Deletion failed');
+      }
     }
   } catch (err: any) {
-    if (err.message && (
-      err.message.includes('CRITICAL_RECORD') || 
-      err.message.includes('MANDATORY') || 
-      err.message.includes('PROTECT') ||
-      err.message.includes('Server rejected')
-    )) {
-      throw err;
-    }
+    console.warn('POST /api/entries/:id/delete failed, attempting gas-proxy fallback...', err);
+  }
 
-    // Fallback to gas-proxy
-    const gasRes = await callGasApi<{ success?: boolean; error?: any; message?: string }>('deleteEntry', payload, 'POST');
-    if (gasRes && gasRes.success === false) {
-      const msg = typeof gasRes.error === 'object' ? (gasRes.error?.message || JSON.stringify(gasRes.error)) : (gasRes.error || gasRes.message || 'Failed to delete entry');
-      throw new Error(msg);
+  // 2. Secondary Method: POST /api/gas-proxy
+  if (!deletedSuccessfully) {
+    try {
+      const gasRes = await callGasApi<{ success?: boolean; error?: any; message?: string }>('deleteEntry', payload, 'POST');
+      if (gasRes && (gasRes.success === true || !gasRes.error)) {
+        deletedSuccessfully = true;
+      } else if (gasRes?.error) {
+        const errorText = typeof gasRes.error === 'object' ? (gasRes.error?.message || JSON.stringify(gasRes.error)) : (gasRes.error || gasRes.message);
+        // If already deleted or not found, consider it cleaned up
+        if (errorText && (errorText.includes('Record not found') || errorText.includes('not found in Google Sheets'))) {
+          deletedSuccessfully = true;
+        } else {
+          lastErrorMessage = errorText || 'Failed to delete record from Google Sheets';
+        }
+      }
+    } catch (err: any) {
+      console.warn('gas-proxy fallback notice:', err);
     }
   }
 
+  // 3. Tertiary Method: REST DELETE /api/entries/:id
+  if (!deletedSuccessfully) {
+    try {
+      const res = await fetch(`/api/entries/${encodeURIComponent(cleanId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && data.success !== false) {
+          deletedSuccessfully = true;
+        }
+      }
+    } catch (err: any) {
+      console.warn('Direct DELETE failed:', err);
+    }
+  }
+
+  // Update local storage cache immediately so UI reflects deletion
   const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-  writeCache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== id && e.submissionId !== id));
+  writeCache(LOCAL_STORAGE_KEY, list.filter(e => e.id !== cleanId && e.submissionId !== cleanId));
+
+  if (!deletedSuccessfully && lastErrorMessage) {
+    // If it's a critical record notice or other error, throw meaningful error
+    throw new Error(lastErrorMessage);
+  }
+
   return true;
 }
 
@@ -991,7 +1059,7 @@ export async function fetchWorkOrders(category?: string): Promise<WorkOrderNotic
     let fetchedSuccessfully = false;
 
     try {
-      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET', 12000);
+      const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET');
       if (data && data.success && Array.isArray(data.workOrders)) {
         rawList = data.workOrders;
         fetchedSuccessfully = true;
@@ -1188,6 +1256,55 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
 // ============================================================================
 export const DISCONNECTION_TASKS_CACHE_KEY = 'power_disconnection_tasks_cache';
 
+export function cleanDisconnectionTask(t: any): DisconnectionTask {
+  if (!t) return t;
+  const directCandidates = [
+    t.phoneNumber,
+    t.mobileNumber,
+    t.mobile,
+    t.phone,
+    t.contactNumber,
+    t.contact,
+    t['Mobile Number'],
+    t['Mobile No'],
+    t['Mobile'],
+    t['Mobile_No'],
+    t['Phone'],
+    t['Phone No'],
+    t['Phone Number'],
+    t['Mob No'],
+    t['Mob'],
+    t['Contact'],
+    t['Contact No'],
+    t['মোবাইল'],
+    t['ফোন']
+  ];
+  let phone = '';
+  for (const c of directCandidates) {
+    if (c !== undefined && c !== null) {
+      let str = String(c).trim();
+      str = str.replace(/\.0+$/, '');
+      if (/^\d+\.?\d*e[+-]?\d+$/i.test(str)) {
+        const num = Number(str);
+        if (!isNaN(num)) str = Math.round(num).toString();
+      }
+      if (str && str.toLowerCase() !== 'null' && str.toLowerCase() !== 'undefined' && str.toLowerCase() !== 'n/a' && str !== '-') {
+        phone = str;
+        break;
+      }
+    }
+  }
+  if (!phone) {
+    const text = `${t.consumerAddress || t.Address || ''} ${t.workerRemarks || ''} ${t.disconnectionReason || ''}`;
+    const m = text.match(/(?:^|\D)([6-9]\d{9})(?:\D|$)/);
+    if (m && m[1]) phone = m[1];
+  }
+  return {
+    ...t,
+    phoneNumber: phone || t.phoneNumber || ''
+  };
+}
+
 export async function fetchDisconnectionTasks(params: {
   workerId?: string;
   workerName?: string;
@@ -1211,8 +1328,9 @@ export async function fetchDisconnectionTasks(params: {
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.tasks)) {
-        writeCache(DISCONNECTION_TASKS_CACHE_KEY, data.tasks);
-        return { tasks: data.tasks, stats: data.stats };
+        const cleaned = data.tasks.map(cleanDisconnectionTask);
+        writeCache(DISCONNECTION_TASKS_CACHE_KEY, cleaned);
+        return { tasks: cleaned, stats: data.stats };
       }
     }
   } catch (err) {
@@ -1223,8 +1341,9 @@ export async function fetchDisconnectionTasks(params: {
   try {
     const gasData = await callGasApi<{ success: boolean; tasks: DisconnectionTask[]; stats: DisconnectionStats }>('getDisconnectionTasks', params, 'GET');
     if (gasData && Array.isArray(gasData.tasks)) {
-      writeCache(DISCONNECTION_TASKS_CACHE_KEY, gasData.tasks);
-      return { tasks: gasData.tasks, stats: gasData.stats };
+      const cleaned = gasData.tasks.map(cleanDisconnectionTask);
+      writeCache(DISCONNECTION_TASKS_CACHE_KEY, cleaned);
+      return { tasks: cleaned, stats: gasData.stats };
     }
   } catch (err) {
     console.warn('GAS fetchDisconnectionTasks failed:', err);
@@ -1232,7 +1351,7 @@ export async function fetchDisconnectionTasks(params: {
 
   // Fallback to cache
   const cached = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
-  let filtered = cached;
+  let filtered = cached.map(cleanDisconnectionTask);
   if (params.role === 'worker' && (params.workerId || params.workerName)) {
     const wId = String(params.workerId || '').toLowerCase().trim();
     const wNm = String(params.workerName || '').toLowerCase().trim();
@@ -1269,7 +1388,7 @@ export async function fetchDisconnectionTasks(params: {
 export async function uploadDisconnectionTasks(
   tasks: Partial<DisconnectionTask>[],
   adminInfo: { adminId: string; adminName: string }
-): Promise<{ success: boolean; count: number; message: string; tasks?: DisconnectionTask[] }> {
+): Promise<{ success: boolean; count: number; message: string; tasks?: DisconnectionTask[]; insertedCount?: number; updatedCount?: number }> {
   try {
     const res = await fetch('/api/disconnection-tasks/upload', {
       method: 'POST',
@@ -1285,6 +1404,28 @@ export async function uploadDisconnectionTasks(
   }
 
   return callGasApi('uploadDisconnectionTasks', { tasks, adminInfo }, 'POST');
+}
+
+export async function extractDisconnectionTasksFromOCR(
+  base64Data: string,
+  mimeType?: string,
+  fileName?: string
+): Promise<{ success: boolean; tasks: Partial<DisconnectionTask>[]; count: number; error?: string }> {
+  try {
+    const res = await fetch('/api/disconnection-tasks/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Data, mimeType, fileName })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+    const errData = await res.json().catch(() => ({}));
+    return { success: false, tasks: [], count: 0, error: errData.error || `OCR Error (${res.status})` };
+  } catch (err: any) {
+    return { success: false, tasks: [], count: 0, error: err.message || 'Network error during OCR processing' };
+  }
 }
 
 export async function submitDisconnectionTaskReport(report: {

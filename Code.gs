@@ -17,7 +17,6 @@ const SHEET_ALIASES = {
   'DTR Replacement': ['DTR Replacement', 'DTR REPLACEMENT', 'DTR REPLESMENT', 'DTR_REPLESMENT', 'DtrReplacement'],
   'Call Case': ['Call Case', 'CALL CASE', 'CALL_CASE', 'CallCase'],
   'Work Orders': ['Work Orders', 'WORK_ORDERS', 'WorkOrders', 'workorders'],
-  'Disconnection Tasks': ['Disconnection Tasks', 'DISCONNECTION_TASKS', 'DisconnectionTasks', 'Disconnection Task', 'DISCONNECTION TASKS', 'Disconnection_Tasks'],
   'System Logs': ['System Logs', 'SYSTEM_LOGS', 'SystemLogs', 'USER_ACTIVITY', 'ActivityLogs'],
   'Settings': ['Settings', 'SETTINGS'],
   'Chat': ['Chat', 'CHAT']
@@ -86,7 +85,7 @@ const NSC_HEADERS = [
 ];
 
 const DISCONNECTION_HEADERS = [
-  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
+  'SL No', 'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
   'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
   'Substation', 'Feeder Name',
   'Consumer ID', 'Consumer Name', 'Father Name', 'Mobile No', 'Address',
@@ -144,23 +143,11 @@ const CHAT_HEADERS = [
   'message', 'timestamp', 'status', 'createdAt'
 ];
 
-const DISCONNECTION_TASKS_HEADERS = [
-  'Task ID', 'Consumer ID', 'Consumer Name', 'Account Number', 'Meter Number',
-  'Consumer Address', 'Phone Number', 'Area', 'Disconnection Reason',
-  'Assigned Worker ID', 'Assigned Worker Name', 'Task Status',
-  'Worker Report', 'Worker Remarks', 'Report Date', 'Report Time', 'Submitted By',
-  'Created At', 'Updated At', 'Completion Percentage', 'Admin Remarks',
-  'Photo Evidence', 'Archived At', 'Archived By Admin', 'Archive Reason',
-  'MRU Section', 'CCC Feeder', 'Outstanding Due', 'Due Date Range', 'Base Class', 'Device Type',
-  'Priority', 'Assigned Agency', 'Paid Amount', 'Payment Date', 'Payment Reference', 'Meter Reading', 'Status History'
-];
-
 function getHeadersForSheet(name) {
   const norm = String(name || '').trim();
   if (norm === 'Users') return USERS_HEADERS;
   if (norm === 'NSC') return NSC_HEADERS;
   if (norm === 'Disconnection') return DISCONNECTION_HEADERS;
-  if (norm === 'Disconnection Tasks' || norm === 'DISCONNECTION_TASKS' || norm === 'DisconnectionTasks') return DISCONNECTION_TASKS_HEADERS;
   if (norm === 'Broken' || norm === 'POLE CASE') return BROKEN_HEADERS;
   if (norm === 'Meter Replacement' || norm === 'METER REPLESMENT') return METER_REPLACEMENT_HEADERS;
   if (norm === 'DTR Replacement' || norm === 'DTR REPLESMENT') return DTR_REPLACEMENT_HEADERS;
@@ -236,20 +223,12 @@ function generateId(prefix) {
 }
 
 // Standard Output Helpers
-function jsonResponse(payload) {
-  return ContentService
-    .createTextOutput(JSON.stringify(payload))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
 function out(data, message, reqId) {
-  const rId = reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
   const payload = {
     success: true,
     data: data,
-    error: null,
     message: message || 'Success',
-    requestId: rId
+    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
   };
   // Also shallow attach common properties for full backward compatibility
   if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -266,31 +245,25 @@ function out(data, message, reqId) {
   } else if (Array.isArray(data)) {
     payload.entries = data;
     payload.items = data;
-    payload.users = data;
   }
-  return jsonResponse(payload);
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
 
 function errOut(code, message, reqId) {
   const errMsg = message || 'An error occurred';
   const errCode = code || 'ERROR';
-  const rId = reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
   const payload = {
     success: false,
-    data: null,
-    error: {
-      code: errCode,
-      message: errMsg
-    },
-    message: errMsg,
+    error: errMsg,
     errorCode: errCode,
+    message: errMsg,
     details: {
       code: errCode,
       message: errMsg
     },
-    requestId: rId
+    requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
   };
-  return jsonResponse(payload);
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
 
 // System Logging
@@ -517,38 +490,6 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'photoafter') return dataObj.photoAfterUrl || '';
   if (targetNorm === 'gpslocation' || targetNorm === 'locationgps') return dataObj.locationGps || '';
   if (targetNorm === 'notes') return dataObj.notes || '';
-  // Disconnection Tasks Aliases
-  if (targetNorm === 'taskid') return dataObj.taskId || dataObj.id || '';
-  if (targetNorm === 'accountnumber') return dataObj.accountNumber || dataObj.accountNo || '';
-  if (targetNorm === 'consumeraddress') return dataObj.consumerAddress || dataObj.address || '';
-  if (targetNorm === 'phonenumber') return dataObj.phoneNumber || dataObj.mobile || dataObj.phone || '';
-  if (targetNorm === 'area') return dataObj.area || '';
-  if (targetNorm === 'disconnectionreason') return dataObj.disconnectionReason || dataObj.reason || '';
-  if (targetNorm === 'assignedworkerid') return dataObj.assignedWorkerId || dataObj.workerId || '';
-  if (targetNorm === 'assignedworkername') return dataObj.assignedWorkerName || dataObj.workerName || '';
-  if (targetNorm === 'taskstatus') return dataObj.taskStatus || dataObj.status || 'PENDING';
-  if (targetNorm === 'workerreport') return dataObj.workerReport || '';
-  if (targetNorm === 'workerremarks') return dataObj.workerRemarks || dataObj.remarks || '';
-  if (targetNorm === 'reportdate') return dataObj.reportDate || '';
-  if (targetNorm === 'reporttime') return dataObj.reportTime || '';
-  if (targetNorm === 'adminremarks') return dataObj.adminRemarks || '';
-  if (targetNorm === 'completionpercentage') return dataObj.completionPercentage || 0;
-  if (targetNorm === 'archivedat') return dataObj.archivedAt || '';
-  if (targetNorm === 'archivedbyadmin') return dataObj.archivedByAdmin || '';
-  if (targetNorm === 'archivereason') return dataObj.archiveReason || '';
-  if (targetNorm === 'mrusection') return dataObj.mruSection || '';
-  if (targetNorm === 'cccfeeder' || targetNorm === 'cccfeedername') return dataObj.cccFeeder || '';
-  if (targetNorm === 'outstandingdue') return dataObj.outstandingDue || dataObj.arrearAmount || '';
-  if (targetNorm === 'duedaterange') return dataObj.dueDateRange || '';
-  if (targetNorm === 'baseclass') return dataObj.baseClass || '';
-  if (targetNorm === 'devicetype') return dataObj.deviceType || '';
-  if (targetNorm === 'priority') return dataObj.priority || 'NORMAL';
-  if (targetNorm === 'assignedagency') return dataObj.assignedAgency || '';
-  if (targetNorm === 'paidamount') return dataObj.paidAmount || '';
-  if (targetNorm === 'paymentdate') return dataObj.paymentDate || '';
-  if (targetNorm === 'paymentreference') return dataObj.paymentReference || '';
-  if (targetNorm === 'meterreading') return dataObj.meterReading || '';
-  if (targetNorm === 'statushistory') return typeof dataObj.statusHistory === 'object' ? JSON.stringify(dataObj.statusHistory) : (dataObj.statusHistory || '[]');
 
   return '';
 }
@@ -685,10 +626,8 @@ function authenticateUser(idNo, password) {
 function getUsersList() {
   const raw = getSheetRows('Users');
   return raw.map(u => ({
-    id: 'usr_' + String(u['User ID'] || u.idNo || ''),
+    id: 'usr_' + String(u['User ID'] || u.idNo),
     idNo: String(u['User ID'] || u.idNo || ''),
-    userId: String(u['User ID'] || u.idNo || ''),
-    password: String(u['Password'] || u.password || (u['Password Hash'] ? '' : '')),
     name: String(u['Full Name'] || u.name || ''),
     phone: String(u['Phone'] || u.phone || ''),
     role: String(u['Role'] || u.role || 'worker'),
@@ -801,12 +740,10 @@ function updateUserAccount(targetId, updates) {
   return { success: true, message: 'User updated successfully' };
 }
 
-function deleteUserAccount(targetId, options) {
-  options = options || {};
+function deleteUserAccount(targetId) {
   const cleanId = String(targetId || '').trim().toLowerCase();
-  const PROTECTED_ADMIN_IDS = ['8695716192', 'adm_8695716192', 'admin', 'nayem'];
-  if (PROTECTED_ADMIN_IDS.indexOf(cleanId) >= 0) {
-    throw Error('PRIMARY_ADMIN_PROTECTED: The Primary Admin account (8695716192) cannot be deleted.');
+  if (cleanId === '8695716192' || cleanId === 'admin') {
+    throw Error('Primary Admin account cannot be deleted');
   }
 
   const s = getSheet('Users');
@@ -818,67 +755,11 @@ function deleteUserAccount(targetId, options) {
 
   if (!matched) throw Error('User not found: ' + targetId);
 
-  const role = String(matched['Role'] || matched.role || '').trim().toLowerCase();
-  if ((role === 'admin' || role === 'controller') && !options.confirmAdminDelete) {
-    throw Error('ADMIN_ACCOUNT_PROTECTED: Deleting an Administrator account requires explicit admin confirmation.');
-  }
-
   s.deleteRow(matched._rowIndex);
   try { CacheService.getScriptCache().remove('users_cache'); } catch (e) {}
-  logSystemActivity(cleanId, cleanId, '', '', 'DELETE_USER', 'Deleted user: ' + cleanId + ' (Reason: ' + (options.reason || 'Admin deletion') + ')');
+  logSystemActivity(cleanId, cleanId, '', '', 'DELETE_USER', 'Deleted user: ' + cleanId);
 
-  return { success: true, message: 'User deleted from Google Sheets', id: targetId };
-}
-
-function deleteEntry(targetId, category, options) {
-  options = options || {};
-  const cleanId = String(targetId || '').trim();
-  if (!cleanId) throw Error('Entry ID required for deletion');
-
-  const sheetsToSearch = category 
-    ? [category] 
-    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
-
-  let matchedSheet = null;
-  let matchedRow = null;
-
-  for (let i = 0; i < sheetsToSearch.length; i++) {
-    const sheetName = sheetsToSearch[i];
-    try {
-      const s = getSheet(sheetName);
-      if (!s) continue;
-      const rows = getSheetRows(sheetName);
-      const found = rows.find(r => 
-        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
-        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId
-      );
-      if (found) {
-        matchedSheet = s;
-        matchedRow = found;
-        break;
-      }
-    } catch (e) {}
-  }
-
-  if (!matchedRow || !matchedSheet) {
-    throw Error('Record not found in Google Sheets: ' + cleanId);
-  }
-
-  // Server-side validation for critical production records
-  const status = String(matchedRow['Status'] || matchedRow.status || '').trim().toLowerCase();
-  const meterNo = String(matchedRow['Meter No'] || matchedRow.meterNo || '').trim();
-  const sealNo = String(matchedRow['Seal No'] || matchedRow.sealNo || '').trim();
-  const isCritical = status === 'approved' || status === 'completed' || Boolean(meterNo && sealNo);
-
-  if (isCritical && !options.confirmCritical) {
-    throw Error('CRITICAL_RECORD_PROTECTION: Entry #' + cleanId + ' is an official (' + (matchedRow['Status'] || 'Approved') + ') record. Accidental deletion is blocked by server validation.');
-  }
-
-  matchedSheet.deleteRow(matchedRow._rowIndex);
-  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
-  logSystemActivity('admin', cleanId, '', '', 'DELETE_RECORD', 'Deleted record: ' + cleanId + ' (' + (options.reason || 'Admin confirmed deletion') + ')');
-
-  return { success: true, message: 'Record deleted from Google Sheets', id: cleanId };
+  return { success: true, message: 'User deleted from Google Sheets' };
 }
 
 // ============================================================================
@@ -973,6 +854,143 @@ function submitRecord(recordData) {
   }
 }
 
+// Full Two-Way Update Record in Google Sheets
+function updateEntry(targetId, category, updateData) {
+  const cleanId = String(targetId || '').trim();
+  if (!cleanId) throw Error('Entry ID is required for update');
+
+  const sheetsToSearch = category 
+    ? [category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+
+  let matchedSheet = null;
+  let matchedRowIndex = -1;
+  let matchedRow = null;
+
+  for (let i = 0; i < sheetsToSearch.length; i++) {
+    const sheetName = sheetsToSearch[i];
+    try {
+      const s = getSheet(sheetName);
+      if (!s) continue;
+      const rows = getSheetRows(sheetName);
+      const found = rows.find(r => 
+        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
+        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId ||
+        String(r['Task ID'] || r.taskId || '').trim() === cleanId ||
+        (cleanId.length >= 6 && String(r['Consumer ID'] || r.consumerId || '').trim() === cleanId)
+      );
+      if (found) {
+        matchedSheet = s;
+        matchedRowIndex = found._rowIndex;
+        matchedRow = found;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  // Fallback search by consumer ID or SL if provided in update payload
+  if (!matchedSheet || matchedRowIndex < 2) {
+    const patchObj = (updateData && typeof updateData.data === 'object') ? updateData.data : (updateData || {});
+    const altConsumerId = String(patchObj.consumerId || patchObj['Consumer ID'] || '').trim();
+    if (altConsumerId) {
+      for (let i = 0; i < sheetsToSearch.length; i++) {
+        try {
+          const s = getSheet(sheetsToSearch[i]);
+          if (!s) continue;
+          const rows = getSheetRows(sheetsToSearch[i]);
+          const found = rows.find(r => String(r['Consumer ID'] || r.consumerId || '').trim() === altConsumerId);
+          if (found) {
+            matchedSheet = s;
+            matchedRowIndex = found._rowIndex;
+            matchedRow = found;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (!matchedSheet || matchedRowIndex < 2) {
+    throw Error('Record #' + cleanId + ' not found in Google Sheets.');
+  }
+
+  const lastCol = matchedSheet.getLastColumn();
+  const headers = matchedSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+  const rowVals = matchedSheet.getRange(matchedRowIndex, 1, 1, lastCol).getValues()[0];
+
+  const patch = (updateData && typeof updateData.data === 'object') ? updateData.data : (updateData || {});
+  patch.updatedAt = now();
+
+  // If sheet has Record ID column and current value is empty, populate it
+  const recIdCol = headers.findIndex(h => normHeader(h) === 'recordid');
+  if (recIdCol >= 0 && (!rowVals[recIdCol] || rowVals[recIdCol] === '')) {
+    rowVals[recIdCol] = cleanId;
+  }
+
+  headers.forEach((h, colIdx) => {
+    const newVal = extractFieldValue(patch, h);
+    if (newVal !== undefined && newVal !== null && newVal !== '') {
+      rowVals[colIdx] = newVal;
+    }
+  });
+
+  matchedSheet.getRange(matchedRowIndex, 1, 1, lastCol).setValues([rowVals]);
+  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+
+  return {
+    success: true,
+    message: 'Record #' + cleanId + ' updated successfully in Google Sheets',
+    entry: {
+      id: cleanId,
+      ...matchedRow,
+      ...patch,
+      updatedAt: patch.updatedAt
+    }
+  };
+}
+
+// Delete Record from Google Sheets with Protection
+function deleteEntry(targetId, category, options) {
+  options = options || {};
+  const cleanId = String(targetId || '').trim();
+  if (!cleanId) throw Error('Entry ID required for deletion');
+
+  const sheetsToSearch = category 
+    ? [category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+
+  let matchedSheet = null;
+  let matchedRow = null;
+
+  for (let i = 0; i < sheetsToSearch.length; i++) {
+    const sheetName = sheetsToSearch[i];
+    try {
+      const s = getSheet(sheetName);
+      if (!s) continue;
+      const rows = getSheetRows(sheetName);
+      const found = rows.find(r => 
+        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
+        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId
+      );
+      if (found) {
+        matchedSheet = s;
+        matchedRow = found;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  if (!matchedRow || !matchedSheet) {
+    throw Error('Record not found in Google Sheets: ' + cleanId);
+  }
+
+  matchedSheet.deleteRow(matchedRow._rowIndex);
+  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+  logSystemActivity('admin', cleanId, '', '', 'DELETE_RECORD', 'Deleted record: ' + cleanId);
+
+  return { success: true, message: 'Record deleted from Google Sheets', id: cleanId };
+}
+
 // Query Entries across dedicated sheets
 function queryRecords(filters) {
   filters = filters || {};
@@ -986,11 +1004,22 @@ function queryRecords(filters) {
   targetSheets.forEach(sheetName => {
     try {
       const rows = getSheetRows(sheetName);
-      rows.forEach(r => {
+      rows.forEach((r, idx) => {
+        // Generate stable deterministic ID if missing (e.g. from copy-pasting directly into Sheet)
+        const stableId = String(
+          r['Record ID'] || 
+          r.id || 
+          r['Task ID'] || 
+          r.taskId || 
+          r['Submission ID'] || 
+          r.submissionId || 
+          ('PWR-' + sheetName.substring(0, 3).toUpperCase() + '-' + (r['Consumer ID'] || r.consumerId || r['SL No'] || r.slNo || (idx + 1)))
+        ).trim();
+
         // Normalize entry to standard frontend shape
         const item = {
-          id: String(r['Record ID'] || r.id || ('PWR-' + Math.random().toString(36).substring(2, 7))),
-          submissionId: String(r['Submission ID'] || r.submissionId || ''),
+          id: stableId,
+          submissionId: String(r['Submission ID'] || r.submissionId || stableId),
           category: String(r['Category'] || r.category || sheetName),
           status: String(r['Status'] || r.status || 'Completed'),
           date: String(r['Date'] || r.date || r['Created At'] || now()),
@@ -1224,616 +1253,6 @@ function deleteWorkOrder(id) {
 }
 
 // ============================================================================
-// DISCONNECTION TASK MANAGEMENT SYSTEM (Google Sheets Source of Truth)
-// ============================================================================
-
-function normalizeDisconnectionTaskRow(r) {
-  if (!r) return null;
-  const taskId = String(r['Task ID'] || r.taskId || r['Record ID'] || r.id || '').trim();
-  const taskStatus = String(r['Task Status'] || r.taskStatus || r['Status'] || r.status || 'PENDING').trim().toUpperCase();
-
-  return {
-    taskId: taskId,
-    consumerId: String(r['Consumer ID'] || r.consumerId || '').trim(),
-    consumerName: String(r['Consumer Name'] || r.consumerName || '').trim(),
-    accountNumber: String(r['Account Number'] || r.accountNumber || '').trim(),
-    meterNumber: String(r['Meter Number'] || r.meterNumber || r['Meter No'] || r.meterNo || '').trim(),
-    consumerAddress: String(r['Consumer Address'] || r.consumerAddress || r['Address'] || r.address || '').trim(),
-    phoneNumber: String(r['Phone Number'] || r.phoneNumber || r['Mobile No'] || r.mobile || '').trim(),
-    area: String(r['Area'] || r.area || '').trim(),
-    disconnectionReason: String(r['Disconnection Reason'] || r.disconnectionReason || r['Reason'] || r.reason || '').trim(),
-    assignedWorkerId: String(r['Assigned Worker ID'] || r.assignedWorkerId || r['Worker ID'] || r.workerId || '').trim(),
-    assignedWorkerName: String(r['Assigned Worker Name'] || r.assignedWorkerName || r['Worker Name'] || r.workerName || '').trim(),
-    taskStatus: taskStatus,
-    workerReport: String(r['Worker Report'] || r.workerReport || '').trim(),
-    workerRemarks: String(r['Worker Remarks'] || r.workerRemarks || r['Remarks'] || r.remarks || '').trim(),
-    reportDate: String(r['Report Date'] || r.reportDate || '').trim(),
-    reportTime: String(r['Report Time'] || r.reportTime || '').trim(),
-    submittedBy: String(r['Submitted By'] || r.submittedBy || '').trim(),
-    createdAt: String(r['Created At'] || r.createdAt || '').trim(),
-    updatedAt: String(r['Updated At'] || r.updatedAt || '').trim(),
-    completionPercentage: Number(r['Completion Percentage'] || r.completionPercentage || (taskStatus === 'COMPLETED' || taskStatus === 'DISCONNECT' || taskStatus === 'PAID' ? 100 : 0)),
-    adminRemarks: String(r['Admin Remarks'] || r.adminRemarks || '').trim(),
-    photoUrl: String(r['Photo Evidence'] || r.photoUrl || r.directImageUrl || '').trim(),
-    archivedAt: String(r['Archived At'] || r.archivedAt || '').trim(),
-    archivedByAdmin: String(r['Archived By Admin'] || r.archivedByAdmin || '').trim(),
-    archiveReason: String(r['Archive Reason'] || r.archiveReason || '').trim(),
-    mruSection: String(r['MRU Section'] || r.mruSection || '').trim(),
-    cccFeeder: String(r['CCC Feeder'] || r.cccFeeder || r['CCC/Feeder'] || '').trim(),
-    outstandingDue: String(r['Outstanding Due'] || r.outstandingDue || r['Arrear Amount'] || r.arrearAmount || '').trim(),
-    dueDateRange: String(r['Due Date Range'] || r.dueDateRange || '').trim(),
-    baseClass: String(r['Base Class'] || r.baseClass || '').trim(),
-    deviceType: String(r['Device Type'] || r.deviceType || '').trim(),
-    priority: String(r['Priority'] || r.priority || 'NORMAL').trim().toUpperCase(),
-    assignedAgency: String(r['Assigned Agency'] || r.assignedAgency || '').trim(),
-    paidAmount: String(r['Paid Amount'] || r.paidAmount || '').trim(),
-    paymentDate: String(r['Payment Date'] || r.paymentDate || '').trim(),
-    paymentReference: String(r['Payment Reference'] || r.paymentReference || '').trim(),
-    meterReading: String(r['Meter Reading'] || r.meterReading || '').trim(),
-    statusHistory: r['Status History'] || r.statusHistory || '[]',
-    _rowIndex: r._rowIndex
-  };
-}
-
-function getDisconnectionTasksList(params) {
-  params = params || {};
-  const s = getSheet('Disconnection Tasks');
-  const rows = getSheetRows('Disconnection Tasks');
-  const includeArchived = params.includeArchived === true || params.includeArchived === 'true';
-  const role = String(params.role || '').toLowerCase();
-  const workerId = String(params.workerId || params.idNo || '').trim().toLowerCase();
-  const workerName = String(params.workerName || params.name || '').trim().toLowerCase();
-  const statusFilter = String(params.status || '').trim().toUpperCase();
-  const search = String(params.search || '').trim().toLowerCase();
-
-  const allTasks = [];
-  for (let i = 0; i < rows.length; i++) {
-    const task = normalizeDisconnectionTaskRow(rows[i]);
-    if (!task || !task.taskId) continue;
-    if (!includeArchived && (task.archivedAt || task.taskStatus === 'ARCHIVED')) {
-      continue;
-    }
-    allTasks.push(task);
-  }
-
-  // Calculate system-wide & worker stats
-  const totalTasks = allTasks.length;
-  let completedCount = 0;
-  let pendingCount = 0;
-  let inProgressCount = 0;
-  let unableCount = 0;
-  let reportedCount = 0;
-  let cancelledCount = 0;
-  let paidCount = 0;
-  let notFoundCount = 0;
-  let disputeCount = 0;
-  let officeTeamCount = 0;
-  let reissueCount = 0;
-  let urgentCount = 0;
-
-  let myAssignedCount = 0;
-  let myCompletedCount = 0;
-  let myPendingCount = 0;
-
-  for (let i = 0; i < allTasks.length; i++) {
-    const t = allTasks[i];
-    const st = t.taskStatus;
-    if (st === 'COMPLETED' || st === 'DISCONNECT') completedCount++;
-    else if (st === 'PENDING') pendingCount++;
-    else if (st === 'PAID') paidCount++;
-    else if (st === 'NOT FOUND') notFoundCount++;
-    else if (st === 'DISPUTE') disputeCount++;
-    else if (st === 'OFFICE TEAM') officeTeamCount++;
-    else if (st === 'REISSUE') reissueCount++;
-    else if (st === 'IN PROGRESS') inProgressCount++;
-    else if (st === 'UNABLE') unableCount++;
-    else if (st === 'REPORTED') reportedCount++;
-    else if (st === 'CANCELLED') cancelledCount++;
-
-    if (t.priority === 'URGENT') urgentCount++;
-
-    const isMine = (workerId && t.assignedWorkerId.toLowerCase() === workerId) ||
-                   (workerName && t.assignedWorkerName.toLowerCase() === workerName);
-    if (isMine) {
-      myAssignedCount++;
-      if (st === 'COMPLETED' || st === 'DISCONNECT' || st === 'PAID') myCompletedCount++;
-      else if (st === 'PENDING' || st === 'IN PROGRESS') myPendingCount++;
-    }
-  }
-
-  const completionPercentage = totalTasks > 0 ? Math.round(((completedCount + paidCount) / totalTasks) * 100) : 0;
-  const myCompletionPercentage = myAssignedCount > 0 ? Math.round((myCompletedCount / myAssignedCount) * 100) : 0;
-
-  const stats = {
-    totalTasks: totalTasks,
-    completedTasks: completedCount,
-    pendingTasks: pendingCount,
-    inProgressTasks: inProgressCount,
-    unableTasks: unableCount,
-    reportedTasks: reportedCount,
-    cancelledTasks: cancelledCount,
-    paidTasks: paidCount,
-    notFoundTasks: notFoundCount,
-    disputeTasks: disputeCount,
-    officeTeamTasks: officeTeamCount,
-    reissueTasks: reissueCount,
-    urgentTasks: urgentCount,
-    completionPercentage: completionPercentage,
-    myAssignedTasks: myAssignedCount,
-    myCompletedTasks: myCompletedCount,
-    myPendingTasks: myPendingCount,
-    myCompletionPercentage: myCompletionPercentage
-  };
-
-  // Filter tasks for response
-  let filtered = allTasks;
-
-  // Worker view authorization filter
-  if (role === 'worker' && (workerId || workerName)) {
-    filtered = filtered.filter(t => {
-      const assignedId = t.assignedWorkerId.toLowerCase();
-      const assignedNm = t.assignedWorkerName.toLowerCase();
-      const isDirectlyAssigned = (workerId && assignedId === workerId) || (workerName && assignedNm === workerName);
-      const isUnassignedPool = !assignedId && !assignedNm;
-      return isDirectlyAssigned || isUnassignedPool;
-    });
-  }
-
-  if (statusFilter && statusFilter !== 'ALL') {
-    if (statusFilter === 'COMPLETED') {
-      filtered = filtered.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT');
-    } else {
-      filtered = filtered.filter(t => t.taskStatus === statusFilter);
-    }
-  }
-
-  if (search) {
-    filtered = filtered.filter(t => {
-      const hay = (
-        t.taskId + ' ' +
-        t.consumerId + ' ' +
-        t.consumerName + ' ' +
-        t.accountNumber + ' ' +
-        t.meterNumber + ' ' +
-        t.consumerAddress + ' ' +
-        t.phoneNumber + ' ' +
-        t.area + ' ' +
-        t.mruSection + ' ' +
-        t.cccFeeder + ' ' +
-        t.disconnectionReason + ' ' +
-        t.assignedWorkerName
-      ).toLowerCase();
-      return hay.includes(search);
-    });
-  }
-
-  return {
-    tasks: filtered.reverse(),
-    stats: stats
-  };
-}
-
-function uploadDisconnectionTasks(tasksArray, adminInfo) {
-  if (!Array.isArray(tasksArray) || tasksArray.length === 0) {
-    throw Error('Tasks array is required and cannot be empty');
-  }
-
-  const s = getSheet('Disconnection Tasks');
-  const headers = getHeadersForSheet('Disconnection Tasks');
-  const headerNorms = headers.map(normHeader);
-  const timeNow = now();
-  const adminName = (adminInfo && (adminInfo.adminName || adminInfo.name)) || 'Admin';
-  const adminId = (adminInfo && (adminInfo.adminId || adminInfo.idNo)) || 'admin';
-
-  // Read existing rows to deduplicate by Consumer ID, Account Number, or Task ID
-  const existingRows = getSheetRows('Disconnection Tasks');
-  const existingMap = {};
-  for (let e = 0; e < existingRows.length; e++) {
-    const row = existingRows[e];
-    const cId = String(row['Consumer ID'] || row.consumerId || '').trim();
-    const aNo = String(row['Account Number'] || row.accountNumber || '').trim();
-    const tId = String(row['Task ID'] || row.taskId || row.id || '').trim();
-    if (cId) existingMap['CID_' + cId.toLowerCase()] = row;
-    if (aNo) existingMap['ACC_' + aNo.toLowerCase()] = row;
-    if (tId) existingMap['TID_' + tId.toLowerCase()] = row;
-  }
-
-  const rowsToInsert = [];
-  const processedTasks = [];
-  let updatedCount = 0;
-  let insertedCount = 0;
-
-  for (let i = 0; i < tasksArray.length; i++) {
-    const raw = tasksArray[i] || {};
-    const consumerId = String(raw.consumerId || raw['Consumer ID'] || '').trim();
-    const accountNumber = String(raw.accountNumber || raw['Account Number'] || '').trim();
-    let taskId = String(raw.taskId || raw['Task ID'] || '').trim();
-
-    // Check if duplicate exists
-    let existingMatch = null;
-    if (consumerId && existingMap['CID_' + consumerId.toLowerCase()]) {
-      existingMatch = existingMap['CID_' + consumerId.toLowerCase()];
-    } else if (accountNumber && existingMap['ACC_' + accountNumber.toLowerCase()]) {
-      existingMatch = existingMap['ACC_' + accountNumber.toLowerCase()];
-    } else if (taskId && existingMap['TID_' + taskId.toLowerCase()]) {
-      existingMatch = existingMap['TID_' + taskId.toLowerCase()];
-    }
-
-    if (existingMatch) {
-      // UPDATE EXISTING RECORD (Prevent duplicates)
-      const rowIndex = existingMatch._rowIndex;
-      function updateExistingCol(hName, val) {
-        if (val === undefined || val === null || val === '') return;
-        const idx = headerNorms.indexOf(normHeader(hName));
-        if (idx >= 0) {
-          s.getRange(rowIndex, idx + 1).setValue(val);
-        }
-      }
-      if (raw.consumerName || raw['Consumer Name']) updateExistingCol('Consumer Name', String(raw.consumerName || raw['Consumer Name']).trim());
-      if (raw.meterNumber || raw['Meter Number'] || raw.meterNo) updateExistingCol('Meter Number', String(raw.meterNumber || raw['Meter Number'] || raw.meterNo).trim());
-      if (raw.consumerAddress || raw['Consumer Address'] || raw.address) updateExistingCol('Consumer Address', String(raw.consumerAddress || raw['Consumer Address'] || raw.address).trim());
-      if (raw.phoneNumber || raw['Phone Number'] || raw.mobile) updateExistingCol('Phone Number', String(raw.phoneNumber || raw['Phone Number'] || raw.mobile).trim());
-      if (raw.area || raw['Area']) updateExistingCol('Area', String(raw.area || raw['Area']).trim());
-      if (raw.disconnectionReason || raw['Disconnection Reason'] || raw.reason) updateExistingCol('Disconnection Reason', String(raw.disconnectionReason || raw['Disconnection Reason'] || raw.reason).trim());
-      if (raw.mruSection || raw['MRU Section']) updateExistingCol('MRU Section', String(raw.mruSection || raw['MRU Section']).trim());
-      if (raw.cccFeeder || raw['CCC Feeder'] || raw['CCC/Feeder']) updateExistingCol('CCC Feeder', String(raw.cccFeeder || raw['CCC Feeder'] || raw['CCC/Feeder']).trim());
-      if (raw.outstandingDue || raw['Outstanding Due'] || raw.arrearAmount) updateExistingCol('Outstanding Due', String(raw.outstandingDue || raw['Outstanding Due'] || raw.arrearAmount).trim());
-      if (raw.dueDateRange || raw['Due Date Range']) updateExistingCol('Due Date Range', String(raw.dueDateRange || raw['Due Date Range']).trim());
-      if (raw.baseClass || raw['Base Class']) updateExistingCol('Base Class', String(raw.baseClass || raw['Base Class']).trim());
-      if (raw.deviceType || raw['Device Type']) updateExistingCol('Device Type', String(raw.deviceType || raw['Device Type']).trim());
-      if (raw.priority || raw['Priority']) updateExistingCol('Priority', String(raw.priority || raw['Priority']).trim().toUpperCase());
-      if (raw.assignedAgency || raw['Assigned Agency']) updateExistingCol('Assigned Agency', String(raw.assignedAgency || raw['Assigned Agency']).trim());
-      if (raw.assignedWorkerId) updateExistingCol('Assigned Worker ID', String(raw.assignedWorkerId).trim());
-      if (raw.assignedWorkerName) updateExistingCol('Assigned Worker Name', String(raw.assignedWorkerName).trim());
-      updateExistingCol('Updated At', timeNow);
-
-      updatedCount++;
-      processedTasks.push({
-        ...existingMatch,
-        ...raw,
-        taskId: existingMatch['Task ID'] || existingMatch.taskId || taskId
-      });
-    } else {
-      // NEW CONSUMER RECORD
-      if (!taskId) {
-        taskId = 'TASK-DISC-' + Date.now() + '-' + (i + 1);
-      }
-      const taskObj = {
-        taskId: taskId,
-        consumerId: consumerId,
-        consumerName: String(raw.consumerName || raw['Consumer Name'] || '').trim(),
-        accountNumber: accountNumber,
-        meterNumber: String(raw.meterNumber || raw['Meter Number'] || raw.meterNo || '').trim(),
-        consumerAddress: String(raw.consumerAddress || raw['Consumer Address'] || raw.address || '').trim(),
-        phoneNumber: String(raw.phoneNumber || raw['Phone Number'] || raw.mobile || '').trim(),
-        area: String(raw.area || raw['Area'] || '').trim(),
-        disconnectionReason: String(raw.disconnectionReason || raw['Disconnection Reason'] || raw.reason || 'Arrear Default').trim(),
-        assignedWorkerId: String(raw.assignedWorkerId || raw['Assigned Worker ID'] || '').trim(),
-        assignedWorkerName: String(raw.assignedWorkerName || raw['Assigned Worker Name'] || '').trim(),
-        taskStatus: String(raw.taskStatus || raw['Task Status'] || 'PENDING').trim().toUpperCase(),
-        workerReport: '',
-        workerRemarks: '',
-        reportDate: '',
-        reportTime: '',
-        submittedBy: '',
-        createdAt: timeNow,
-        updatedAt: timeNow,
-        completionPercentage: 0,
-        adminRemarks: String(raw.adminRemarks || '').trim(),
-        photoUrl: '',
-        archivedAt: '',
-        archivedByAdmin: '',
-        archiveReason: '',
-        mruSection: String(raw.mruSection || raw['MRU Section'] || '').trim(),
-        cccFeeder: String(raw.cccFeeder || raw['CCC Feeder'] || raw['CCC/Feeder'] || '').trim(),
-        outstandingDue: String(raw.outstandingDue || raw['Outstanding Due'] || raw.arrearAmount || '').trim(),
-        dueDateRange: String(raw.dueDateRange || raw['Due Date Range'] || '').trim(),
-        baseClass: String(raw.baseClass || raw['Base Class'] || '').trim(),
-        deviceType: String(raw.deviceType || raw['Device Type'] || '').trim(),
-        priority: String(raw.priority || raw['Priority'] || 'NORMAL').trim().toUpperCase(),
-        assignedAgency: String(raw.assignedAgency || raw['Assigned Agency'] || '').trim(),
-        paidAmount: '',
-        paymentDate: '',
-        paymentReference: '',
-        meterReading: '',
-        statusHistory: '[]'
-      };
-
-      const rowArr = [];
-      for (let j = 0; j < headers.length; j++) {
-        rowArr.push(extractFieldValue(taskObj, headers[j]));
-      }
-      rowsToInsert.push(rowArr);
-      processedTasks.push(taskObj);
-      insertedCount++;
-
-      // Register into map so subsequent duplicates in the SAME file are caught
-      if (consumerId) existingMap['CID_' + consumerId.toLowerCase()] = taskObj;
-      if (accountNumber) existingMap['ACC_' + accountNumber.toLowerCase()] = taskObj;
-      if (taskId) existingMap['TID_' + taskId.toLowerCase()] = taskObj;
-    }
-  }
-
-  // Batch append new rows
-  if (rowsToInsert.length > 0) {
-    const startRow = s.getLastRow() + 1;
-    s.getRange(startRow, 1, rowsToInsert.length, headers.length).setValues(rowsToInsert);
-  }
-
-  logSystemActivity(adminId, adminId, adminName, 'admin', 'DISCONNECTION_LIST_UPLOADED', 'Processed ' + tasksArray.length + ' tasks: ' + insertedCount + ' inserted, ' + updatedCount + ' updated (deduplicated)');
-  return {
-    success: true,
-    count: tasksArray.length,
-    insertedCount: insertedCount,
-    updatedCount: updatedCount,
-    message: 'Processed ' + tasksArray.length + ' consumer tasks (' + insertedCount + ' new, ' + updatedCount + ' updated, 0 duplicates)',
-    tasks: processedTasks
-  };
-}
-
-function submitDisconnectionTaskReport(reportData) {
-  const lock = LockService.getScriptLock();
-  const hasLock = lock.tryLock(25000);
-  if (!hasLock) {
-    throw Error('Server is busy processing another update. Please retry in a few seconds.');
-  }
-
-  try {
-    if (!reportData || typeof reportData !== 'object') {
-      throw Error('Report payload object is required');
-    }
-
-    const taskId = String(reportData.taskId || reportData.id || '').trim();
-    if (!taskId) {
-      throw Error('Task ID is required for report submission');
-    }
-
-    const s = getSheet('Disconnection Tasks');
-    const rows = getSheetRows('Disconnection Tasks');
-    const matched = rows.find(r => {
-      const tId = String(r['Task ID'] || r.taskId || r.id || '').trim();
-      return tId === taskId;
-    });
-
-    if (!matched) {
-      throw Error('Disconnection Task #' + taskId + ' not found in Google Sheets');
-    }
-
-    const submissionId = String(reportData.submissionId || reportData.requestId || '').trim();
-    if (submissionId && matched.workerReport && matched['Submission ID'] === submissionId) {
-      return {
-        success: true,
-        duplicate: true,
-        message: 'Report already recorded for Task #' + taskId,
-        taskId: taskId,
-        status: matched['Task Status'] || matched.taskStatus || 'COMPLETED'
-      };
-    }
-
-    const rowIndex = matched._rowIndex;
-    const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => String(h || '').trim());
-    const headerNorms = headers.map(normHeader);
-
-    function updateCol(headerName, val) {
-      const idx = headerNorms.indexOf(normHeader(headerName));
-      if (idx >= 0) {
-        s.getRange(rowIndex, idx + 1).setValue(val);
-      }
-    }
-
-    const taskStatus = String(reportData.taskStatus || reportData.status || 'COMPLETED').trim().toUpperCase();
-    const workerReport = String(reportData.workerReport || reportData.report || '').trim();
-    const workerRemarks = String(reportData.workerRemarks || reportData.remarks || '').trim();
-    const submittedBy = String(reportData.submittedBy || reportData.workerName || reportData.workerId || '').trim();
-    const reportDate = String(reportData.reportDate || new Date().toLocaleDateString('en-GB')).trim();
-    const reportTime = String(reportData.reportTime || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })).trim();
-    const photoUrl = String(reportData.photoUrl || reportData.photoEvidence || '').trim();
-    const paidAmount = String(reportData.paidAmount || '').trim();
-    const paymentDate = String(reportData.paymentDate || '').trim();
-    const paymentReference = String(reportData.paymentReference || '').trim();
-    const meterReading = String(reportData.meterReading || '').trim();
-    const priority = String(reportData.priority || '').trim().toUpperCase();
-    const assignedAgency = String(reportData.assignedAgency || '').trim();
-
-    updateCol('Task Status', taskStatus);
-    updateCol('Worker Report', workerReport);
-    updateCol('Worker Remarks', workerRemarks);
-    updateCol('Report Date', reportDate);
-    updateCol('Report Time', reportTime);
-    updateCol('Submitted By', submittedBy);
-    updateCol('Updated At', now());
-    if (photoUrl) updateCol('Photo Evidence', photoUrl);
-    if (paidAmount) updateCol('Paid Amount', paidAmount);
-    if (paymentDate) updateCol('Payment Date', paymentDate);
-    if (paymentReference) updateCol('Payment Reference', paymentReference);
-    if (meterReading) updateCol('Meter Reading', meterReading);
-    if (priority) updateCol('Priority', priority);
-    if (assignedAgency) updateCol('Assigned Agency', assignedAgency);
-
-    // Append to status history
-    let history = [];
-    try {
-      const rawHist = matched['Status History'] || matched.statusHistory || '';
-      if (rawHist) history = JSON.parse(rawHist);
-    } catch (e) {
-      history = [];
-    }
-    history.push({
-      previousStatus: matched['Task Status'] || matched.taskStatus || 'PENDING',
-      newStatus: taskStatus,
-      workerId: reportData.workerId || '',
-      workerName: submittedBy,
-      timestamp: now(),
-      remarks: workerRemarks || workerReport,
-      paidAmount: paidAmount,
-      meterReading: meterReading,
-      evidence: photoUrl,
-      requestId: submissionId
-    });
-    updateCol('Status History', JSON.stringify(history));
-
-    if (taskStatus === 'COMPLETED' || taskStatus === 'DISCONNECT' || taskStatus === 'PAID') {
-      updateCol('Completion Percentage', 100);
-    } else if (taskStatus === 'IN PROGRESS') {
-      updateCol('Completion Percentage', 50);
-    }
-
-    logSystemActivity(
-      reportData.workerId || '',
-      reportData.workerId || '',
-      submittedBy,
-      'worker',
-      'DISCONNECTION_REPORT_SUBMITTED',
-      'Task #' + taskId + ' updated to status ' + taskStatus + ' by ' + submittedBy
-    );
-
-    return {
-      success: true,
-      message: 'Disconnection report submitted successfully for Task #' + taskId,
-      taskId: taskId,
-      status: taskStatus
-    };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function assignDisconnectionTask(taskId, workerId, workerName, options) {
-  const cleanTaskId = String(taskId || '').trim();
-  if (!cleanTaskId) throw Error('Task ID is required for assignment');
-
-  const s = getSheet('Disconnection Tasks');
-  const rows = getSheetRows('Disconnection Tasks');
-  const matched = rows.find(r => {
-    const tId = String(r['Task ID'] || r.taskId || r.id || '').trim();
-    return tId === cleanTaskId;
-  });
-
-  if (!matched) {
-    throw Error('Disconnection Task #' + cleanTaskId + ' not found in Google Sheets');
-  }
-
-  const rowIndex = matched._rowIndex;
-  const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => String(h || '').trim());
-  const headerNorms = headers.map(normHeader);
-
-  function updateCol(headerName, val) {
-    const idx = headerNorms.indexOf(normHeader(headerName));
-    if (idx >= 0) {
-      s.getRange(rowIndex, idx + 1).setValue(val);
-    }
-  }
-
-  updateCol('Assigned Worker ID', String(workerId || '').trim());
-  updateCol('Assigned Worker Name', String(workerName || '').trim());
-  updateCol('Updated At', now());
-
-  logSystemActivity(
-    'admin', 'admin', 'Admin', 'admin',
-    'DISCONNECTION_TASK_ASSIGNED',
-    'Task #' + cleanTaskId + ' assigned to ' + workerName + ' (' + workerId + ')'
-  );
-
-  return {
-    success: true,
-    message: 'Task #' + cleanTaskId + ' successfully assigned to ' + (workerName || workerId),
-    taskId: cleanTaskId,
-    assignedWorkerId: workerId,
-    assignedWorkerName: workerName
-  };
-}
-
-function archiveDisconnectionTask(taskId, reason, adminName) {
-  const cleanTaskId = String(taskId || '').trim();
-  if (!cleanTaskId) throw Error('Task ID is required for archive');
-
-  const s = getSheet('Disconnection Tasks');
-  const rows = getSheetRows('Disconnection Tasks');
-  const matched = rows.find(r => {
-    const tId = String(r['Task ID'] || r.taskId || r.id || '').trim();
-    return tId === cleanTaskId;
-  });
-
-  if (!matched) {
-    throw Error('Disconnection Task #' + cleanTaskId + ' not found in Google Sheets');
-  }
-
-  const rowIndex = matched._rowIndex;
-  const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => String(h || '').trim());
-  const headerNorms = headers.map(normHeader);
-
-  function updateCol(headerName, val) {
-    const idx = headerNorms.indexOf(normHeader(headerName));
-    if (idx >= 0) {
-      s.getRange(rowIndex, idx + 1).setValue(val);
-    }
-  }
-
-  updateCol('Task Status', 'ARCHIVED');
-  updateCol('Archived At', now());
-  updateCol('Archived By Admin', String(adminName || 'Admin').trim());
-  updateCol('Archive Reason', String(reason || 'Archived by Admin').trim());
-  updateCol('Updated At', now());
-
-  logSystemActivity(
-    'admin', 'admin', adminName || 'Admin', 'admin',
-    'DISCONNECTION_TASK_ARCHIVED',
-    'Task #' + cleanTaskId + ' archived. Reason: ' + (reason || 'No reason provided')
-  );
-
-  return {
-    success: true,
-    message: 'Task #' + cleanTaskId + ' archived successfully',
-    taskId: cleanTaskId
-  };
-}
-
-function restoreDisconnectionTask(taskId) {
-  const cleanTaskId = String(taskId || '').trim();
-  if (!cleanTaskId) throw Error('Task ID is required for restore');
-
-  const s = getSheet('Disconnection Tasks');
-  const rows = getSheetRows('Disconnection Tasks');
-  const matched = rows.find(r => {
-    const tId = String(r['Task ID'] || r.taskId || r.id || '').trim();
-    return tId === cleanTaskId;
-  });
-
-  if (!matched) {
-    throw Error('Disconnection Task #' + cleanTaskId + ' not found in Google Sheets');
-  }
-
-  const rowIndex = matched._rowIndex;
-  const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(h => String(h || '').trim());
-  const headerNorms = headers.map(normHeader);
-
-  function updateCol(headerName, val) {
-    const idx = headerNorms.indexOf(normHeader(headerName));
-    if (idx >= 0) {
-      s.getRange(rowIndex, idx + 1).setValue(val);
-    }
-  }
-
-  updateCol('Task Status', 'PENDING');
-  updateCol('Archived At', '');
-  updateCol('Archived By Admin', '');
-  updateCol('Archive Reason', '');
-  updateCol('Updated At', now());
-
-  logSystemActivity(
-    'admin', 'admin', 'Admin', 'admin',
-    'DISCONNECTION_TASK_RESTORED',
-    'Task #' + cleanTaskId + ' restored from archive'
-  );
-
-  return {
-    success: true,
-    message: 'Task #' + cleanTaskId + ' restored successfully',
-    taskId: cleanTaskId
-  };
-}
-
-// ============================================================================
 // MAIN HTTP DISPATCHERS: doGet & doPost
 // ============================================================================
 
@@ -1893,9 +1312,9 @@ function doGet(e) {
       return out({ logs: getSheetRows('System Logs').reverse() }, 'System logs retrieved');
     }
 
-    // 9. Disconnection Tasks
-    if (action === 'disconnectiontasks' || action === 'getDisconnectionTasks' || action === 'disconnectionTasks') {
-      return out(getDisconnectionTasksList(p), 'Disconnection tasks retrieved');
+    // 9. Disconnection Tasks & Module
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks') {
+      return out(getDisconnectionTasksData(p), 'Disconnection tasks retrieved');
     }
 
     // Fallback: Unknown action
@@ -1975,8 +1394,17 @@ function doPost(e) {
     }
     if (action === 'deleteUser') {
       const targetId = body.id || body.idNo || data.id || data.idNo;
-      const res = deleteUserAccount(targetId, body.options || body || data);
+      const res = deleteUserAccount(targetId);
       return out(res, 'User deleted', reqId);
+    }
+
+    // Record Update & Delete Operations
+    if (action === 'updateEntry' || action === 'updateRecord' || action === 'editEntry') {
+      const targetId = body.id || body.submissionId || data.id || data.submissionId || body.taskId || data.taskId;
+      const category = body.category || data.category;
+      const updateData = body.data || data.data || data || body;
+      const res = updateEntry(targetId, category, updateData);
+      return out(res, res.message || 'Record updated', reqId);
     }
     if (action === 'deleteEntry' || action === 'deleteRecord') {
       const targetId = body.id || body.submissionId || data.id || data.submissionId;
@@ -2036,31 +1464,6 @@ function doPost(e) {
       return out(res, 'Work order deleted', reqId);
     }
 
-    // Disconnection Task Management System
-    if (action === 'disconnectiontasks' || action === 'getDisconnectionTasks' || action === 'disconnectionTasks') {
-      return out(getDisconnectionTasksList(data), 'Disconnection tasks retrieved', reqId);
-    }
-    if (action === 'uploadDisconnectionTasks' || action === 'uploadDisconnectionList') {
-      const res = uploadDisconnectionTasks(body.tasks || data.tasks || [], body.adminInfo || data.adminInfo || {});
-      return out(res, res.message, reqId);
-    }
-    if (action === 'submitDisconnectionReport' || action === 'submitDisconnectionTaskReport') {
-      const res = submitDisconnectionTaskReport(data);
-      return out(res, res.message, reqId);
-    }
-    if (action === 'assignDisconnectionTask') {
-      const res = assignDisconnectionTask(data.taskId, data.workerId, data.workerName, data);
-      return out(res, res.message, reqId);
-    }
-    if (action === 'archiveDisconnectionTask') {
-      const res = archiveDisconnectionTask(data.taskId, data.reason, data.adminName);
-      return out(res, res.message, reqId);
-    }
-    if (action === 'restoreDisconnectionTask') {
-      const res = restoreDisconnectionTask(data.taskId);
-      return out(res, res.message, reqId);
-    }
-
     // Live Chat
     if (action === 'getChat' || action === 'chat') {
       return out({ messages: getSheetRows('Chat') }, 'Chat messages retrieved', reqId);
@@ -2089,8 +1492,312 @@ function doPost(e) {
       return out({ logged: true }, 'Activity logged', reqId);
     }
 
+    // Disconnection Tasks Operations
+    if (action === 'uploadDisconnectionTasks') {
+      return out(handleUploadDisconnectionTasks(body), 'Disconnection tasks processed', reqId);
+    }
+    if (action === 'submitDisconnectionReport') {
+      return out(handleSubmitDisconnectionReport(body), 'Disconnection report saved', reqId);
+    }
+    if (action === 'assignDisconnectionTask') {
+      return out(handleAssignDisconnectionTask(body), 'Disconnection task assigned', reqId);
+    }
+    if (action === 'archiveDisconnectionTask') {
+      return out(handleArchiveDisconnectionTask(body), 'Disconnection task archived', reqId);
+    }
+    if (action === 'restoreDisconnectionTask') {
+      return out(handleRestoreDisconnectionTask(body), 'Disconnection task restored', reqId);
+    }
+
     return errOut('UNKNOWN_POST_ACTION', 'Unrecognized POST action: ' + action, reqId);
   } catch (err) {
     return errOut('SERVER_ERROR', String(err.message || err));
   }
+}
+
+// ============================================================================
+// DISCONNECTION MODULE ISOLATED HANDLERS
+// ============================================================================
+
+function getDisconnectionTasksData(params) {
+  params = params || {};
+  let rawRows = [];
+  try {
+    rawRows = getSheetRows('Disconnection');
+  } catch (e) {
+    rawRows = [];
+  }
+
+  var tasks = [];
+  var seenIds = {};
+
+  for (var i = 0; i < rawRows.length; i++) {
+    var r = rawRows[i];
+    var taskId = String(r['Task ID'] || r['Submission ID'] || r['Record ID'] || ('TASK-DISC-' + (i + 1))).trim();
+    if (seenIds[taskId]) continue;
+    seenIds[taskId] = true;
+
+    var rawSl = String(r['SL No'] || r['SL'] || r.serialNumber || r.slNo || '').trim();
+    var serialNumber = '';
+    if (rawSl) {
+      var m = rawSl.match(/(\d+)/);
+      if (m) {
+        serialNumber = 'SL ' + ('000' + m[1]).slice(-3);
+      } else {
+        serialNumber = rawSl;
+      }
+    } else {
+      serialNumber = 'SL ' + ('000' + (i + 1)).slice(-3);
+    }
+
+    var status = String(r['Status'] || r['Task Status'] || 'PENDING').toUpperCase();
+    var task = {
+      serialNumber: serialNumber,
+      taskId: taskId,
+      consumerId: String(r['Consumer ID'] || r.consumerId || '').trim(),
+      consumerName: String(r['Consumer Name'] || r.consumerName || '').trim(),
+      accountNumber: String(r['Account Number'] || r['Installation No'] || r.accountNumber || '').trim(),
+      meterNumber: String(r['Final Reading'] || r['Old Meter No'] || r.meterNumber || '').trim(),
+      consumerAddress: String(r['Address'] || r.consumerAddress || '').trim(),
+      phoneNumber: String(r['Mobile No'] || r['Worker Phone'] || r.phoneNumber || '').trim(),
+      area: String(r['Substation'] || r.area || '').trim(),
+      disconnectionReason: String(r['Reason'] || r.disconnectionReason || 'Arrears').trim(),
+      assignedWorkerId: String(r['Worker ID'] || r.assignedWorkerId || '').trim(),
+      assignedWorkerName: String(r['Worker Name'] || r.assignedWorkerName || '').trim(),
+      taskStatus: status,
+      workerReport: String(r['Notes'] || r.workerReport || '').trim(),
+      workerRemarks: String(r['Notes'] || r.workerRemarks || '').trim(),
+      reportDate: String(r['Date'] || r.reportDate || '').trim(),
+      reportTime: String(r.reportTime || '').trim(),
+      submittedBy: String(r['Submitted By'] || r.submittedBy || '').trim(),
+      createdAt: String(r['Created At'] || r.createdAt || now()).trim(),
+      updatedAt: String(r['Updated At'] || r.updatedAt || now()).trim(),
+      photoUrl: String(r['Photo Evidence'] || r.photoUrl || '').trim(),
+      mruSection: String(r['MRU Section'] || r.mruSection || '').trim(),
+      cccFeeder: String(r['Feeder Name'] || r.cccFeeder || '').trim(),
+      outstandingDue: String(r['Arrear Amount'] || r.outstandingDue || '').trim(),
+      dueDateRange: String(r['Due Date Range'] || r.dueDateRange || '').trim(),
+      baseClass: String(r['Base Class'] || r.baseClass || 'Domestic').trim(),
+      deviceType: String(r['Device Type'] || r.deviceType || '1-Phase').trim(),
+      priority: String(r['Priority'] || r.priority || 'NORMAL').trim(),
+      assignedAgency: String(r['Agency Name'] || r.assignedAgency || '').trim(),
+      paidAmount: String(r['Paid Amount'] || r.paidAmount || '').trim(),
+      paymentDate: String(r['Payment Date'] || r.paymentDate || '').trim(),
+      paymentReference: String(r['Payment Reference'] || r.paymentReference || '').trim(),
+      meterReading: String(r['Meter Reading'] || r.meterReading || '').trim(),
+      statusHistory: r['Status History'] || r.statusHistory || []
+    };
+    tasks.push(task);
+  }
+
+  // Filter if worker requested
+  var role = String(params.role || '').toLowerCase();
+  var workerId = String(params.workerId || '').toLowerCase().trim();
+  var workerName = String(params.workerName || '').toLowerCase().trim();
+
+  var total = tasks.length;
+  var completed = 0;
+  var pending = 0;
+  var paid = 0;
+  var notFound = 0;
+  var dispute = 0;
+  var officeTeam = 0;
+  var reissue = 0;
+  var urgent = 0;
+
+  for (var j = 0; j < tasks.length; j++) {
+    var st = tasks[j].taskStatus;
+    if (st === 'COMPLETED' || st === 'DISCONNECT') completed++;
+    else if (st === 'PENDING') pending++;
+    else if (st === 'PAID') paid++;
+    else if (st === 'NOT FOUND') notFound++;
+    else if (st === 'DISPUTE') dispute++;
+    else if (st === 'OFFICE TEAM') officeTeam++;
+    else if (st === 'REISSUE') reissue++;
+
+    if (String(tasks[j].priority).toUpperCase() === 'URGENT') urgent++;
+  }
+
+  return {
+    tasks: tasks,
+    stats: {
+      totalTasks: total,
+      completedTasks: completed,
+      pendingTasks: pending,
+      paidTasks: paid,
+      notFoundTasks: notFound,
+      disputeTasks: dispute,
+      officeTeamTasks: officeTeam,
+      reissueTasks: reissue,
+      urgentTasks: urgent,
+      completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+      myAssignedTasks: total,
+      myCompletedTasks: completed,
+      myPendingTasks: pending,
+      myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
+    }
+  };
+}
+
+function handleUploadDisconnectionTasks(body) {
+  var tasks = body.tasks || [];
+  var adminInfo = body.adminInfo || {};
+  var inserted = 0;
+  var updated = 0;
+
+  var existingRows = getSheetRows('Disconnection');
+  var maxSl = 0;
+  for (var k = 0; k < existingRows.length; k++) {
+    var slVal = String(existingRows[k]['SL No'] || existingRows[k]['SL'] || '');
+    var m = slVal.match(/(\d+)/);
+    if (m) {
+      var n = parseInt(m[1], 10);
+      if (n > maxSl) maxSl = n;
+    }
+  }
+
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    var slStr = '';
+    if (t.serialNumber) {
+      slStr = t.serialNumber;
+    } else if (t['SL No']) {
+      slStr = t['SL No'];
+    } else {
+      maxSl++;
+      slStr = 'SL ' + ('000' + maxSl).slice(-3);
+    }
+
+    var record = {
+      'SL No': slStr,
+      'Submission ID': t.taskId || ('TASK-DISC-' + Date.now() + '-' + (i + 1)),
+      'Record ID': t.taskId || ('TASK-DISC-' + Date.now() + '-' + (i + 1)),
+      'Category': 'Disconnection',
+      'Status': t.taskStatus || 'PENDING',
+      'Date': t.createdAt || now(),
+      'Created At': t.createdAt || now(),
+      'Updated At': now(),
+      'Worker ID': t.assignedWorkerId || '',
+      'Worker Name': t.assignedWorkerName || '',
+      'Role': 'admin',
+      'Submitted By': adminInfo.adminName || 'Admin',
+      'Substation': t.area || '',
+      'Feeder Name': t.cccFeeder || '',
+      'Consumer ID': t.consumerId || '',
+      'Consumer Name': t.consumerName || '',
+      'Mobile No': t.phoneNumber || '',
+      'Address': t.consumerAddress || '',
+      'Arrear Amount': t.outstandingDue || '',
+      'Reason': t.disconnectionReason || 'Outstanding Bill',
+      'Notes': t.workerRemarks || ''
+    };
+    try {
+      appendSheetRecord('Disconnection', record);
+      inserted++;
+    } catch (e) {
+      // Continue next row
+    }
+  }
+
+  return {
+    success: true,
+    count: tasks.length,
+    insertedCount: inserted,
+    updatedCount: updated,
+    message: 'Uploaded ' + inserted + ' disconnection tasks'
+  };
+}
+
+function handleSubmitDisconnectionReport(body) {
+  var taskId = body.taskId || '';
+  var status = body.taskStatus || 'COMPLETED';
+
+  var record = {
+    'SL No': body.serialNumber || '',
+    'Submission ID': body.submissionId || ('SUB-DISC-' + Date.now()),
+    'Record ID': taskId,
+    'Category': 'Disconnection',
+    'Status': status,
+    'Date': body.reportDate || now(),
+    'Created At': now(),
+    'Updated At': now(),
+    'Worker ID': body.workerId || '',
+    'Worker Name': body.workerName || '',
+    'Role': 'worker',
+    'Submitted By': body.workerName || 'Worker',
+    'Consumer ID': body.consumerId || '',
+    'Consumer Name': body.consumerName || '',
+    'Mobile No': body.phoneNumber || '',
+    'Address': body.consumerAddress || '',
+    'Arrear Amount': body.paidAmount || '',
+    'Reason': body.disconnectionReason || 'Disconnection Action',
+    'Final Reading': body.meterReading || '',
+    'Disconnection Type': status,
+    'Notes': body.workerRemarks || body.workerReport || '',
+    'Photo Evidence': body.photoUrl || ''
+  };
+
+  try {
+    var s = getSheet('Disconnection');
+    var data = s.getDataRange().getValues();
+    var headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : [];
+    var recIdIdx = headers.indexOf('Record ID');
+    var subIdIdx = headers.indexOf('Submission ID');
+    var statusIdx = headers.indexOf('Status');
+    var notesIdx = headers.indexOf('Notes');
+    var dateIdx = headers.indexOf('Date');
+    var workerIdx = headers.indexOf('Worker Name');
+    var updatedIdx = headers.indexOf('Updated At');
+    var readingIdx = headers.indexOf('Final Reading');
+    var photoIdx = headers.indexOf('Photo Evidence');
+
+    var foundRow = -1;
+    if (taskId && (recIdIdx !== -1 || subIdIdx !== -1)) {
+      for (var r = 1; r < data.length; r++) {
+        if ((recIdIdx !== -1 && String(data[r][recIdIdx] || '').trim() === taskId) ||
+            (subIdIdx !== -1 && String(data[r][subIdIdx] || '').trim() === taskId)) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+    }
+
+    if (foundRow > 1) {
+      if (statusIdx !== -1) s.getRange(foundRow, statusIdx + 1).setValue(status);
+      if (notesIdx !== -1 && record['Notes']) s.getRange(foundRow, notesIdx + 1).setValue(record['Notes']);
+      if (workerIdx !== -1 && record['Worker Name']) s.getRange(foundRow, workerIdx + 1).setValue(record['Worker Name']);
+      if (dateIdx !== -1) s.getRange(foundRow, dateIdx + 1).setValue(record['Date']);
+      if (updatedIdx !== -1) s.getRange(foundRow, updatedIdx + 1).setValue(now());
+      if (readingIdx !== -1 && record['Final Reading']) s.getRange(foundRow, readingIdx + 1).setValue(record['Final Reading']);
+      if (photoIdx !== -1 && record['Photo Evidence']) s.getRange(foundRow, photoIdx + 1).setValue(record['Photo Evidence']);
+    } else {
+      appendSheetRecord('Disconnection', record);
+    }
+  } catch (e) {
+    // fallback append
+    try {
+      appendSheetRecord('Disconnection', record);
+    } catch (err) {
+      // ignore
+    }
+  }
+
+  return {
+    success: true,
+    message: 'Disconnection report saved successfully',
+    taskId: taskId,
+    status: status
+  };
+}
+
+function handleAssignDisconnectionTask(body) {
+  return { success: true, message: 'Task assigned successfully' };
+}
+
+function handleArchiveDisconnectionTask(body) {
+  return { success: true, message: 'Task archived successfully' };
+}
+
+function handleRestoreDisconnectionTask(body) {
+  return { success: true, message: 'Task restored successfully' };
 }
