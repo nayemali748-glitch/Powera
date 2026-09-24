@@ -200,6 +200,32 @@ export type DisconnectionTaskStatus =
   | 'ARCHIVED';
 
 export interface DisconnectionTask {
+  // 14 Standard WBSEDCL Disconnection Headers (Exact Order & Names)
+  off_code?: string;
+  MRU?: string;
+  'Consumer Id'?: string;
+  Name?: string;
+  Address?: string;
+  'BClass/Phase'?: string;
+  Class?: string;
+  'Gov/Non-Gov'?: string;
+  Meter?: string;
+  'O/S Due date Range'?: string;
+  'D2 Net O/S'?: string;
+  'Discon Status'?: string;
+  'Discon Date'?: string;
+  'Mobile Number'?: string;
+
+  // Normalized Developer Aliases
+  offCode?: string;
+  bClassPhase?: string;
+  govNonGov?: string;
+  osDueDateRange?: string;
+  d2NetOs?: string;
+  disconStatus?: string;
+  disconDate?: string;
+  mobileNumber?: string;
+
   serialNumber?: string; // e.g. "SL 001", "SL 002"
   taskId: string;
   consumerId: string;
