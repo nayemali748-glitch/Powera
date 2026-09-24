@@ -724,68 +724,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </div>
           </div>
 
-          {/* TOP OPTION: Work Order Name (ওয়ার্ক অর্ডার নাম / নম্বর) */}
-          <div className="bg-amber-100/90 dark:bg-slate-900 border-2 border-amber-400 rounded-xl p-3 sm:p-4 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
-              <label className="text-xs sm:text-sm font-black text-amber-950 dark:text-amber-300 flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-amber-700" />
-                <span>{lang === 'bn' ? 'ওয়ার্ক অর্ডার নাম (Work Order Name / No)' : 'Work Order Name / No'} *</span>
-              </label>
-              {nscWorkOrders.length > 0 && (
-                <span className="text-[11px] font-bold text-amber-900 dark:text-amber-300 bg-amber-200/70 dark:bg-amber-950/70 px-2.5 py-0.5 rounded-full border border-amber-300">
-                  {lang === 'bn' ? `✓ ${nscWorkOrders.length} টি ওয়ার্ক অর্ডার উপলব্ধ` : `✓ ${nscWorkOrders.length} Work Orders Available`}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {/* Dropdown to select uploaded order */}
-              {nscWorkOrders.length > 0 && (
-                <div>
-                  <label className="block text-[10px] font-black text-slate-700 dark:text-slate-300 mb-1 uppercase tracking-wider">
-                    {lang === 'bn' ? 'তালিকা থেকে ওয়ার্ক অর্ডার সিলেক্ট করুন:' : 'Select Uploaded Work Order:'}
-                  </label>
-                  <select
-                    value={selectedWorkOrderNotice?.id || ''}
-                    onChange={(e) => {
-                      const found = nscWorkOrders.find((o) => o.id === e.target.value);
-                      if (found) {
-                        handleSelectWorkOrder(found);
-                      }
-                    }}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-800 border-2 border-amber-400 rounded-lg text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-none cursor-pointer shadow-2xs"
-                  >
-                    {nscWorkOrders.map((order, idx) => (
-                      <option key={order.id} value={order.id}>
-                        {idx + 1}. {order.title} {order.uploadDate ? `(${order.uploadDate})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Text input to show/edit Work Order Name */}
-              <div className={nscWorkOrders.length === 0 ? 'sm:col-span-2' : ''}>
-                <label className="block text-[10px] font-black text-slate-700 dark:text-slate-300 mb-1 uppercase tracking-wider">
-                  {lang === 'bn' ? 'ওয়ার্ক অর্ডার নাম / নম্বর:' : 'Work Order Name / No:'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={workOrderNo}
-                  onChange={(e) => {
-                    setWorkOrderNo(e.target.value);
-                    clearError('workOrderNo');
-                  }}
-                  placeholder="e.g. WO-2026-98102"
-                  className={`w-full px-3 py-2 bg-white dark:bg-slate-800 border-2 rounded-lg text-xs font-mono font-black focus:ring-2 focus:outline-none shadow-2xs ${
-                    validationErrors.workOrderNo ? 'border-red-500 text-red-900' : 'border-amber-400 text-amber-950 dark:text-white focus:ring-amber-500'
-                  }`}
-                />
-              </div>
-            </div>
-          </div>
-
           {/* Photo Preview Container */}
           {loadingWorkOrders && !selectedWorkOrderNotice ? (
             <div className="h-48 sm:h-64 rounded-xl bg-slate-900 border border-slate-700 flex flex-col items-center justify-center text-slate-300 gap-3">

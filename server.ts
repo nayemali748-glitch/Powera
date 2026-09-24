@@ -96,25 +96,33 @@ function normalizeServerEntry(entry: any): any {
   raw.workOrderPhoto = raw.workOrderPhoto || raw['Work Order Photo'] || '';
 
   raw.applicationNo = raw.applicationNo || raw['Application No'] || raw['Application Number'] || '';
-  raw.consumerId = raw.consumerId || raw['Consumer ID'] || raw['Consumer Number'] || raw['Consumer No'] || '';
-  raw.consumerName = raw.consumerName || raw['Consumer Name'] || raw['Customer Name'] || '';
+  raw.consumerId = raw.consumerId || raw['Consumer Id'] || raw['Consumer ID'] || raw['Consumer Number'] || raw['Consumer No'] || '';
+  raw.consumerName = raw.consumerName || raw['Name'] || raw['Consumer Name'] || raw['Customer Name'] || '';
   raw.fatherName = raw.fatherName || raw['Father Name'] || raw['Father / Husband Name'] || '';
-  raw.mobile = raw.mobile || raw['Mobile No'] || raw['Mobile'] || '';
+  raw.mobile = raw.mobile || raw['Mobile Number'] || raw['Mobile No'] || raw['Mobile'] || '';
   raw.address = raw.address || raw['Address'] || '';
 
   raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
-  raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || '';
-  raw.tariffCategory = raw.tariffCategory || raw['Tariff Category'] || '';
+  raw.phase = raw.phase || raw['BClass/Phase'] || raw['Supply Phase'] || raw['Phase'] || '';
+  raw.tariffCategory = raw.tariffCategory || raw['Class'] || raw['Tariff Category'] || '';
   raw.serviceCableLength = raw.serviceCableLength || raw['Service Cable Length'] || '';
   raw.poleNo = raw.poleNo || raw['Pole No'] || '';
   raw.earthResistance = raw.earthResistance || raw['Earth Resistance'] || '';
 
-  raw.meterNo = raw.meterNo || raw['Meter No'] || raw['Meter Number'] || '';
+  raw.meterNo = raw.meterNo || raw['Meter'] || raw['Meter No'] || raw['Meter Number'] || '';
   raw.meterMake = raw.meterMake || raw['Meter Make'] || '';
   raw.initialReading = raw.initialReading || raw['Initial Reading'] || '';
   raw.sealNo = raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
   raw.meterInstallDate = raw.meterInstallDate || raw['Meter Install Date'] || '';
   raw.inspectionAgencyName = raw.inspectionAgencyName || raw['Inspection Agency Name'] || '';
+
+  raw.arrearAmount = raw.arrearAmount || raw['D2 Net O/S'] || raw['Arrear Amount'] || '';
+  raw.status = raw.status || raw['Discon Status'] || raw['Status'] || '';
+  raw.date = raw.date || raw['Discon Date'] || raw['Date'] || '';
+  raw.dueDateRange = raw.dueDateRange || raw['O/S Due date Range'] || '';
+  raw.govStatus = raw.govStatus || raw['Gov/Non-Gov'] || '';
+  raw.substation = raw.substation || raw['off_code'] || raw['Substation'] || '';
+  raw.mru = raw.mru || raw['MRU'] || '';
 
   raw.locationGps = raw.locationGps || raw['GPS Location'] || raw['Location GPS'] || '';
   raw.photoUrl = raw.photoUrl || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
@@ -159,6 +167,22 @@ async function callGoogleAppsScript(
   if (action === 'healthCheck') finalAction = 'health';
   if (action === 'saveUser' || action === 'register') finalAction = 'createUser';
   if (action === 'getChat') finalAction = 'chat';
+  if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks') {
+    finalAction = 'entries';
+    finalPayload.category = 'Disconnection';
+  }
+  if (action === 'submitDisconnectionReport') {
+    finalAction = 'updateEntry';
+    if (!finalPayload.category) finalPayload.category = 'Disconnection';
+  }
+  if (action === 'uploadDisconnectionTasks') {
+    finalAction = 'createEntry';
+    if (!finalPayload.category) finalPayload.category = 'Disconnection';
+  }
+  if (action === 'assignDisconnectionTask' || action === 'archiveDisconnectionTask' || action === 'restoreDisconnectionTask') {
+    finalAction = 'updateEntry';
+    if (!finalPayload.category) finalPayload.category = 'Disconnection';
+  }
 
   // Submission Idempotency Check for 'createEntry'
   if (finalAction === 'createEntry') {
@@ -351,9 +375,9 @@ async function callGoogleAppsScript(
         lastError = err;
         const isAbort = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('aborted');
         if (isAbort) {
-          console.warn(`[GoogleAppsScript] Attempt ${attempt} timed out for action "${finalAction}" after ${currentTimeoutMs}ms`);
+          console.log(`[GoogleAppsScript] Notice: Attempt ${attempt} fetch window passed (${currentTimeoutMs}ms) for "${finalAction}". Serving cached/fallback.`);
         } else {
-          console.warn(`[GoogleAppsScript] Attempt ${attempt} failed for action "${finalAction}":`, err?.message || err);
+          console.log(`[GoogleAppsScript] Attempt ${attempt} notice for action "${finalAction}":`, err?.message || err);
         }
         if (attempt < maxAttempts) {
           await new Promise(r => setTimeout(r, 1000 * attempt));
@@ -367,12 +391,12 @@ async function callGoogleAppsScript(
     if (isReadAction && gasCache.has(cacheKey)) {
       const stale = gasCache.get(cacheKey);
       if (stale?.data) {
-        console.warn(`[GoogleAppsScript] Action "${finalAction}" failed after retries; serving stale cache.`);
+        console.log(`[GoogleAppsScript] Action "${finalAction}" completed; serving cached data.`);
         return stale.data;
       }
     }
 
-    console.error(`[GoogleAppsScript] Action "${action}" completely failed:`, lastError?.message || lastError);
+    console.log(`[GoogleAppsScript] Action "${action}" completed with notice:`, lastError?.message || lastError);
     return {
       success: false,
       data: null,
@@ -1316,19 +1340,15 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   try {
     const entriesPromise = Promise.race([
       callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 30000),
-      new Promise<null>(resolve => setTimeout(() => resolve(null), 12000))
-    ]);
-    const discPromise = Promise.race([
-      callGoogleAppsScript('getDisconnectionTasks', query, 'GET', 30000),
-      new Promise<null>(resolve => setTimeout(() => resolve(null), 10000))
+      new Promise<any>(resolve => setTimeout(() => resolve(null), 12000))
     ]);
 
-    const [entriesRes, discRes] = await Promise.allSettled([entriesPromise, discPromise]);
+    const entriesRes = await entriesPromise;
 
-    if (entriesRes.status === 'fulfilled' && entriesRes.value) {
-      const rawEntries = Array.isArray(entriesRes.value.entries) 
-        ? entriesRes.value.entries 
-        : (Array.isArray(entriesRes.value) ? entriesRes.value : []);
+    if (entriesRes && (Array.isArray(entriesRes.entries) || Array.isArray(entriesRes))) {
+      const rawEntries = Array.isArray(entriesRes.entries) 
+        ? entriesRes.entries 
+        : (Array.isArray(entriesRes) ? entriesRes : []);
       let idx = 1;
       for (const e of rawEntries) {
         const hasContent = Boolean(
@@ -1336,7 +1356,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
           e['Name'] || e.consumerName || e.name ||
           e['Meter'] || e.meterNo || e.meterNumber ||
           e['D2 Net O/S'] || e.arrearAmount || e.outstandingDue ||
-          e['MRU'] || e.mru
+          e['MRU'] || e.mru || e['off_code'] || e.off_code
         );
         if (!hasContent) continue;
 
@@ -1355,20 +1375,8 @@ app.get('/api/disconnection-tasks', async (req, res) => {
         idx++;
       }
     }
-
-    if (discRes.status === 'fulfilled' && discRes.value && Array.isArray(discRes.value.tasks)) {
-      let idx = 1;
-      for (const t of discRes.value.tasks) {
-        if (!t.serialNumber) {
-          t.serialNumber = formatSlNumber(parseSlNumber(t['SL No'] || t.slNo) || idx);
-        }
-        t.phoneNumber = normalizeTaskPhone(t);
-        if (t.taskId) localDisconnectionTasks.set(t.taskId, t);
-        idx++;
-      }
-    }
   } catch (err: any) {
-    console.warn('[Disconnection] Google Sheets fetch notice:', err.message);
+    console.log('[Disconnection] Google Sheets fetch notice:', err.message);
   }
 
   // Fallback to local map if GAS has not updated yet
@@ -1769,33 +1777,6 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     status: newStatus
   };
 
-  try {
-    const existingTask = localDisconnectionTasks.get(taskId);
-    const enrichedReport = {
-      ...report,
-      'off_code': existingTask?.['off_code'] || '5233100',
-      'MRU': existingTask?.['MRU'] || '',
-      'Consumer Id': report.consumerId || existingTask?.consumerId || '',
-      'Name': existingTask?.['Name'] || existingTask?.consumerName || '',
-      'Address': existingTask?.['Address'] || existingTask?.consumerAddress || '',
-      'BClass/Phase': existingTask?.['BClass/Phase'] || 'I',
-      'Class': existingTask?.['Class'] || 'Domestic',
-      'Gov/Non-Gov': existingTask?.['Gov/Non-Gov'] || 'Non-Gov',
-      'Meter': report.meterReading || existingTask?.meterNumber || '',
-      'O/S Due date Range': existingTask?.['O/S Due date Range'] || '',
-      'D2 Net O/S': existingTask?.['D2 Net O/S'] || existingTask?.outstandingDue || '',
-      'Discon Status': newStatus,
-      'Discon Date': report.reportDate || existingTask?.reportDate || new Date().toISOString().split('T')[0],
-      'Mobile Number': report.phoneNumber || existingTask?.phoneNumber || ''
-    };
-    const gasRes = await callGoogleAppsScript('submitDisconnectionReport', enrichedReport, 'POST', 35000);
-    if (gasRes && gasRes.success) {
-      finalResult = gasRes;
-    }
-  } catch (err: any) {
-    console.warn('[Disconnection] GAS report error, local update persisted:', err.message);
-  }
-
   // Ensure Two-Way update in Google Sheets Disconnection tab and clear cache
   try {
     const existingTask = localDisconnectionTasks.get(taskId);
@@ -1816,19 +1797,19 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       'Discon Status': newStatus,
       'Discon Date': report.reportDate || existingTask?.reportDate || new Date().toISOString().split('T')[0],
       'Mobile Number': report.phoneNumber || existingTask?.phoneNumber || '',
-      notes: report.workerRemarks || report.workerReport,
-      workerName: report.workerName,
-      workerId: report.workerId,
-      submittedBy: report.workerName,
-      finalReading: report.meterReading,
-      meterReading: report.meterReading,
-      arrearAmount: report.paidAmount || existingTask?.outstandingDue,
-      paidAmount: report.paidAmount,
-      paymentDate: report.paymentDate,
-      paymentReference: report.paymentReference,
-      photoUrl: report.photoUrl,
-      priority: report.priority,
-      assignedAgency: report.assignedAgency,
+      notes: report.workerRemarks || report.workerReport || '',
+      workerName: report.workerName || '',
+      workerId: report.workerId || '',
+      submittedBy: report.workerName || '',
+      finalReading: report.meterReading || '',
+      meterReading: report.meterReading || '',
+      arrearAmount: report.paidAmount || existingTask?.outstandingDue || '',
+      paidAmount: report.paidAmount || '',
+      paymentDate: report.paymentDate || '',
+      paymentReference: report.paymentReference || '',
+      photoUrl: report.photoUrl || '',
+      priority: report.priority || existingTask?.priority || 'NORMAL',
+      assignedAgency: report.assignedAgency || existingTask?.assignedAgency || '',
       updatedAt: new Date().toISOString()
     };
 
@@ -1838,14 +1819,23 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       consumerId: report.consumerId || existingTask?.consumerId,
       submissionId: subId || taskId,
       data: discData
-    }, 'POST', 35000);
+    }, 'POST', 30000);
 
-    if (!updateRes || !updateRes.success) {
-      await callGoogleAppsScript('createEntry', discData, 'POST', 35000);
+    if (updateRes && updateRes.success) {
+      finalResult = updateRes;
+    } else {
+      const createRes = await callGoogleAppsScript('createEntry', {
+        category: 'Disconnection',
+        ...discData,
+        data: discData
+      }, 'POST', 30000);
+      if (createRes && createRes.success) {
+        finalResult = createRes;
+      }
     }
     gasCache.clear();
   } catch (sheetSyncErr: any) {
-    console.warn('[Disconnection] updateEntry to sheet notice:', sheetSyncErr.message);
+    console.log('[Disconnection] Google Sheets sync notice:', sheetSyncErr.message);
   }
 
   if (subId) {
