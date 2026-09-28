@@ -480,10 +480,12 @@ app.get(['/health', '/healthz', '/api/health'], async (req, res) => {
 // AUTHENTICATION (Google Sheets Users sheet as single source of truth)
 // ============================================================================
 app.post('/api/auth/login', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const rawId = req.body.loginId || req.body.idNo || req.body.userId || req.body.phone;
-    const { password } = req.body;
+    const body = req.body || {};
+    const rawId = body.loginId || body.idNo || body.userId || body.phone;
+    const { password } = body;
     if (!rawId || !password) {
       return res.status(400).json({ 
         success: false, 
@@ -584,6 +586,23 @@ app.post('/api/auth/login', async (req, res) => {
       return res.json({ success: true, session });
     }
 
+    // If users list was not available from sheet, attempt direct GAS authenticateUser fallback
+    if (users.length === 0 && !isPrimaryAdminId) {
+      try {
+        const gasAuth = await callGoogleAppsScript('login', { idNo: cleanId, password: cleanPass }, 'POST', 30000);
+        if (gasAuth && (gasAuth.session || gasAuth.data?.session)) {
+          const directSession = gasAuth.session || gasAuth.data?.session;
+          return res.json({ success: true, session: directSession });
+        }
+        if (gasAuth && gasAuth.error) {
+          const errMsg = typeof gasAuth.error === 'string' ? gasAuth.error : (gasAuth.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড');
+          return res.status(401).json({ success: false, error: errMsg });
+        }
+      } catch (authErr: any) {
+        console.warn('[Login] Direct GAS auth fallback warning:', authErr?.message);
+      }
+    }
+
     // If not matched in sheet, but matches primary admin credentials
     if (isPrimaryAdminId && universalPins.includes(cleanPass.toLowerCase())) {
       return res.json({
@@ -609,10 +628,12 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Login error:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error?.message || 'Login connection error. Please try again.' 
-    });
+    if (!res.headersSent) {
+      return res.status(500).json({ 
+        success: false, 
+        error: error?.message || 'Login connection error. Please try again.' 
+      });
+    }
   }
 });
 

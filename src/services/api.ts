@@ -875,29 +875,73 @@ export async function loginUser(loginId: string, password: string): Promise<User
     try {
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify({ loginId: cleanId, password: cleanPass })
       });
-      const data = await resp.json();
-      if (resp.ok && data.success && data.session) {
-        resData = data;
-      } else if (data && data.error) {
-        throw new Error(typeof data.error === 'string' ? data.error : (data.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড'));
+
+      const rawText = await resp.text();
+      let data: any = null;
+      if (rawText && rawText.trim().length > 0) {
+        try {
+          data = JSON.parse(rawText.trim());
+        } catch {
+          console.warn('[Login] Non-JSON response from /api/auth/login:', rawText.slice(0, 100));
+        }
+      }
+
+      if (data && typeof data === 'object') {
+        if (resp.ok && data.success && data.session) {
+          resData = data;
+        } else if (data.error) {
+          const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড');
+          throw new Error(errMsg);
+        }
+      } else if (!resp.ok) {
+        console.warn(`[Login] /api/auth/login returned status ${resp.status} with empty or non-JSON body. Falling back to direct Apps Script.`);
       }
     } catch (fetchErr: any) {
-      if (fetchErr.message && !fetchErr.message.includes('Failed to fetch') && !fetchErr.message.includes('NetworkError')) {
+      // If it is a verified business validation error (e.g. wrong password, account hold), throw it to the user
+      if (fetchErr.message && (
+        fetchErr.message.includes('পাসওয়ার্ড') ||
+        fetchErr.message.includes('অ্যাকাউন্ট') ||
+        fetchErr.message.includes('Password') ||
+        fetchErr.message.includes('User ID') ||
+        fetchErr.message.includes('Invalid') ||
+        fetchErr.message.includes('hold') ||
+        fetchErr.message.includes('ON HOLD')
+      )) {
         throw fetchErr;
       }
+      console.warn('[Login] Express /api/auth/login connection issue, failing over to Google Apps Script:', fetchErr?.message || fetchErr);
     }
   }
 
-  // 2. Direct Google Apps Script Web App failover
+  // 2. Direct Google Apps Script Web App failover (Google Sheets single source of truth)
   if (!resData) {
-    const gasRes = await callGasApi<any>('login', { idNo: cleanId, password: cleanPass }, 'POST');
-    if (gasRes && (gasRes.session || gasRes.data?.session)) {
-      resData = { success: true, session: gasRes.session || gasRes.data?.session };
-    } else if (gasRes && gasRes.error) {
-      throw new Error(typeof gasRes.error === 'string' ? gasRes.error : (gasRes.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড'));
+    try {
+      const gasRes = await callGasApi<any>('login', { idNo: cleanId, password: cleanPass }, 'POST');
+      if (gasRes && (gasRes.session || gasRes.data?.session)) {
+        resData = { success: true, session: gasRes.session || gasRes.data?.session };
+      } else if (gasRes && gasRes.error) {
+        const errMsg = typeof gasRes.error === 'string' ? gasRes.error : (gasRes.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড');
+        throw new Error(errMsg);
+      }
+    } catch (gasErr: any) {
+      if (gasErr.message && (
+        gasErr.message.includes('পাসওয়ার্ড') ||
+        gasErr.message.includes('অ্যাকাউন্ট') ||
+        gasErr.message.includes('Password') ||
+        gasErr.message.includes('User ID') ||
+        gasErr.message.includes('Invalid') ||
+        gasErr.message.includes('hold') ||
+        gasErr.message.includes('ON HOLD')
+      )) {
+        throw gasErr;
+      }
+      console.error('[Login] Direct GAS login error:', gasErr);
     }
   }
 
