@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { DisconnectionTask, DisconnectionTaskStatus } from '../../types';
 import { compressImageFile } from '../../utils/imageCompressor';
-import { submitDisconnectionTaskReport } from '../../services/api';
+import { submitDisconnectionTaskReport, fetchDisconnectionHistory } from '../../services/api';
 
 interface DisconnectionUpdateModalProps {
   task: DisconnectionTask;
@@ -77,6 +77,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showPhotoPreview, setShowPhotoPreview] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [remoteHistory, setRemoteHistory] = useState<any[] | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [showRoundSavePopup, setShowRoundSavePopup] = useState(false);
   const [savedTaskResult, setSavedTaskResult] = useState<DisconnectionTask | null>(null);
 
@@ -100,6 +102,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       setErrorMessage(null);
       setShowRoundSavePopup(false);
       setSavedTaskResult(null);
+      setRemoteHistory(null);
+      setIsLoadingHistory(false);
     }
   }, [task]);
 
@@ -356,7 +360,28 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     }
   };
 
-  const historyList = Array.isArray(task.statusHistory) ? task.statusHistory : [];
+  const handleOpenHistory = async () => {
+    setShowHistoryModal(true);
+    const targetCId = task.consumerId || (task as any)['Consumer Id'];
+    if (targetCId) {
+      setIsLoadingHistory(true);
+      try {
+        const res = await fetchDisconnectionHistory(targetCId);
+        if (res && res.success && Array.isArray(res.history)) {
+          setRemoteHistory(res.history);
+        }
+      } catch (err) {
+        console.warn('[Disconnection] History fetch notice:', err);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    }
+  };
+
+  const historyList = (remoteHistory !== null)
+    ? remoteHistory
+    : (Array.isArray(task.statusHistory) ? task.statusHistory : []);
+
   const displayOutstanding = task.outstandingDue
     ? Number(task.outstandingDue).toLocaleString('en-IN')
     : '12,96,888';
@@ -393,7 +418,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
           <button
             type="button"
-            onClick={() => setShowHistoryModal(true)}
+            onClick={handleOpenHistory}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer"
           >
             <HistoryIcon className="w-4 h-4 text-slate-600" />
@@ -947,7 +972,12 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             </div>
 
             <div className="overflow-y-auto space-y-2 flex-1 pr-1">
-              {historyList.length === 0 ? (
+              {isLoadingHistory ? (
+                <div className="flex flex-col items-center justify-center py-10 gap-2 text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                  <span className="text-xs font-medium">Loading history from Google Sheets...</span>
+                </div>
+              ) : historyList.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-xs font-medium">
                   No previous history entries recorded yet for this consumer.
                 </div>

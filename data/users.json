@@ -1,0 +1,66 @@
+[
+  {
+    "id": "adm_8695716192",
+    "idNo": "8695716192",
+    "password": "2004",
+    "name": "NAYEM (Admin Controller)",
+    "phone": "8695716192",
+    "role": "admin",
+    "status": "active",
+    "designation": "CONTROLLER",
+    "badgeNo": "ADM-8695",
+    "securityQuestion": "Your Primary Power Substation?",
+    "securityAnswer": "Haldia Substation",
+    "createdAt": "2026-09-03T13:03:06.898Z"
+  },
+  {
+    "id": "worker_default_0000",
+    "idNo": "admin",
+    "password": "6293",
+    "name": "Field Worker (WBSEDCL)",
+    "phone": "1234567890",
+    "role": "admin",
+    "status": "active",
+    "designation": "লাইনম্যান / Field Worker (WBSEDCL)",
+    "badgeNo": "WRK-0000",
+    "securityQuestion": "আপনার প্রিয় সাবস্টেশন / অফিস?",
+    "securityAnswer": "Haldia Substation",
+    "createdAt": "2026-09-03T13:03:07.556Z"
+  },
+  {
+    "id": "USR-1788884093846-ary2u9",
+    "idNo": "LM001",
+    "password": "2580",
+    "name": "MD NEJAMUDDIN",
+    "phone": "9382282094",
+    "role": "worker",
+    "status": "active",
+    "designation": "Worker (WBSEDCL)",
+    "badgeNo": "LM001",
+    "createdAt": "2026-09-08T16:14:53.848Z"
+  },
+  {
+    "id": "USR-1789238067456-4l60bn",
+    "idNo": "LM002",
+    "password": "1234",
+    "name": "NAYEM",
+    "phone": "7318808806",
+    "role": "worker",
+    "status": "active",
+    "designation": "Contractor",
+    "badgeNo": "LM002",
+    "createdAt": "2026-09-12T18:34:27.458Z"
+  },
+  {
+    "id": "USR-1790069496551-2s83of",
+    "idNo": "LM2004",
+    "password": "6293",
+    "name": "Nayem Ali",
+    "phone": "8116933636",
+    "role": "worker",
+    "status": "active",
+    "designation": "লাইনম্যান / Worker (WBSEDCL)",
+    "badgeNo": "LM2004",
+    "createdAt": "2026-09-22T09:31:36.556Z"
+  }
+]

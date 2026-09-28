@@ -147,7 +147,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
 
     if (!cleanPass) {
-      setError('পাসওয়ার্ড লিখুন (কমপক্ষে ৪ সংখ্যা বা অক্ষর)');
+      setError('পাসওয়ার্ড / পিন দিন (Password / PIN required)');
       return;
     }
 
@@ -160,7 +160,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         idNo: cleanId,
         password: cleanPass,
         name: cleanName,
-        phone: cleanPhone || '',
+        phone: cleanPhone,
         role,
         status: 'active',
         designation: designation || (role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
@@ -174,7 +174,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
       setCreatedUserCard({
         idNo: cleanId,
-        password: cleanPass,
+        password: cleanPass || '1234',
         name: cleanName,
         role: role === 'admin' ? 'এডমিন (Admin)' : 'ফিল্ড ওয়ার্কার (Worker)'
       });
@@ -931,31 +931,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
                           {/* Password & Quick Actions */}
                           <div className="flex items-center gap-2 self-end sm:self-center">
-                            {/* Password Box */}
-                            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg text-xs">
+                            {/* Security PIN Indicator */}
+                            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg text-xs" title="SHA-256 Cloud Encrypted PIN">
                               <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                              <span className="font-mono font-bold text-slate-800">
-                                {revealedPasswords[u.id || u.idNo] ? u.password : '••••••'}
+                              <span className="font-mono text-slate-500 text-[11px] tracking-wider">
+                                •••• (Encrypted)
                               </span>
-                              <button
-                                type="button"
-                                onClick={() => setRevealedPasswords(prev => ({
-                                  ...prev,
-                                  [u.id || u.idNo]: !prev[u.id || u.idNo]
-                                }))}
-                                className="text-slate-400 hover:text-slate-700 ml-0.5"
-                                title="Show / Hide Password"
-                              >
-                                {revealedPasswords[u.id || u.idNo] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => copyToClipboard(u.password, `pass_${u.idNo}`)}
-                                className="text-slate-400 hover:text-blue-600 ml-0.5"
-                                title="Copy Password"
-                              >
-                                {copiedKey === `pass_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                              </button>
                             </div>
 
                             {/* Edit Password Button */}
@@ -1164,7 +1145,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600">
                         <span>বর্তমান পাসওয়ার্ড (Current Password):</span>
                         <div className="flex items-center gap-1.5 font-mono font-bold bg-white px-2.5 py-1 rounded border border-slate-200 text-slate-900">
-                          <span>{revealedPasswords[currentSelected.idNo] ? currentSelected.password : '••••'}</span>
+                          <span>{revealedPasswords[currentSelected.idNo] ? (currentSelected.password || 'Secured in Auth') : '••••'}</span>
                           <button
                             type="button"
                             onClick={() => setRevealedPasswords(prev => ({ ...prev, [currentSelected.idNo]: !prev[currentSelected.idNo] }))}

@@ -270,8 +270,10 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       taskStatus = 'PENDING';
     }
 
+    const offCode = getVal('off_code', 'offCode', 'Substation', 'Area', 'Office Code') || '5233100';
+    const govNonGov = getVal('Gov/Non-Gov', 'govNonGov', 'GovStatus') || 'Non-Gov';
     const tempId = `TEMP-ROW-${idx + 1}`;
-    const taskId = getVal('Task ID', 'TaskId') || `TASK-DISC-${Date.now()}-${idx + 1}`;
+    const taskId = getVal('Task ID', 'TaskId') || `TASK-DISC-${consumerId || (Date.now() + '-' + (idx + 1))}`;
 
     return {
       tempId,
@@ -292,6 +294,20 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       priority,
       disconnectionReason,
       taskStatus,
+      off_code: offCode,
+      MRU: mruSection,
+      'Consumer Id': consumerId,
+      Name: consumerName,
+      Address: consumerAddress,
+      'BClass/Phase': deviceType,
+      Class: baseClass,
+      'Gov/Non-Gov': govNonGov,
+      Meter: meterNumber,
+      'O/S Due date Range': dueDateRange,
+      'D2 Net O/S': outstandingDue,
+      'Discon Status': taskStatus,
+      'Discon Date': '',
+      'Mobile Number': phoneNumber,
       createdAt: new Date().toISOString()
     };
   };

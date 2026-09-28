@@ -342,9 +342,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
     // 3. Category-Specific Critical Validations
     if (category === 'NSC') {
-      if (!workOrderNo.trim()) {
-        recordError('workOrderNo', 'input-work-order-no', 'ওয়ার্ক অর্ডার নম্বর (Work Order No) প্রদান করুন', 'Work Order Number is required');
-      }
       if (!applicationNo.trim()) {
         recordError('applicationNo', 'input-application-no', 'আবেদন নম্বর (Application No) প্রদান করুন', 'Application Number is required');
       }
@@ -361,6 +358,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       }
       if (!consumerName.trim()) {
         recordError('consumerName', 'input-consumer-name', 'গ্রাহকের পুরো নাম (Consumer Name) প্রদান করুন', 'Consumer Name is required');
+      }
+      if (!address.trim()) {
+        recordError('address', 'input-nsc-address', 'গ্রাহকের ঠিকানা (Premises / Village / GP Address) প্রদান করুন', 'Address is required');
       }
     } else if (category === 'METER REPLESMENT') {
       if (!consumerId.trim()) {
@@ -1005,33 +1005,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {/* 1. NSC SPECIFIC FORM WITH DISTINCT COLOR CODED FIELDS */}
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
-              {/* 1. Work Order No (SOB UPOR A WORK ORDER NAME) -> TEAL CARD */}
-              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workOrderNo ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-teal-50/80 border-2 border-teal-300 hover:border-teal-400'}`}>
-                <label className="block font-black text-teal-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.workOrderNo} (Work Order Name / No) *</span>
-                  <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO</span>
-                </label>
-                <input
-                  id="input-work-order-no"
-                  type="text"
-                  required
-                  value={workOrderNo}
-                  onChange={(e) => {
-                    setWorkOrderNo(e.target.value);
-                    clearError('workOrderNo');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-mono font-black focus:ring-2 focus:outline-none ${validationErrors.workOrderNo ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-teal-300 text-teal-900 focus:ring-teal-500'}`}
-                  placeholder="e.g. WO-2026-98102"
-                />
-                {validationErrors.workOrderNo && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.workOrderNo}</span>
-                  </p>
-                )}
-              </div>
-
-              {/* 2. Work Order Date -> TEAL CARD */}
+              {/* 1. Work Order Date -> TEAL CARD */}
               <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
                 <label className="block font-black text-teal-950 mb-1.5 text-xs">
                   {t.workOrderDate} *
@@ -1244,6 +1218,32 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
+              {/* 11. Premises / Village / GP Address -> SLATE CARD (Span 2/3, above Mobile No) */}
+              <div className={`rounded-xl p-3.5 shadow-xs transition-all sm:col-span-2 lg:col-span-3 ${validationErrors.address ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-slate-100/90 border-2 border-slate-300 hover:border-slate-400'}`}>
+                <label className="block font-black text-slate-950 mb-1.5 text-xs flex items-center justify-between">
+                  <span>{t.addressLocation} *</span>
+                  <span className="text-[9px] bg-slate-700 text-white px-1.5 py-0.5 rounded font-bold font-mono">Address</span>
+                </label>
+                <input
+                  id="input-nsc-address"
+                  type="text"
+                  required
+                  value={address}
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    clearError('address');
+                  }}
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg text-slate-900 font-bold focus:ring-2 focus:outline-none ${validationErrors.address ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-slate-300 focus:ring-slate-700'}`}
+                  placeholder="Village / GP / Municipality / Post Office / Pin Code"
+                />
+                {validationErrors.address && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{validationErrors.address}</span>
+                  </p>
+                )}
+              </div>
+
               {/* 12. Mobile No -> ORANGE CARD */}
               <div className="bg-orange-50/80 border-2 border-orange-300 rounded-xl p-3.5 shadow-xs hover:border-orange-400 transition-colors">
                 <label className="block font-black text-orange-950 mb-1.5 text-xs">
@@ -1269,21 +1269,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   onChange={(e) => setInitialReading(e.target.value)}
                   className="w-full px-3 py-2 bg-white border-2 border-orange-300 rounded-lg text-orange-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono font-bold"
                   placeholder="000000"
-                />
-              </div>
-
-              {/* 14. Premises / Village / GP Address -> SLATE CARD (Span 3) */}
-              <div className="bg-slate-100/90 border-2 border-slate-300 rounded-xl p-3.5 shadow-xs sm:col-span-2 lg:col-span-3 hover:border-slate-400 transition-colors">
-                <label className="block font-black text-slate-950 mb-1.5 text-xs">
-                  {t.addressLocation} *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-slate-300 rounded-lg text-slate-900 font-bold focus:ring-2 focus:ring-slate-700 focus:outline-none"
-                  placeholder="Village / GP / Municipality / Post Office / Pin Code"
                 />
               </div>
 

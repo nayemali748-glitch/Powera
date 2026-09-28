@@ -13,7 +13,7 @@ import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
 import { DisconnectionTaskManagement } from './components/DisconnectionTaskManagement';
 import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode } from './types';
-import { fetchEntries, fetchStats, fetchWorkOrders } from './services/api';
+import { fetchEntries, fetchStats, fetchWorkOrders, logoutUser } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
 import { 
@@ -328,6 +328,7 @@ export default function App() {
   };
 
   const handleUserLogout = () => {
+    logoutUser().catch(() => {});
     localStorage.removeItem('power_user_session');
     localStorage.removeItem('power_is_admin');
     localStorage.removeItem('power_worker_name');

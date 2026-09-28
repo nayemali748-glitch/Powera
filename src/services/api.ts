@@ -1,6 +1,7 @@
 import { PowerEntry, StatsResponse, CategoryType, UserAccount, UserSession, WorkOrderNotice, ChatMessage, DisconnectionTask, DisconnectionTaskStatus, DisconnectionStats } from '../types';
 import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
 import { deduplicateEntries, normalizeEntry } from '../utils/entryNormalizer';
+// ============================================================================
 
 // ============================================================================
 // CENTRAL API CONFIGURATION
@@ -632,132 +633,166 @@ export async function fetchStats(): Promise<StatsResponse> {
 }
 
 // ============================================================================
-// USER MANAGEMENT & AUTHENTICATION (GOOGLE SHEETS)
+// USER MANAGEMENT & AUTHENTICATION (GOOGLE SHEETS BACKEND)
+// Single source of truth: Google Sheets Users sheet via Google Apps Script
 // ============================================================================
 
 export async function fetchUsers(): Promise<UserAccount[]> {
   try {
-    let rawUsers: any[] = [];
-    let fetchSuccess = false;
-
-    // 1. In browser, try dedicated /api/users endpoint first
+    // 1. Try Express API proxy first
     if (typeof window !== 'undefined') {
       try {
         const pRes = await fetch('/api/users');
         if (pRes.ok) {
           const pData = await pRes.json();
-          if (pData && pData.success) {
-            if (Array.isArray(pData.users)) {
-              rawUsers = pData.users;
-              fetchSuccess = true;
-            } else if (pData.data && Array.isArray(pData.data.users)) {
-              rawUsers = pData.data.users;
-              fetchSuccess = true;
-            } else if (pData.data && Array.isArray(pData.data)) {
-              rawUsers = pData.data;
-              fetchSuccess = true;
-            }
+          const list = pData?.users || pData?.data?.users;
+          if (Array.isArray(list) && list.length > 0) {
+            const sanitized: UserAccount[] = list.map((u: any) => ({
+              id: u.id || `usr_${u.idNo || u.phone}`,
+              idNo: String(u.idNo || u.phone || u.id),
+              uid: u.uid,
+              name: String(u.name || u['Full Name'] || u.idNo || 'কর্মী'),
+              phone: String(u.phone || u['Phone'] || '').trim(),
+              role: (String(u.role || u['Role'] || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker') as 'admin' | 'worker',
+              status: (u.status || u['Status'] || 'active') as 'active' | 'hold',
+              designation: String(u.designation || u['Designation'] || ''),
+              badgeNo: String(u.badgeNo || u['Badge No'] || u.idNo || ''),
+              createdAt: String(u.createdAt || ''),
+              updatedAt: String(u.updatedAt || ''),
+              lastLogin: String(u.lastLogin || '')
+            }));
+            writeCache(USERS_CACHE_KEY, sanitized);
+            return sanitized;
           }
         }
-      } catch (proxyErr) {
-        console.warn('Dedicated /api/users fetch failed, trying central callGasApi:', proxyErr);
-      }
+      } catch {}
     }
 
-    // 2. Call central API if not already fetched
-    if (!fetchSuccess) {
-      const data = await callGasApi<any>('users', {}, 'GET');
-      if (Array.isArray(data)) {
-        rawUsers = data;
-      } else if (data && Array.isArray(data.users)) {
-        rawUsers = data.users;
-      } else if (data && data.data && Array.isArray(data.data.users)) {
-        rawUsers = data.data.users;
-      } else if (data && data.data && Array.isArray(data.data)) {
-        rawUsers = data.data;
-      } else if (data && Array.isArray(data.items)) {
-        rawUsers = data.items;
-      }
+    // 2. Direct Google Apps Script failover
+    const directRes = await callGasApi<any>('users', {}, 'GET');
+    const directList = directRes?.users || directRes?.data?.users;
+    if (Array.isArray(directList) && directList.length > 0) {
+      const sanitized: UserAccount[] = directList.map((u: any) => ({
+        id: u.id || `usr_${u.idNo || u.phone}`,
+        idNo: String(u.idNo || u.phone || u.id),
+        uid: u.uid,
+        name: String(u.name || u['Full Name'] || u.idNo || 'কর্মী'),
+        phone: String(u.phone || u['Phone'] || '').trim(),
+        role: (String(u.role || u['Role'] || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker') as 'admin' | 'worker',
+        status: (u.status || u['Status'] || 'active') as 'active' | 'hold',
+        designation: String(u.designation || u['Designation'] || ''),
+        badgeNo: String(u.badgeNo || u['Badge No'] || u.idNo || ''),
+        createdAt: String(u.createdAt || ''),
+        updatedAt: String(u.updatedAt || ''),
+        lastLogin: String(u.lastLogin || '')
+      }));
+      writeCache(USERS_CACHE_KEY, sanitized);
+      return sanitized;
     }
 
-    if (Array.isArray(rawUsers) && rawUsers.length > 0) {
-      const seen = new Set<string>();
-      const uniqueUsers: UserAccount[] = [];
-
-      rawUsers.forEach((u, idx) => {
-        if (!u) return;
-        const idKey = String(u.idNo || u['User ID'] || u.userId || u.id || `usr-${idx + 1}`).trim();
-        if (!seen.has(idKey.toLowerCase())) {
-          seen.add(idKey.toLowerCase());
-          uniqueUsers.push({
-            id: u.id || `usr_${idKey}`,
-            idNo: idKey,
-            name: String(u.name || u['Full Name'] || idKey).trim(),
-            phone: String(u.phone || u['Phone'] || '').trim(),
-            role: (u.role || u['Role'] || 'worker') as 'admin' | 'worker' | 'supervisor',
-            status: (u.status || u['Status'] || 'active') as 'active' | 'hold',
-            designation: String(u.designation || u['Designation'] || ''),
-            badgeNo: String(u.badgeNo || u['Badge No'] || idKey),
-            password: String(u.password || u['Password'] || ''),
-            createdAt: String(u.createdAt || u['Created At'] || ''),
-            updatedAt: String(u.updatedAt || u['Updated At'] || ''),
-            lastLogin: String(u.lastLogin || u['Last Login'] || '')
-          });
-        }
-      });
-
-      writeCache(USERS_CACHE_KEY, uniqueUsers);
-      return uniqueUsers;
-    }
-
-    // Fall back to cache if empty array returned from network
     const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    if (cached.length > 0) return cached;
-    return [];
+    return cached;
   } catch (err: any) {
     console.warn('fetchUsers using cache fallback due to error:', err);
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    if (cached.length > 0) return cached;
-    throw new Error(err.message || 'Google Sheets থেকে ইউজারদের তালিকা লোড করা যায়নি');
+    return readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   }
 }
 
 export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
-  const cleanId = normalizeUniversalText(userData.idNo || '');
-  const cleanPass = normalizePassword(userData.password || '');
-  const cleanPhone = userData.phone ? normalizeUniversalText(userData.phone).replace(/[^0-9]/g, '') : '';
+  const cleanId = normalizeUniversalText(userData.idNo || '').trim();
+  const cleanPhone = normalizeUniversalText(userData.phone || '').replace(/[^0-9]/g, '');
   const cleanName = normalizeUniversalText(userData.name || cleanId) || 'কর্মী';
+  const cleanPassword = normalizePassword(userData.password || '1234');
 
-  if (!cleanId) throw new Error('User ID No is required');
-  if (!cleanPass) throw new Error('Password is required');
+  if (!cleanId && !cleanPhone) throw new Error('ইউজার আইডি বা মোবাইল নম্বর আবশ্যক');
 
+  const finalId = cleanId || `LM-${cleanPhone.slice(-4)}`;
   const payload = {
-    ...userData,
-    idNo: cleanId,
-    password: cleanPass,
-    name: cleanName,
+    id: `usr_${finalId}`,
+    idNo: finalId,
     phone: cleanPhone,
-    role: userData.role || 'worker',
-    status: userData.status || 'active',
+    name: cleanName,
+    password: cleanPassword,
+    role: (userData.role || 'worker') as 'admin' | 'worker' | 'supervisor',
+    status: (userData.status || 'active') as 'active' | 'hold',
+    designation: userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
+    badgeNo: userData.badgeNo || finalId,
+    securityQuestion: userData.securityQuestion || '',
+    securityAnswer: userData.securityAnswer || ''
   };
 
-  const data = await callGasApi<{ success: boolean; user: UserAccount }>('createUser', { data: payload }, 'POST');
-  if (data && data.user) {
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    writeCache(USERS_CACHE_KEY, [data.user, ...cached.filter(u => u.id !== data.user.id)]);
-    return data.user;
+  // 1. Try server endpoint
+  if (typeof window !== 'undefined') {
+    try {
+      const resp = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: payload })
+      });
+      if (resp.ok) {
+        const resData = await resp.json();
+        const rawCreated = (resData?.user || resData?.data?.user || payload) as UserAccount;
+        const created = { ...rawCreated };
+        delete (created as any).password;
+        delete (created as any).passwordHash;
+        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+        writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
+        return created;
+      }
+    } catch {}
   }
-  throw new Error('Failed to create user in Google Sheets');
+
+  // 2. Direct GAS failover
+  const gasRes = await callGasApi<any>('createUser', { data: payload }, 'POST');
+  const rawCreated = (gasRes?.user || gasRes?.data?.user || payload) as UserAccount;
+  const created = { ...rawCreated };
+  delete (created as any).password;
+  delete (created as any).passwordHash;
+  const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+  writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
+  return created;
 }
 
 export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
-  const data = await callGasApi<{ success: boolean; user: UserAccount }>('updateUser', { id, data: updates }, 'POST');
-  if (data && data.user) {
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    writeCache(USERS_CACHE_KEY, cached.map(u => u.id === id ? { ...u, ...data.user } : u));
-    return data.user;
+  const cleanId = String(id || '').trim();
+  const safeUpdates = { ...updates };
+  if (safeUpdates.phone) {
+    safeUpdates.phone = normalizeUniversalText(safeUpdates.phone).replace(/[^0-9]/g, '');
   }
-  throw new Error('Failed to update user in Google Sheets');
+  if (safeUpdates.password) {
+    safeUpdates.password = normalizePassword(safeUpdates.password);
+  }
+
+  // 1. Try server endpoint
+  if (typeof window !== 'undefined') {
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(cleanId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: safeUpdates })
+      });
+      if (resp.ok) {
+        const resData = await resp.json();
+        const rawUpdated = (resData?.user || resData?.data || { id: cleanId, ...safeUpdates }) as UserAccount;
+        const updated = { ...rawUpdated };
+        delete (updated as any).password;
+        delete (updated as any).passwordHash;
+        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+        writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
+        return updated;
+      }
+    } catch {}
+  }
+
+  // 2. Direct GAS failover
+  const gasRes = await callGasApi<any>('updateUser', { id: cleanId, data: safeUpdates }, 'POST');
+  const rawUpdated = (gasRes?.user || gasRes?.data || { id: cleanId, ...safeUpdates }) as UserAccount;
+  const updated = { ...rawUpdated };
+  delete (updated as any).password;
+  delete (updated as any).passwordHash;
+  const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+  writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
+  return updated;
 }
 
 export async function deleteUserAccount(
@@ -773,68 +808,54 @@ export async function deleteUserAccount(
     throw new Error('PRIMARY_ADMIN_PROTECTED: The Primary Admin account (8695716192) is permanently protected and cannot be deleted.');
   }
 
-  const payload = {
-    id,
-    confirmDelete: options?.confirmDelete ?? true,
-    confirmAdminDelete: options?.confirmAdminDelete,
-    reason: options?.reason
-  };
-
-  try {
-    const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || data?.success === false) {
-      const errMsg = data?.error || data?.message || `Server rejected user deletion (HTTP ${res.status})`;
-      throw new Error(errMsg);
-    }
-  } catch (err: any) {
-    if (err.message && (
-      err.message.includes('PRIMARY_ADMIN_PROTECTED') || 
-      err.message.includes('ADMIN_ACCOUNT_PROTECTED') ||
-      err.message.includes('MANDATORY_CONFIRMATION') ||
-      err.message.includes('Server rejected')
-    )) {
-      throw err;
-    }
-    const data = await callGasApi<{ success?: boolean; error?: any }>('deleteUser', payload, 'POST');
-    if (data && data.success === false) {
-      const msg = typeof data.error === 'object' ? data.error?.message : (data.error || 'Failed to delete user');
-      throw new Error(msg);
-    }
+  // 1. Try server endpoint
+  if (typeof window !== 'undefined') {
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options || {})
+      });
+      if (resp.ok) {
+        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+        writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
+        return true;
+      }
+    } catch {}
   }
 
+  // 2. Direct GAS failover
+  await callGasApi<any>('deleteUser', { id, ...options }, 'POST');
   const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
   return true;
 }
 
 export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
-  const cleanId = id.toLowerCase();
+  const cleanId = id.toLowerCase().trim();
   if ((cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') && status === 'hold') {
     throw new Error('Primary Admin account cannot be placed on hold');
   }
-  const data = await callGasApi<{ success: boolean; user: UserAccount }>('updateUserStatus', { id, status }, 'POST');
-  if (data && data.user) {
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    writeCache(USERS_CACHE_KEY, cached.map(u => u.id === id ? { ...u, status } : u));
-    return data.user;
-  }
-  throw new Error('Failed to update user status in Google Sheets');
+
+  return updateUserAccount(id, { status });
 }
 
-export async function verifyUserSession(idNo: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
+export async function verifyUserSession(phoneOrId: string): Promise<{ valid: boolean; status?: 'active' | 'hold'; error?: string }> {
   try {
-    const data = await callGasApi<{ success: boolean; result: { valid: boolean; status?: 'active' | 'hold'; error?: string } }>(
-      'verify',
-      { idNo: normalizeUniversalText(idNo) },
-      'GET'
-    );
-    return data.result || { valid: false, error: 'User not found' };
+    const clean = normalizeUniversalText(phoneOrId).trim().toLowerCase();
+    const cleanDigits = clean.replace(/[^0-9]/g, '');
+    const users = await fetchUsers();
+
+    const u = users.find(user => {
+      const uId = normalizeUniversalText(user.idNo || user.id || '').trim().toLowerCase();
+      const uPhone = String(user.phone || '').replace(/[^0-9]/g, '');
+      return uId === clean || (cleanDigits.length >= 10 && uPhone.endsWith(cleanDigits.slice(-10)));
+    });
+
+    if (u) {
+      return { valid: true, status: u.status || 'active' };
+    }
+    return { valid: false, error: 'User profile not found' };
   } catch (err: any) {
     return { valid: false, error: err?.message || 'Verification error' };
   }
@@ -842,139 +863,71 @@ export async function verifyUserSession(idNo: string): Promise<{ valid: boolean;
 
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
   const cleanId = normalizeUniversalText(loginId).trim();
-  const cleanPass = normalizePassword(password).trim();
-
+  const cleanPass = normalizePassword(password);
   if (!cleanId || !cleanPass) {
-    throw new Error('User ID এবং পাসওয়ার্ড প্রয়োজন (User ID & Password required)');
+    throw new Error('ইউজার আইডি / মোবাইল নম্বর এবং পাসওয়ার্ড প্রয়োজন (User ID / Phone & Password required)');
   }
 
+  let resData: any = null;
+
+  // 1. Try Express API proxy route
   if (typeof window !== 'undefined') {
     try {
-      const res = await fetch('/api/auth/login', {
+      const resp = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ loginId: cleanId, password: cleanPass })
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data && data.success && data.session) {
-        try {
-          localStorage.setItem('power_user_session', JSON.stringify(data.session));
-        } catch {
-          // ignore
-        }
-        return data.session;
+      const data = await resp.json();
+      if (resp.ok && data.success && data.session) {
+        resData = data;
+      } else if (data && data.error) {
+        throw new Error(typeof data.error === 'string' ? data.error : (data.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড'));
       }
-      if (data && data.error) {
-        throw new Error(data.error);
+    } catch (fetchErr: any) {
+      if (fetchErr.message && !fetchErr.message.includes('Failed to fetch') && !fetchErr.message.includes('NetworkError')) {
+        throw fetchErr;
       }
-      if (res.status === 401) {
-        throw new Error('ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক আইডি ও পাসওয়ার্ড দিন।');
-      }
-      if (res.status === 403) {
-        throw new Error('এই অ্যাকাউন্টটি স্থগিত (ON HOLD) করা আছে।');
-      }
-    } catch (networkErr: any) {
-      if (networkErr.message && (
-        networkErr.message.includes('ভুল') || 
-        networkErr.message.includes('স্থগিত') || 
-        networkErr.message.includes('Password') ||
-        networkErr.message.includes('User ID')
-      )) {
-        throw networkErr;
-      }
-      console.warn('Network issue during login, attempting local verified credentials fallback:', networkErr);
     }
   }
 
-  // Fallback direct check against cached users or master credentials
-  const cachedUsers = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-  const lowerId = cleanId.toLowerCase();
-  const matched = cachedUsers.find(u => 
-    String(u.idNo).toLowerCase() === lowerId || 
-    String(u.id).toLowerCase() === lowerId || 
-    String(u.name).toLowerCase().includes(lowerId) ||
-    (u.phone && String(u.phone).replace(/[^0-9]/g, '') === lowerId)
-  );
-
-  const universalPins = ['2004', '6293', '1234', '2580', '123456', 'admin', 'nayem', 'admin123'];
-
-  if (matched) {
-    if (matched.status === 'hold') {
-      throw new Error('এই ইউজার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।');
-    }
-    const rawPass = String(matched.password || '').trim();
-    if (rawPass === cleanPass || universalPins.includes(cleanPass.toLowerCase())) {
-      const session: UserSession = {
-        id: matched.id,
-        idNo: matched.idNo,
-        name: matched.name,
-        phone: matched.phone || '',
-        role: matched.role || 'worker',
-        status: matched.status || 'active',
-        designation: matched.designation || '',
-        badgeNo: matched.badgeNo || matched.idNo,
-        loggedInAt: new Date().toISOString()
-      };
-      return session;
+  // 2. Direct Google Apps Script Web App failover
+  if (!resData) {
+    const gasRes = await callGasApi<any>('login', { idNo: cleanId, password: cleanPass }, 'POST');
+    if (gasRes && (gasRes.session || gasRes.data?.session)) {
+      resData = { success: true, session: gasRes.session || gasRes.data?.session };
+    } else if (gasRes && gasRes.error) {
+      throw new Error(typeof gasRes.error === 'string' ? gasRes.error : (gasRes.error?.message || 'ভুল ইউজার আইডি বা পাসওয়ার্ড'));
     }
   }
 
-  // Master Admin Controller fallback for Nayem
-  const isNayemAdmin = 
-    lowerId === '8695716192' || 
-    lowerId === 'admin' || 
-    lowerId === 'controller' || 
-    lowerId === 'nayem' || 
-    lowerId.includes('nayemali') ||
-    cleanPass === '2004';
-
-  if (isNayemAdmin) {
-    if (universalPins.includes(cleanPass.toLowerCase()) || cleanPass === '2004' || cleanPass === '1234') {
-      return {
-        id: 'adm_8695716192',
-        idNo: '8695716192',
-        name: 'NAYEM (Admin Controller)',
-        phone: '8695716192',
-        role: 'admin',
-        status: 'active',
-        designation: 'CONTROLLER',
-        badgeNo: 'ADM-8695',
-        loggedInAt: new Date().toISOString()
-      };
-    }
+  if (!resData || !resData.session) {
+    throw new Error('ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক আইডি ও পাসওয়ার্ড দিন।');
   }
 
-  throw new Error('ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক আইডি ও পাসওয়ার্ড দিন।');
+  const session: UserSession = resData.session;
+  if (session.status === 'hold') {
+    throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।');
+  }
+
+  try {
+    localStorage.setItem('power_user_session', JSON.stringify(session));
+    const isAdm = session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
+    if (isAdm) {
+      localStorage.setItem('power_is_admin', 'true');
+    } else {
+      localStorage.removeItem('power_is_admin');
+    }
+  } catch {}
+
+  return session;
 }
 
-export async function changeUserPassword(idNo: string, currentPassword: string, newPassword: string): Promise<boolean> {
-  const data = await callGasApi<{ success: boolean }>(
-    'changePassword',
-    {
-      idNo: normalizeUniversalText(idNo),
-      currentPassword: normalizePassword(currentPassword),
-      newPassword: normalizePassword(newPassword)
-    },
-    'POST'
-  );
-
-  if (data && data.success) return true;
-  throw new Error('Failed to change password in Google Sheets');
-}
-
-export async function resetUserPassword(idNo: string, newPassword: string, phone?: string): Promise<boolean> {
-  const data = await callGasApi<{ success: boolean }>(
-    'resetPassword',
-    {
-      idNo: normalizeUniversalText(idNo),
-      phone: phone ? normalizeUniversalText(phone).replace(/[^0-9]/g, '') : undefined,
-      newPassword: normalizePassword(newPassword)
-    },
-    'POST'
-  );
-
-  if (data && data.success) return true;
-  throw new Error('Failed to reset password in Google Sheets');
+export async function logoutUser(): Promise<void> {
+  try {
+    localStorage.removeItem('power_user_session');
+    localStorage.removeItem('power_is_admin');
+  } catch {}
 }
 
 // ============================================================================
@@ -1256,6 +1209,14 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
 // ============================================================================
 export const DISCONNECTION_TASKS_CACHE_KEY = 'power_disconnection_tasks_cache';
 
+export function invalidateDisconnectionCache() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+    }
+  } catch {}
+}
+
 export function cleanDisconnectionTask(t: any): DisconnectionTask {
   if (!t) return t;
   const directCandidates = [
@@ -1313,45 +1274,163 @@ export async function fetchDisconnectionTasks(params: {
   status?: string;
   includeArchived?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
-  const queryParts: string[] = [];
-  if (params.workerId) queryParts.push(`workerId=${encodeURIComponent(params.workerId)}`);
-  if (params.workerName) queryParts.push(`workerName=${encodeURIComponent(params.workerName)}`);
-  if (params.role) queryParts.push(`role=${encodeURIComponent(params.role)}`);
-  if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
-  if (params.status) queryParts.push(`status=${encodeURIComponent(params.status)}`);
-  if (params.includeArchived) queryParts.push(`includeArchived=true`);
-
-  const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
-
+  // Step 1: Call Google Apps Script getDisconnectionTasks directly (Google Sheet is source of truth)
   try {
-    const res = await fetch(`/api/disconnection-tasks${qs}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.tasks)) {
-        const cleaned = data.tasks.map(cleanDisconnectionTask);
-        writeCache(DISCONNECTION_TASKS_CACHE_KEY, cleaned);
-        return { tasks: cleaned, stats: data.stats };
-      }
-    }
-  } catch (err) {
-    console.warn('Direct /api/disconnection-tasks call failed, trying GAS API fallback:', err);
-  }
-
-  // Fallback to direct callGasApi
-  try {
-    const gasData = await callGasApi<{ success: boolean; tasks: DisconnectionTask[]; stats: DisconnectionStats }>('getDisconnectionTasks', params, 'GET');
-    if (gasData && Array.isArray(gasData.tasks)) {
-      const cleaned = gasData.tasks.map(cleanDisconnectionTask);
+    const gasData = await callGasApi<{ success: boolean; tasks: DisconnectionTask[]; stats: DisconnectionStats }>(
+      'getDisconnectionTasks',
+      params,
+      'GET'
+    );
+    if (gasData && gasData.success && Array.isArray(gasData.tasks)) {
+      const cleaned = gasData.tasks.map((t, idx) => ({
+        ...cleanDisconnectionTask(t),
+        serialNumber: `SL ${String(idx + 1).padStart(3, '0')}`
+      }));
       writeCache(DISCONNECTION_TASKS_CACHE_KEY, cleaned);
       return { tasks: cleaned, stats: gasData.stats };
     }
-  } catch (err) {
-    console.warn('GAS fetchDisconnectionTasks failed:', err);
+  } catch (err: any) {
+    console.warn('[Disconnection] GAS getDisconnectionTasks attempt notice:', err?.message || err);
   }
 
-  // Fallback to cache
+  // Step 2: Fallback direct read from Google Sheet via 'entries' category=Disconnection
+  // (In case user has not redeployed the newest Code.gs to their Google account yet)
+  try {
+    const rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'Disconnection' }, 'GET');
+    const rawEntries = rawRes && (Array.isArray(rawRes.entries) ? rawRes.entries : (Array.isArray(rawRes) ? rawRes : []));
+    if (rawEntries && rawEntries.length > 0) {
+      const mappedTasks: DisconnectionTask[] = rawEntries.map((e, idx) => {
+        const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
+        const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
+        const name = String(e['Name'] || e.consumerName || e.name || '').trim();
+        const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
+        const bClassPhase = String(e['BClass/Phase'] || e.bClassPhase || e.deviceType || 'I').trim();
+        const consumerClass = String(e['Class'] || e.baseClass || e.class || 'Domestic').trim();
+        const govNonGov = String(e['Gov/Non-Gov'] || e.govNonGov || 'Non-Gov').trim();
+        const meter = String(e['Meter'] || e.meterNumber || e.meterNo || '').trim();
+        const dueDateRange = String(e['O/S Due date Range'] || e.dueDateRange || '').trim();
+        const d2NetOs = String(e['D2 Net O/S'] || e.outstandingDue || e.arrearAmount || '').trim();
+        const disconStatus = (String(e['Discon Status'] || e.disconStatus || e.status || 'PENDING').trim().toUpperCase() || 'PENDING') as DisconnectionTaskStatus;
+        const disconDate = String(e['Discon Date'] || e.disconDate || e.reportDate || '').trim();
+        const mobile = String(e['Mobile Number'] || e.phoneNumber || e.mobile || '').trim();
+        const slNumber = `SL ${String(idx + 1).padStart(3, '0')}`;
+
+        return cleanDisconnectionTask({
+          off_code: String(e['off_code'] || e.offCode || '5233100').trim(),
+          MRU: mru,
+          'Consumer Id': cId,
+          Name: name,
+          Address: address,
+          'BClass/Phase': bClassPhase,
+          Class: consumerClass,
+          'Gov/Non-Gov': govNonGov,
+          Meter: meter,
+          'O/S Due date Range': dueDateRange,
+          'D2 Net O/S': d2NetOs,
+          'Discon Status': disconStatus,
+          'Discon Date': disconDate,
+          'Mobile Number': mobile,
+          serialNumber: slNumber,
+          taskId: `TASK-DISC-${cId || idx + 1}`,
+          consumerId: cId,
+          consumerName: name,
+          accountNumber: cId,
+          meterNumber: meter,
+          consumerAddress: address,
+          phoneNumber: mobile,
+          mobileNumber: mobile,
+          area: String(e['off_code'] || '5233100').trim(),
+          disconnectionReason: `Outstanding Bill (D2 Net O/S: ${d2NetOs})`,
+          assignedWorkerId: String(e['Worker ID'] || e.assignedWorkerId || '').trim(),
+          assignedWorkerName: String(e['Worker Name'] || e.assignedWorkerName || '').trim(),
+          taskStatus: disconStatus,
+          workerReport: String(e['Notes'] || e.workerReport || '').trim(),
+          workerRemarks: String(e['Remarks'] || e.workerRemarks || '').trim(),
+          reportDate: disconDate,
+          reportTime: '',
+          submittedBy: String(e['Submitted By'] || e.submittedBy || '').trim(),
+          createdAt: String(e['Created At'] || e.createdAt || disconDate || new Date().toISOString()).trim(),
+          updatedAt: String(e['Updated At'] || e.updatedAt || new Date().toISOString()).trim(),
+          photoUrl: String(e['Photo Evidence'] || e.photoUrl || '').trim(),
+          mruSection: mru,
+          cccFeeder: mru,
+          outstandingDue: d2NetOs,
+          dueDateRange: dueDateRange,
+          baseClass: consumerClass,
+          deviceType: bClassPhase,
+          priority: parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000 ? 'URGENT' : 'NORMAL',
+          assignedAgency: String(e['Agency Name'] || e.assignedAgency || '').trim(),
+          paidAmount: String(e['Paid Amount'] || e.paidAmount || (disconStatus === 'PAID' ? d2NetOs : '')).trim(),
+          paymentDate: String(e['Payment Date'] || e.paymentDate || (disconStatus === 'PAID' ? disconDate : '')).trim(),
+          paymentReference: String(e['Payment Reference'] || e.paymentReference || '').trim(),
+          meterReading: meter,
+          statusHistory: []
+        });
+      });
+
+      // Filter
+      let filtered = mappedTasks;
+      const role = String(params.role || '').toLowerCase();
+      const workerId = String(params.workerId || '').toLowerCase().trim();
+      const workerName = String(params.workerName || '').toLowerCase().trim();
+      if (role === 'worker' && (workerId || workerName)) {
+        filtered = filtered.filter(t => {
+          const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
+          const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
+          return (workerId && aId === workerId) || (workerName && aNm === workerName) || (!aId && !aNm);
+        });
+      }
+      if (params.status && params.status !== 'ALL') {
+        const filterSt = params.status.toUpperCase().trim();
+        filtered = filtered.filter(t => String(t.taskStatus).toUpperCase() === filterSt);
+      }
+      if (params.search) {
+        const q = params.search.toLowerCase().trim();
+        filtered = filtered.filter(t =>
+          `${t.serialNumber} ${t.consumerId} ${t.consumerName} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber}`
+            .toLowerCase()
+            .includes(q)
+        );
+      }
+
+      const total = filtered.length;
+      let completed = 0;
+      let pending = 0;
+      for (const t of filtered) {
+        const st = t.taskStatus;
+        if (st === 'COMPLETED' || st === 'DISCONNECT') completed++;
+        else if (st === 'PENDING') pending++;
+        else if (st === 'PAID') completed++;
+      }
+
+      const computedStats: DisconnectionStats = {
+        totalTasks: total,
+        completedTasks: completed,
+        pendingTasks: pending,
+        inProgressTasks: 0,
+        unableTasks: 0,
+        reportedTasks: 0,
+        cancelledTasks: 0,
+        completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+        myAssignedTasks: total,
+        myCompletedTasks: completed,
+        myPendingTasks: pending,
+        myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
+      };
+
+      writeCache(DISCONNECTION_TASKS_CACHE_KEY, filtered);
+      return { tasks: filtered, stats: computedStats };
+    }
+  } catch (err: any) {
+    console.warn('[Disconnection] Google Sheet fallback read notice:', err?.message || err);
+  }
+
+  // Step 3: Temporary cache fallback only when offline
   const cached = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
-  let filtered = cached.map(cleanDisconnectionTask);
+  let filtered = cached.map((t, idx) => ({
+    ...cleanDisconnectionTask(t),
+    serialNumber: `SL ${String(idx + 1).padStart(3, '0')}`
+  }));
   if (params.role === 'worker' && (params.workerId || params.workerName)) {
     const wId = String(params.workerId || '').toLowerCase().trim();
     const wNm = String(params.workerName || '').toLowerCase().trim();
@@ -1362,7 +1441,7 @@ export async function fetchDisconnectionTasks(params: {
     });
   }
   const total = filtered.length;
-  const completed = filtered.filter(t => t.taskStatus === 'COMPLETED').length;
+  const completed = filtered.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT').length;
   const pending = filtered.filter(t => t.taskStatus === 'PENDING').length;
   const inProg = filtered.filter(t => t.taskStatus === 'IN PROGRESS').length;
 
@@ -1389,21 +1468,87 @@ export async function uploadDisconnectionTasks(
   tasks: Partial<DisconnectionTask>[],
   adminInfo: { adminId: string; adminName: string }
 ): Promise<{ success: boolean; count: number; message: string; tasks?: DisconnectionTask[]; insertedCount?: number; updatedCount?: number }> {
+  const reqId = `REQ-UPL-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+  // Map each task to the exact 14 WBSEDCL Google Sheet headers and standard model
+  const standardizedTasks = tasks.map(t => {
+    const cId = String((t as any)['Consumer Id'] || t.consumerId || (t as any)['Consumer ID'] || t.accountNumber || '').trim();
+    const meter = String((t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || t.meterReading || '').trim();
+    const offCode = String((t as any)['off_code'] || t.offCode || t.area || '5233100').trim();
+    const mru = String((t as any)['MRU'] || (t as any).mru || t.mruSection || '').trim();
+    const name = String((t as any)['Name'] || t.consumerName || (t as any)['Customer Name'] || '').trim();
+    const address = String((t as any)['Address'] || t.consumerAddress || '').trim();
+    const bClassPhase = String((t as any)['BClass/Phase'] || t.bClassPhase || t.deviceType || 'I').trim();
+    const consumerClass = String((t as any)['Class'] || t.baseClass || 'Domestic').trim();
+    const govNonGov = String((t as any)['Gov/Non-Gov'] || (t as any)['govNonGov'] || 'Non-Gov').trim();
+    const dueDateRange = String((t as any)['O/S Due date Range'] || t.dueDateRange || '').trim();
+    const d2NetOs = String((t as any)['D2 Net O/S'] || t.outstandingDue || '').trim();
+    const disconStatus = String((t as any)['Discon Status'] || t.disconStatus || t.taskStatus || 'PENDING').trim().toUpperCase();
+    const disconDate = String((t as any)['Discon Date'] || t.disconDate || t.reportDate || '').trim();
+    const mobile = String((t as any)['Mobile Number'] || t.phoneNumber || t.mobileNumber || '').trim();
+
+    return {
+      // 14 Exact Headers
+      'off_code': offCode,
+      'MRU': mru,
+      'Consumer Id': cId,
+      'Name': name,
+      'Address': address,
+      'BClass/Phase': bClassPhase,
+      'Class': consumerClass,
+      'Gov/Non-Gov': govNonGov,
+      'Meter': meter,
+      'O/S Due date Range': dueDateRange,
+      'D2 Net O/S': d2NetOs,
+      'Discon Status': disconStatus,
+      'Discon Date': disconDate,
+      'Mobile Number': mobile,
+
+      // Model fields
+      consumerId: cId,
+      consumerName: name,
+      meterNumber: meter,
+      phoneNumber: mobile,
+      outstandingDue: d2NetOs,
+      dueDateRange: dueDateRange,
+      consumerAddress: address,
+      taskStatus: disconStatus as DisconnectionTaskStatus,
+      mruSection: mru,
+      offCode: offCode
+    };
+  });
+
   try {
-    const res = await fetch('/api/disconnection-tasks/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks, adminInfo })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data;
+    const res = await callGasApi<any>('uploadDisconnectionTasks', { tasks: standardizedTasks, adminInfo, requestId: reqId }, 'POST');
+    if (res && res.success) {
+      invalidateDisconnectionCache();
+      return res;
     }
-  } catch (err) {
-    console.warn('Server upload failed, trying GAS API:', err);
+  } catch (err: any) {
+    console.warn('[Disconnection] uploadDisconnectionTasks notice:', err?.message || err);
   }
 
-  return callGasApi('uploadDisconnectionTasks', { tasks, adminInfo }, 'POST');
+  // Fallback direct write to Google Sheet via createEntry/updateEntry
+  try {
+    let inserted = 0;
+    for (const t of standardizedTasks) {
+      await callGasApi('createEntry', {
+        category: 'Disconnection',
+        ...t,
+        data: t
+      }, 'POST');
+      inserted++;
+    }
+    invalidateDisconnectionCache();
+    return {
+      success: true,
+      count: standardizedTasks.length,
+      insertedCount: inserted,
+      message: `Uploaded ${standardizedTasks.length} disconnection records to Google Sheets.`
+    };
+  } catch (fallbackErr: any) {
+    throw new Error(fallbackErr.message || 'Failed to upload disconnection tasks to Google Sheets');
+  }
 }
 
 export async function extractDisconnectionTasksFromOCR(
@@ -1443,25 +1588,55 @@ export async function submitDisconnectionTaskReport(report: {
   meterReading?: string;
   priority?: string;
   assignedAgency?: string;
+  consumerId?: string;
+  phoneNumber?: string;
+  reportDate?: string;
 }): Promise<{ success: boolean; message: string; taskId?: string; status?: string }> {
-  const finalSubId = report.submissionId || `SUB-DISC-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-  const payload = { ...report, submissionId: finalSubId };
+  const reqId = report.submissionId || `REQ-SUB-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  const cId = String(report.consumerId || report.taskId || '').replace('TASK-DISC-', '').trim();
+  const dateStr = report.reportDate || new Date().toISOString().split('T')[0];
+
+  const payload = {
+    ...report,
+    consumerId: cId,
+    'Consumer Id': cId,
+    'Discon Status': report.taskStatus,
+    'Discon Date': dateStr,
+    'Meter': report.meterReading || '',
+    'Mobile Number': report.phoneNumber || '',
+    requestId: reqId
+  };
 
   try {
-    const res = await fetch('/api/disconnection-tasks/report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data;
+    const res = await callGasApi<any>('submitDisconnectionReport', payload, 'POST');
+    if (res && res.success) {
+      invalidateDisconnectionCache();
+      return res;
     }
-  } catch (err) {
-    console.warn('Server report submission failed, trying GAS API:', err);
+  } catch (err: any) {
+    console.warn('[Disconnection] submitDisconnectionReport notice:', err?.message || err);
   }
 
-  return callGasApi('submitDisconnectionReport', payload, 'POST');
+  // Fallback to updateEntry on Google Sheet
+  try {
+    const res = await callGasApi<any>('updateEntry', {
+      id: report.taskId,
+      consumerId: cId,
+      category: 'Disconnection',
+      status: report.taskStatus,
+      data: payload,
+      requestId: reqId
+    }, 'POST');
+    invalidateDisconnectionCache();
+    return {
+      success: true,
+      message: 'Report saved to Google Sheets successfully',
+      taskId: report.taskId,
+      status: report.taskStatus
+    };
+  } catch (err: any) {
+    throw new Error(err.message || 'Failed to submit disconnection report to Google Sheets');
+  }
 }
 
 export async function assignDisconnectionTask(
@@ -1469,19 +1644,7 @@ export async function assignDisconnectionTask(
   workerId: string,
   workerName: string
 ): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch('/api/disconnection-tasks/assign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId, workerId, workerName })
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn('Server assign task failed, trying GAS API:', err);
-  }
-  return callGasApi('assignDisconnectionTask', { taskId, workerId, workerName }, 'POST');
+  return callGasApi('assignDisconnectionTask', { taskId, workerId, workerName, requestId: 'REQ-ASG-' + Date.now() }, 'POST');
 }
 
 export async function archiveDisconnectionTask(
@@ -1489,33 +1652,23 @@ export async function archiveDisconnectionTask(
   reason: string,
   adminName: string
 ): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch('/api/disconnection-tasks/archive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId, reason, adminName })
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn('Server archive task failed, trying GAS API:', err);
-  }
-  return callGasApi('archiveDisconnectionTask', { taskId, reason, adminName }, 'POST');
+  return callGasApi('archiveDisconnectionTask', { taskId, reason, adminName, requestId: 'REQ-ARC-' + Date.now() }, 'POST');
 }
 
 export async function restoreDisconnectionTask(taskId: string): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch('/api/disconnection-tasks/restore', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId })
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn('Server restore task failed, trying GAS API:', err);
-  }
-  return callGasApi('restoreDisconnectionTask', { taskId }, 'POST');
+  return callGasApi('restoreDisconnectionTask', { taskId, requestId: 'REQ-RST-' + Date.now() }, 'POST');
 }
+
+export async function fetchDisconnectionHistory(consumerId: string): Promise<{ success: boolean; history: any[] }> {
+  if (!consumerId) return { success: true, history: [] };
+  try {
+    const res = await callGasApi<any>('getDisconnectionHistory', { consumerId, 'Consumer Id': consumerId }, 'GET');
+    if (res && res.success && Array.isArray(res.history)) {
+      return res;
+    }
+  } catch (err: any) {
+    console.warn('[Disconnection] fetchDisconnectionHistory notice:', err?.message || err);
+  }
+  return { success: true, history: [] };
+}
+

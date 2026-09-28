@@ -1,24 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import appLogo from '../assets/images/power_round_logo_1787860440979.jpg';
 import { 
   ShieldCheck, 
-  Lock, 
   User, 
-  Phone, 
   CheckCircle2, 
   ArrowRight, 
   KeyRound, 
   AlertCircle,
-  Eye, 
-  EyeOff, 
-  HelpCircle, 
-  ArrowLeft, 
-  Check, 
-  Globe 
+  Globe,
+  Eye,
+  EyeOff
 } from 'lucide-react';
-import { UserSession, UserAccount } from '../types';
-import { fetchUsers, loginUser, resetUserPassword } from '../services/api';
-import { normalizeUniversalText, normalizePassword, isUserMatch } from '../utils/textNormalizer';
+import { UserSession } from '../types';
+import { loginUser } from '../services/api';
 import { Language } from '../utils/translations';
 
 interface LoginScreenProps {
@@ -39,7 +33,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     localStorage.setItem('power_user_session', JSON.stringify(session));
     const isAdminUser = Boolean(
       session.role !== 'worker' &&
-      (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
+      (session.role === 'admin' || session.idNo === '8695716192' || session.phone?.includes('8695716192') || session.idNo === 'controller' || session.idNo === 'admin')
     );
     if (isAdminUser) {
       localStorage.setItem('power_is_admin', 'true');
@@ -49,139 +43,52 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     onProceedSession(session);
   };
 
-  // Screen mode: 'login' | 'forgot' (Create account removed as per request)
-  const [mode, setMode] = useState<'login' | 'forgot'>('login');
+  // Form states
+  const [loginId, setLoginId] = useState('8695716192');
+  const [password, setPassword] = useState('2004');
+  const [showPassword, setShowPassword] = useState(false);
 
-  // --- LOGIN STATE ---
-  const [loginId, setLoginId] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const isLoggingInRef = useRef(false);
-
-  // --- FORGOT PASSWORD STATE ---
-  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
-  const [forgotId, setForgotId] = useState('');
-  const [forgotPhone, setForgotPhone] = useState('');
-  const [targetAccount, setTargetAccount] = useState<UserAccount | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setNewConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-
-  // General Status Messages
+  // Status states
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Clear messages on mode switch
-  useEffect(() => {
+  // Submission lock ref to prevent duplicate concurrent requests
+  const isSubmittingRef = useRef<boolean>(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
+
     setError(null);
     setSuccessMsg(null);
-  }, [mode]);
 
-  // Handle Login Submit - 1 Request with Submission Lock
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isLoggingInRef.current || isLoggingIn || loading) {
-      return;
-    }
-    setError(null);
-
-    const cleanId = normalizeUniversalText(loginId);
-    const cleanPass = normalizePassword(loginPassword);
+    const cleanId = loginId.trim();
+    const cleanPass = password.trim();
 
     if (!cleanId) {
-      setError('Please enter your User ID');
+      setError(lang === 'bn' ? 'অনুগ্রহ করে ইউজার আইডি বা মোবাইল নম্বর দিন' : 'Please enter User ID or Phone Number');
       return;
     }
 
     if (!cleanPass) {
-      setError('Please enter your Password');
+      setError(lang === 'bn' ? 'অনুগ্রহ করে পাসওয়ার্ড বা পিন দিন' : 'Please enter PIN or Password');
       return;
     }
 
-    isLoggingInRef.current = true;
-    setIsLoggingIn(true);
+    isSubmittingRef.current = true;
     setLoading(true);
 
     try {
       const session = await loginUser(cleanId, cleanPass);
+      setSuccessMsg(lang === 'bn' ? 'লগইন সফল হয়েছে! প্রবেশ করা হচ্ছে...' : 'Login successful! Redirecting...');
       handleSuccess(session);
     } catch (err: any) {
-      setError(err.message || 'Invalid User ID or Password. Please try again.');
+      console.error('Login error:', err);
+      const msg = err.message || (lang === 'bn' ? 'ভুল ইউজার আইডি বা পাসওয়ার্ড! সঠিক তথ্য দিন।' : 'Invalid User ID or Password.');
+      setError(msg);
     } finally {
-      isLoggingInRef.current = false;
-      setIsLoggingIn(false);
-      setLoading(false);
-    }
-  };
-
-  // Forgot Password Step 1: Verify ID
-  const handleForgotVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    const cleanForgotId = normalizeUniversalText(forgotId);
-
-    if (!cleanForgotId) {
-      setError('Please enter your Login User ID');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const latestUsers = await fetchUsers();
-      const found = latestUsers.find((a) => a && isUserMatch(cleanForgotId, a));
-
-      if (!found) {
-        setError('User ID not found! Please check and enter a valid Login ID.');
-        return;
-      }
-
-      setTargetAccount(found);
-      setForgotStep(2);
-    } catch (err: any) {
-      setError(err.message || 'Error verifying user ID');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Forgot Password Step 2: Set New Password
-  const handleForgotResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!targetAccount) return;
-
-    const cleanNewPass = normalizePassword(newPassword);
-    const cleanConfirm = normalizePassword(confirmNewPassword);
-
-    if (!cleanNewPass || cleanNewPass.length < 4) {
-      setError('New password must be at least 4 characters/digits');
-      return;
-    }
-
-    if (cleanNewPass !== cleanConfirm) {
-      setError('Passwords do not match! Please re-type.');
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      await resetUserPassword(targetAccount.idNo, cleanNewPass, targetAccount.phone);
-
-      setSuccessMsg(`Password successfully changed! Please sign in with your new password.`);
-      setLoginId(targetAccount.idNo);
-      setLoginPassword(cleanNewPass);
-      setForgotStep(1);
-      setTargetAccount(null);
-      setNewPassword('');
-      setNewConfirmPassword('');
-      setMode('login');
-    } catch (err: any) {
-      setError(err.message || 'Failed to reset password');
-    } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
@@ -227,33 +134,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <p className="text-xs text-amber-400 font-bold tracking-wider mt-1">
             App Developed By Nayem
           </p>
-          <p className="text-xs text-slate-400 mt-1.5">
-            {mode === 'login' && 'Sign in with your User ID & Password'}
-            {mode === 'forgot' && 'Password Reset & Account Recovery'}
+          <p className="text-xs text-slate-400 mt-1.5 flex items-center justify-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Google Sheets & Apps Script Backend</span>
           </p>
         </div>
 
-        {/* Dynamic Navigation Header if mode is forgot */}
-        {mode !== 'login' && (
-          <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => {
-                setMode('login');
-                setError(null);
-              }}
-              className="text-xs font-bold text-slate-600 hover:text-blue-600 flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Sign In</span>
-            </button>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Password Recovery
-            </span>
-          </div>
-        )}
-
-        {/* Main Content Area */}
+        {/* Main Form */}
         <div className="p-6 sm:p-7 space-y-5">
           {/* Notifications */}
           {error && (
@@ -270,215 +157,95 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </div>
           )}
 
-          {/* ========================================================= */}
-          {/* 1. LOGIN MODE */}
-          {/* ========================================================= */}
-          {mode === 'login' && (
-            <>
-              <form onSubmit={handleLoginSubmit} className="space-y-4">
-                {/* User ID Input */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-slate-500" />
-                      <span>User ID <span className="text-red-500">*</span></span>
-                    </span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      required
-                      value={loginId}
-                      onChange={(e) => setLoginId(e.target.value)}
-                      placeholder="Enter your User ID"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono"
-                    />
-                  </div>
-                </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Field 1: User ID / Phone Number */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-slate-500" />
+                  <span>
+                    {lang === 'bn' ? 'ইউজার আইডি / মোবাইল নম্বর' : 'User ID / Phone Number'} <span className="text-red-500">*</span>
+                  </span>
+                </span>
+                <span className="text-[11px] text-blue-600 font-medium">ID or Mobile</span>
+              </label>
 
-                {/* Password Input */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                      <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Password <span className="text-red-500">*</span></span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setForgotId(loginId || '');
-                        setMode('forgot');
-                      }}
-                      className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
-                    >
-                      <span>Forgot Password?</span>
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <input
-                      type={showLoginPassword ? 'text' : 'password'}
-                      required
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 tracking-wider focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowLoginPassword(!showLoginPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                    >
-                      {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Submit Button */}
-                <button
-                  type="submit"
-                  disabled={loading || isLoggingIn}
-                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed mt-2"
-                >
-                  {loading ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                      <span>Signing In...</span>
-                    </span>
-                  ) : (
-                    <>
-                      <Lock className="w-4 h-4" />
-                      <span>Sign In</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </form>
-
-              {/* Secure Info Note */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Secure Encrypted Connection • Authorized WBSEDCL Personnel</span>
-              </div>
-            </>
-          )}
-
-          {/* ========================================================= */}
-          {/* 2. FORGOT / RESET PASSWORD MODE */}
-          {/* ========================================================= */}
-          {mode === 'forgot' && (
-            <div className="space-y-4">
-              {forgotStep === 1 ? (
-                <form onSubmit={handleForgotVerify} className="space-y-4">
-                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
-                    <p className="font-bold flex items-center gap-1.5 mb-1">
-                      <HelpCircle className="w-4 h-4 text-blue-600" />
-                      <span>Password Recovery</span>
-                    </p>
-                    <p>Enter your registered <strong>User ID</strong> to verify your account and set a new password.</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-500" />
-                        <span>User ID <span className="text-red-500">*</span></span>
-                      </span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={forgotId}
-                      onChange={(e) => setForgotId(e.target.value)}
-                      placeholder="Enter your User ID"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                      <Phone className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Registered Mobile Number (Optional)</span>
-                    </label>
-                    <input
-                      type="tel"
-                      value={forgotPhone}
-                      onChange={(e) => setForgotPhone(e.target.value)}
-                      placeholder="Enter registered mobile number"
-                      className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Verify ID & Proceed</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleForgotResetPassword} className="space-y-4 animate-in fade-in">
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-                    <p className="font-bold">Account Verified</p>
-                    <p className="text-[11px] text-emerald-700 mt-0.5">Please set a new password for this account.</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                        <span>New Password <span className="text-red-500">*</span></span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowNewPassword(!showNewPassword)}
-                        className="text-[10px] text-slate-400 hover:text-slate-600 cursor-pointer"
-                      >
-                        {showNewPassword ? 'Hide' : 'Show'}
-                      </button>
-                    </label>
-                    <input
-                      type={showNewPassword ? 'text' : 'password'}
-                      required
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Minimum 4 characters/digits"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      Confirm New Password <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type={showNewPassword ? 'text' : 'password'}
-                      required
-                      value={confirmNewPassword}
-                      onChange={(e) => setNewConfirmPassword(e.target.value)}
-                      placeholder="Re-enter your new password"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    {loading ? (
-                      <span>Saving...</span>
-                    ) : (
-                      <>
-                        <Check className="w-4 h-4" />
-                        <span>Update & Save Password</span>
-                      </>
-                    )}
-                  </button>
-                </form>
-              )}
+              <input
+                type="text"
+                required
+                autoFocus
+                value={loginId}
+                onChange={(e) => setLoginId(e.target.value)}
+                placeholder="যেমন: 8695716192, LM001, ইত্যাদি"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono tracking-wider"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                {lang === 'bn' 
+                  ? 'আপনার অফিসিয়াল ইউজার আইডি (যেমন 8695716192 বা LM001) বা মোবাইল নম্বর দিন' 
+                  : 'Enter your registered User ID or Phone Number'}
+              </p>
             </div>
-          )}
+
+            {/* Field 2: Password / PIN */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                  <span>
+                    {lang === 'bn' ? 'পাসওয়ার্ড / পিন (PIN)' : 'Password / PIN'} <span className="text-red-500">*</span>
+                  </span>
+                </span>
+              </label>
+
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••"
+                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono tracking-wider"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={loading || !loginId.trim() || !password.trim()}
+              className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed mt-2"
+            >
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  <span>{lang === 'bn' ? 'যাচাই করা হচ্ছে...' : 'Signing in...'}</span>
+                </span>
+              ) : (
+                <>
+                  <span>{lang === 'bn' ? 'লগইন করুন (Sign In)' : 'Sign In'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+
+            {/* Secure Info Note */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-600">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                {lang === 'bn' 
+                  ? 'অফিসিয়াল WBSEDCL পোর্টাল • Google Sheets ক্লাউড ব্যাকএন্ড' 
+                  : 'Official WBSEDCL Portal • Google Sheets Backend'}
+              </span>
+            </div>
+          </form>
         </div>
 
         {/* Footer info */}

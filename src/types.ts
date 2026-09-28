@@ -122,6 +122,8 @@ export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_repo
 export interface UserSession {
   id: string;
   idNo: string;
+  uid?: string;
+  email?: string;
   name: string;
   phone?: string;
   role: 'admin' | 'worker' | 'supervisor';
@@ -134,8 +136,10 @@ export interface UserSession {
 export interface UserAccount {
   id: string;
   idNo: string;
+  uid?: string;
+  email?: string;
   userId?: string;
-  password: string;
+  password?: string;
   name: string;
   phone: string;
   role: 'admin' | 'worker' | 'supervisor';
