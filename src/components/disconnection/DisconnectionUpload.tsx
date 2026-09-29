@@ -37,6 +37,7 @@ interface ParsedConsumerTask extends Partial<DisconnectionTask> {
   isDuplicateAccount?: boolean;
   isInvalid?: boolean;
   validationNote?: string;
+  [key: string]: any;
 }
 
 export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({

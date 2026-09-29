@@ -168,22 +168,6 @@ async function callGoogleAppsScript(
   if (action === 'healthCheck') finalAction = 'health';
   if (action === 'saveUser' || action === 'register') finalAction = 'createUser';
   if (action === 'getChat') finalAction = 'chat';
-  if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks') {
-    finalAction = 'entries';
-    finalPayload.category = 'Disconnection';
-  }
-  if (action === 'submitDisconnectionReport') {
-    finalAction = 'updateEntry';
-    if (!finalPayload.category) finalPayload.category = 'Disconnection';
-  }
-  if (action === 'uploadDisconnectionTasks') {
-    finalAction = 'createEntry';
-    if (!finalPayload.category) finalPayload.category = 'Disconnection';
-  }
-  if (action === 'assignDisconnectionTask' || action === 'archiveDisconnectionTask' || action === 'restoreDisconnectionTask') {
-    finalAction = 'updateEntry';
-    if (!finalPayload.category) finalPayload.category = 'Disconnection';
-  }
 
   // Submission Idempotency Check for 'createEntry'
   if (finalAction === 'createEntry') {
@@ -436,7 +420,7 @@ async function callGoogleAppsScript(
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '80mb' }));
 app.use(express.urlencoded({ limit: '80mb', extended: true }));
@@ -1438,16 +1422,35 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const consumerId = String(entry['Consumer Id'] || entry['Consumer ID'] || entry.consumerId || entry.accountNumber || '').trim();
   const consumerName = String(entry['Name'] || entry.Name || entry.consumerName || entry.name || '').trim();
   const consumerAddress = String(entry['Address'] || entry.Address || entry.consumerAddress || entry.address || '').trim();
-  const bClassPhase = String(entry['BClass/Phase'] || entry.bClassPhase || entry.deviceType || 'I').trim();
-  const consumerClass = String(entry['Class'] || entry.baseClass || entry.class || 'Domestic').trim();
-  const govNonGov = String(entry['Gov/Non-Gov'] || entry.govNonGov || entry.govStatus || 'Non-Gov').trim();
-  const meterNumber = String(entry['Meter'] || entry.meter || entry.meterNumber || entry.meterNo || entry.finalReading || '').trim();
-  const dueDateRange = String(entry['O/S Due date Range'] || entry.dueDateRange || entry.osDueDateRange || '').trim();
+  const baseClass = String(entry['Base Class'] || entry.baseClass || entry.class || 'Domestic').trim();
+  const consumerClass = String(entry['Class'] || entry.classType || entry.class || entry.baseClass || 'Domestic').trim();
+  const device = String(entry['Device'] || entry['BClass/Phase'] || entry.deviceType || entry.bClassPhase || 'I').trim();
+  const dueDateRange = String(entry['O/S Duedate Range'] || entry['O/S Due date Range'] || entry.dueDateRange || entry.osDueDateRange || '').trim();
   const outstandingDue = String(entry['D2 Net O/S'] || entry.outstandingDue || entry.arrearAmount || entry.d2NetOs || '').trim();
+  const mobile = normalizeTaskPhone(entry) || String(entry['Mobile'] || entry['Mobile Number'] || entry['Mobile No'] || entry.mobile || '').trim();
+  const numberVal = String(entry['Number'] || entry.number || entry['Meter'] || entry.meterNumber || entry.meterNo || '').trim();
+  const latitude = String(entry['Latitude'] || entry.latitude || '').trim();
+  const longitude = String(entry['Longitude'] || entry.longitude || '').trim();
   const rawStatus = String(entry['Discon Status'] || entry.disconStatus || entry.taskStatus || entry.status || entry['Status'] || 'PENDING').trim().toUpperCase();
   const status = rawStatus || 'PENDING';
   const reportDate = String(entry['Discon Date'] || entry.disconDate || entry.reportDate || entry.date || '').trim();
-  const phoneNumber = normalizeTaskPhone(entry) || String(entry['Mobile Number'] || entry['Mobile No'] || entry.mobile || '').trim();
+  const imageUrl = String(entry['Image'] || entry.image || entry.photoUrl || entry['Photo Evidence'] || '').trim();
+  const reading = String(entry['Reading'] || entry.reading || entry.meterReading || numberVal || '').trim();
+  const paymentStatus = String(entry['Payment Status'] || entry.paymentStatus || (status === 'PAID' ? 'PAID' : '')).trim();
+  const gisPole = String(entry['Gis Pole'] || entry.gisPole || entry.poleNo || '').trim();
+  const agency = String(entry['Agency'] || entry.agency || entry.assignedAgency || entry['Agency Name'] || '').trim();
+  const notes = String(entry['Notes'] || entry.notes || entry.workerRemarks || entry.workerReport || '').trim();
+  const natureOfConn = String(entry['Nature of Conn'] || entry.natureOfConn || '').trim();
+  const govNonGov = String(entry['Gov/Non-Gov'] || entry.govNonGov || entry.govStatus || 'Non-Gov').trim();
+  const lastUpdated = String(entry['Last Updated'] || entry.lastUpdated || entry.updatedAt || new Date().toISOString()).trim();
+  const priority = String(entry['Priority'] || entry.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
+  const paidAmount = String(entry['Paid Amount'] || entry.paidAmount || (status === 'PAID' ? outstandingDue : '')).trim();
+  const paidDate = String(entry['Paid Date'] || entry.paidDate || entry.paymentDate || (status === 'PAID' ? reportDate : '')).trim();
+  const paidType = String(entry['Paid Type'] || entry.paidType || entry.paymentReference || '').trim();
+  const outstandingAfter = String(entry['Outstanding After'] || entry.outstandingAfter || '').trim();
+  const nextPaymentDate = String(entry['Next Payment Date'] || entry.nextPaymentDate || '').trim();
+  const paymentSource = String(entry['Payment Source'] || entry.paymentSource || '').trim();
+  const uploadDate = String(entry['Upload Date'] || entry.uploadDate || entry.createdAt || '').trim();
 
   const rawSl = entry.serialNumber || entry['SL No'] || entry.slNo || entry.sl;
   const parsedSl = parseSlNumber(rawSl) || index;
@@ -1455,67 +1458,103 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const taskId = String(entry.taskId || entry['Task ID'] || entry.id || entry['Submission ID'] || `TASK-DISC-${consumerId || index}`).trim();
 
   return {
-    // 14 Standard WBSEDCL Disconnection Headers (Exact Order & Names)
+    // Exact 33 Google Sheet Columns (A:AG)
     'off_code': offCode,
     'MRU': mru,
     'Consumer Id': consumerId,
     'Name': consumerName,
     'Address': consumerAddress,
-    'BClass/Phase': bClassPhase,
+    'Base Class': baseClass,
     'Class': consumerClass,
-    'Gov/Non-Gov': govNonGov,
-    'Meter': meterNumber,
-    'O/S Due date Range': dueDateRange,
+    'Device': device,
+    'O/S Duedate Range': dueDateRange,
     'D2 Net O/S': outstandingDue,
+    'Mobile': mobile,
+    'Number': numberVal,
+    'Latitude': latitude,
+    'Longitude': longitude,
     'Discon Status': status,
     'Discon Date': reportDate,
-    'Mobile Number': phoneNumber,
+    'Image': imageUrl,
+    'Reading': reading,
+    'Payment Status': paymentStatus,
+    'Gis Pole': gisPole,
+    'Agency': agency,
+    'Notes': notes,
+    'Nature of Conn': natureOfConn,
+    'Gov/Non-Gov': govNonGov,
+    'Last Updated': lastUpdated,
+    'Priority': priority,
+    'Paid Amount': paidAmount,
+    'Paid Date': paidDate,
+    'Paid Type': paidType,
+    'Outstanding After': outstandingAfter,
+    'Next Payment Date': nextPaymentDate,
+    'Payment Source': paymentSource,
+    'Upload Date': uploadDate,
 
-    // Normalized Developer Aliases
-    offCode,
-    bClassPhase,
-    govNonGov,
-    osDueDateRange: dueDateRange,
-    d2NetOs: outstandingDue,
-    disconStatus: status,
-    disconDate: reportDate,
-    mobileNumber: phoneNumber,
-
-    // Frontend compatibility properties
+    // Developer Aliases & Frontend compatibility
     serialNumber,
     taskId,
     consumerId,
     consumerName,
     accountNumber: consumerId,
-    meterNumber,
+    meterNumber: numberVal || reading,
+    reading,
+    meterReading: reading,
     consumerAddress,
-    phoneNumber,
+    phoneNumber: mobile,
+    mobileNumber: mobile,
+    mobile,
     area: offCode,
-    disconnectionReason: `Outstanding Bill (D2 Net O/S: ${outstandingDue})`,
-    assignedWorkerId: String(entry.workerId || entry.assignedWorkerId || entry['Worker ID'] || '').trim(),
-    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || entry['Worker Name'] || '').trim(),
-    taskStatus: status,
-    workerReport: String(entry.notes || entry.workerReport || entry.workerRemarks || '').trim(),
-    workerRemarks: String(entry.notes || entry.workerRemarks || entry.workerReport || '').trim(),
-    reportDate,
-    reportTime: String(entry.reportTime || '').trim(),
-    submittedBy: String(entry.submittedBy || entry.workerName || '').trim(),
-    createdAt: String(entry.createdAt || entry.date || reportDate || new Date().toISOString()).trim(),
-    updatedAt: String(entry.updatedAt || new Date().toISOString()).trim(),
-    completionPercentage: (status === 'COMPLETED' || status === 'DISCONNECT' || status === 'PAID') ? 100 : (status === 'IN PROGRESS' ? 50 : 0),
-    photoUrl: String(entry.photoUrl || entry['Photo Evidence'] || '').trim(),
+    offCode,
+    mru,
     mruSection: mru,
     cccFeeder: mru,
+    disconnectionReason: `Outstanding Bill (D2 Net O/S: ${outstandingDue})`,
+    assignedWorkerId: String(entry.workerId || entry.assignedWorkerId || entry['Worker ID'] || '').trim(),
+    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || agency || '').trim(),
+    assignedAgency: agency,
+    agency,
+    taskStatus: status,
+    disconStatus: status,
+    disconDate: reportDate,
+    workerReport: notes,
+    workerRemarks: notes,
+    notes,
+    reportDate,
+    reportTime: String(entry.reportTime || '').trim(),
+    submittedBy: String(entry.submittedBy || entry.workerName || agency || '').trim(),
+    createdAt: uploadDate || lastUpdated || new Date().toISOString(),
+    updatedAt: lastUpdated || new Date().toISOString(),
+    lastUpdated,
+    completionPercentage: (status === 'COMPLETED' || status === 'DISCONNECT' || status === 'PAID') ? 100 : (status === 'IN PROGRESS' ? 50 : 0),
+    photoUrl: imageUrl,
+    imageUrl,
     outstandingDue,
+    d2NetOs: outstandingDue,
     dueDateRange,
-    baseClass: consumerClass,
-    deviceType: bClassPhase,
-    priority: (parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : (String(entry.priority || 'NORMAL').toUpperCase()),
-    assignedAgency: String(entry.agencyName || entry.assignedAgency || entry['Agency Name'] || '').trim(),
-    paidAmount: String(entry.paidAmount || (status === 'PAID' ? outstandingDue : '')).trim(),
-    paymentDate: String(entry.paymentDate || (status === 'PAID' ? reportDate : '')).trim(),
-    paymentReference: String(entry.paymentReference || '').trim(),
-    meterReading: meterNumber,
+    osDueDateRange: dueDateRange,
+    baseClass,
+    classType: consumerClass,
+    deviceType: device,
+    device,
+    priority,
+    paidAmount,
+    paidDate,
+    paymentDate: paidDate,
+    paidType,
+    paymentReference: paidType,
+    paymentStatus,
+    gisPole,
+    natureOfConn,
+    govNonGov,
+    outstandingAfter,
+    nextPaymentDate,
+    paymentSource,
+    uploadDate,
+    latitude,
+    longitude,
     statusHistory: Array.isArray(entry.statusHistory) ? entry.statusHistory : []
   };
 }
@@ -1848,19 +1887,36 @@ app.get('/api/disconnection-tasks/history', async (req, res) => {
 // SERVER INITIALIZATION & VITE MIDDLEWARE
 // ============================================================================
 async function startServer() {
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+
   const isProduction =
     process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.K_REVISION) ||
+    Boolean(process.env.PORT && process.env.PORT !== '3000') ||
     process.argv.some(arg => typeof arg === 'string' && (arg.includes('dist') || arg.endsWith('.cjs')));
 
-  const distPath = path.join(process.cwd(), 'dist');
-
-  if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  if (!isProduction && !hasDist) {
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('Vite middleware initialization notice, serving static:', viteErr);
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        const indexPath = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(200).send('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>POWER</title></head><body><div id="root"></div></body></html>');
+        }
+      });
+    }
   } else {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -1873,23 +1929,41 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`⚡ POWER server running on http://localhost:${PORT}`);
-    console.log(`📊 Google Spreadsheet ID: ${GOOGLE_SHEET_ID}`);
-    console.log(`🔗 Google Apps Script URL: ${GOOGLE_APPS_SCRIPT_URL}`);
-  });
+  const desiredPort = parseInt(process.env.PORT || '3000', 10);
 
-  process.on('SIGTERM', () => {
-    server.close(() => {
-      process.exit(0);
+  function startListening(port: number) {
+    const s = app.listen(port, '0.0.0.0', () => {
+      console.log(`⚡ POWER server running on http://localhost:${port}`);
+      console.log(`📊 Google Spreadsheet ID: ${GOOGLE_SHEET_ID}`);
+      console.log(`🔗 Google Apps Script URL: ${GOOGLE_APPS_SCRIPT_URL}`);
     });
-  });
 
-  process.on('SIGINT', () => {
-    server.close(() => {
-      process.exit(0);
+    s.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE' && port !== 3000) {
+        console.warn(`Port ${port} in use (e.g. by ingress proxy), falling back to port 3000...`);
+        startListening(3000);
+      } else {
+        console.error('Server listen error:', err);
+        process.exit(1);
+      }
     });
-  });
+
+    process.on('SIGTERM', () => {
+      s.close(() => {
+        process.exit(0);
+      });
+    });
+
+    process.on('SIGINT', () => {
+      s.close(() => {
+        process.exit(0);
+      });
+    });
+
+    return s;
+  }
+
+  startListening(desiredPort);
 }
 
 startServer();

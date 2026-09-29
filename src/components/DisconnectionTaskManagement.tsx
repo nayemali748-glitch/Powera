@@ -234,18 +234,28 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         if (ag !== agencyFilter) return false;
       }
 
-      // Search Query
+      // Search Query: Consumer Id / Name / MRU / off_code / Phone / Meter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const match =
           (t.serialNumber && t.serialNumber.toLowerCase().includes(q)) ||
           (t.consumerName && t.consumerName.toLowerCase().includes(q)) ||
+          (t.Name && t.Name.toLowerCase().includes(q)) ||
           (t.consumerId && t.consumerId.toLowerCase().includes(q)) ||
+          (t['Consumer Id'] && t['Consumer Id'].toLowerCase().includes(q)) ||
           (t.accountNumber && t.accountNumber.toLowerCase().includes(q)) ||
-          (t.consumerAddress && t.consumerAddress.toLowerCase().includes(q)) ||
-          (t.meterNumber && t.meterNumber.toLowerCase().includes(q)) ||
+          (t.mru && t.mru.toLowerCase().includes(q)) ||
+          (t.MRU && t.MRU.toLowerCase().includes(q)) ||
           (t.mruSection && t.mruSection.toLowerCase().includes(q)) ||
+          (t.offCode && t.offCode.toLowerCase().includes(q)) ||
+          (t.off_code && t.off_code.toLowerCase().includes(q)) ||
+          (t.area && t.area.toLowerCase().includes(q)) ||
+          (t.consumerAddress && t.consumerAddress.toLowerCase().includes(q)) ||
+          (t.Address && t.Address.toLowerCase().includes(q)) ||
+          (t.meterNumber && t.meterNumber.toLowerCase().includes(q)) ||
+          (t.Number && t.Number.toLowerCase().includes(q)) ||
           (t.phoneNumber && t.phoneNumber.includes(q)) ||
+          (t.Mobile && t.Mobile.includes(q)) ||
           (t.taskId && t.taskId.toLowerCase().includes(q));
         if (!match) return false;
       }

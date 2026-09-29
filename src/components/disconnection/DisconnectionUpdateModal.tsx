@@ -70,6 +70,27 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     task.paymentDate || new Date().toISOString().split('T')[0]
   );
   const [paymentReference, setPaymentReference] = useState<string>(task.paymentReference || '');
+  const [disconDate, setDisconDate] = useState<string>(
+    task.disconDate || task.reportDate || (task as any)['Discon Date'] || new Date().toISOString().split('T')[0]
+  );
+  const [gisPole, setGisPole] = useState<string>(
+    task.gisPole || (task as any)['Gis Pole'] || ''
+  );
+  const [paymentStatus, setPaymentStatus] = useState<string>(
+    task.paymentStatus || (task as any)['Payment Status'] || (task.taskStatus === 'PAID' ? 'PAID' : 'UNPAID')
+  );
+  const [paidType, setPaidType] = useState<string>(
+    task.paidType || (task as any)['Paid Type'] || task.paymentReference || ''
+  );
+  const [outstandingAfter, setOutstandingAfter] = useState<string>(
+    task.outstandingAfter || (task as any)['Outstanding After'] || ''
+  );
+  const [nextPaymentDate, setNextPaymentDate] = useState<string>(
+    task.nextPaymentDate || (task as any)['Next Payment Date'] || ''
+  );
+  const [paymentSource, setPaymentSource] = useState<string>(
+    task.paymentSource || (task as any)['Payment Source'] || ''
+  );
   const [conditionalReason, setConditionalReason] = useState<string>('');
 
   // UI States
@@ -91,13 +112,20 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const initialSt = (task.taskStatus as DisconnectionTaskStatus) || 'DISCONNECT';
       setSelectedStatus(initialSt === 'PENDING' ? 'DISCONNECT' : initialSt);
       setIsUrgent(String(task.priority || '').toUpperCase() === 'URGENT');
-      setAssignedAgency(task.assignedAgency || task.assignedWorkerName || '');
-      setPhotoDataUrl(task.photoUrl || '');
-      setMeterReading(task.meterReading || '');
-      setRemarks(task.workerRemarks || task.workerReport || '');
-      setPaidAmount(task.paidAmount || (task.outstandingDue ? String(task.outstandingDue) : ''));
-      setPaymentDate(task.paymentDate || new Date().toISOString().split('T')[0]);
-      setPaymentReference(task.paymentReference || '');
+      setAssignedAgency(task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || '');
+      setPhotoDataUrl(task.photoUrl || (task as any)['Image'] || '');
+      setMeterReading(task.meterReading || (task as any)['Reading'] || '');
+      setRemarks(task.workerRemarks || task.workerReport || (task as any)['Notes'] || '');
+      setPaidAmount(task.paidAmount || (task as any)['Paid Amount'] || (task.outstandingDue ? String(task.outstandingDue) : ''));
+      setPaymentDate(task.paymentDate || (task as any)['Paid Date'] || new Date().toISOString().split('T')[0]);
+      setPaymentReference(task.paymentReference || (task as any)['Paid Type'] || '');
+      setDisconDate(task.disconDate || task.reportDate || (task as any)['Discon Date'] || new Date().toISOString().split('T')[0]);
+      setGisPole(task.gisPole || (task as any)['Gis Pole'] || '');
+      setPaymentStatus(task.paymentStatus || (task as any)['Payment Status'] || (initialSt === 'PAID' ? 'PAID' : 'UNPAID'));
+      setPaidType(task.paidType || (task as any)['Paid Type'] || task.paymentReference || '');
+      setOutstandingAfter(task.outstandingAfter || (task as any)['Outstanding After'] || '');
+      setNextPaymentDate(task.nextPaymentDate || (task as any)['Next Payment Date'] || '');
+      setPaymentSource(task.paymentSource || (task as any)['Payment Source'] || '');
       setConditionalReason('');
       setErrorMessage(null);
       setShowRoundSavePopup(false);
@@ -287,27 +315,44 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
       const reportPayload = {
         taskId: task.taskId,
-        consumerId: task.consumerId,
-        consumerName: task.consumerName,
-        consumerAddress: task.consumerAddress,
-        phoneNumber: modalPhone || task.phoneNumber,
+        consumerId: task.consumerId || (task as any)['Consumer Id'],
+        consumerName: task.consumerName || (task as any)['Name'],
+        consumerAddress: task.consumerAddress || (task as any)['Address'],
+        phoneNumber: modalPhone || task.phoneNumber || (task as any)['Mobile'],
+        offCode: task.offCode || (task as any)['off_code'] || task.area,
+        mru: task.mru || (task as any)['MRU'] || task.mruSection,
         workerId,
         workerName,
         taskStatus: selectedStatus,
+        disconStatus: selectedStatus,
+        disconDate: disconDate,
+        reportDate: disconDate,
         workerReport: combinedRemarks,
         workerRemarks: combinedRemarks,
+        notes: combinedRemarks,
         photoUrl: photoDataUrl,
-        paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
-        paymentDate: selectedStatus === 'PAID' ? paymentDate : undefined,
-        paymentReference: selectedStatus === 'PAID' ? paymentReference : undefined,
+        image: photoDataUrl,
         meterReading: meterReading || undefined,
+        reading: meterReading || undefined,
+        paymentStatus: selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
+        gisPole: gisPole || undefined,
         priority: isUrgent ? 'URGENT' : 'NORMAL',
-        assignedAgency: assignedAgency || undefined
+        assignedAgency: assignedAgency || undefined,
+        agency: assignedAgency || undefined,
+        paidAmount: selectedStatus === 'PAID' ? paidAmount : (paidAmount || undefined),
+        paymentDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || undefined),
+        paidDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || undefined),
+        paidType: paidType || paymentReference || undefined,
+        paymentReference: paidType || paymentReference || undefined,
+        outstandingAfter: outstandingAfter || undefined,
+        nextPaymentDate: nextPaymentDate || undefined,
+        paymentSource: paymentSource || undefined
       };
 
       const res = await submitDisconnectionTaskReport(reportPayload);
 
       if (res && res.success) {
+        const finalImgUrl = (res as any).imageUrl || photoDataUrl || task.photoUrl || (task as any)['Image'];
         const newHistoryItem = {
           date: dateNow,
           time: timeNow,
@@ -317,7 +362,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
           remarks: combinedRemarks,
           paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
           meterReading: meterReading || undefined,
-          photoUrl: photoDataUrl || undefined
+          photoUrl: finalImgUrl || undefined
         };
 
         const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
@@ -325,20 +370,44 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         const updatedTaskObj: DisconnectionTask = {
           ...task,
           taskStatus: selectedStatus,
+          disconStatus: selectedStatus,
+          'Discon Status': selectedStatus,
+          disconDate: disconDate,
+          reportDate: disconDate,
+          'Discon Date': disconDate,
           priority: isUrgent ? 'URGENT' : 'NORMAL',
+          'Priority': isUrgent ? 'URGENT' : 'NORMAL',
           assignedAgency: assignedAgency || task.assignedAgency,
           assignedWorkerName: assignedAgency || task.assignedWorkerName,
+          'Agency': assignedAgency || (task as any)['Agency'],
           workerRemarks: combinedRemarks,
           workerReport: combinedRemarks,
-          photoUrl: photoDataUrl || task.photoUrl,
+          'Notes': combinedRemarks,
+          photoUrl: finalImgUrl,
+          'Image': finalImgUrl,
           meterReading: meterReading || task.meterReading,
-          paidAmount: selectedStatus === 'PAID' ? paidAmount : task.paidAmount,
-          paymentDate: selectedStatus === 'PAID' ? paymentDate : task.paymentDate,
-          paymentReference: selectedStatus === 'PAID' ? paymentReference : task.paymentReference,
-          reportDate: dateNow,
+          'Reading': meterReading || (task as any)['Reading'],
+          paymentStatus: selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
+          'Payment Status': selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
+          gisPole: gisPole || task.gisPole,
+          'Gis Pole': gisPole || (task as any)['Gis Pole'],
+          paidAmount: selectedStatus === 'PAID' ? paidAmount : (paidAmount || task.paidAmount),
+          'Paid Amount': selectedStatus === 'PAID' ? paidAmount : (paidAmount || (task as any)['Paid Amount']),
+          paymentDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || task.paymentDate),
+          'Paid Date': selectedStatus === 'PAID' ? paymentDate : (paymentDate || (task as any)['Paid Date']),
+          paymentReference: paidType || paymentReference || task.paymentReference,
+          'Paid Type': paidType || paymentReference || (task as any)['Paid Type'],
+          outstandingAfter: outstandingAfter || task.outstandingAfter,
+          'Outstanding After': outstandingAfter || (task as any)['Outstanding After'],
+          nextPaymentDate: nextPaymentDate || task.nextPaymentDate,
+          'Next Payment Date': nextPaymentDate || (task as any)['Next Payment Date'],
+          paymentSource: paymentSource || task.paymentSource,
+          'Payment Source': paymentSource || (task as any)['Payment Source'],
           reportTime: timeNow,
           submittedBy: workerName,
           updatedAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString(),
+          'Last Updated': new Date().toISOString(),
           statusHistory: [newHistoryItem, ...existingHistory]
         };
 
@@ -584,6 +653,37 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                   </div>
                   <div>
                     <label className="text-[11px] font-bold text-teal-900 block mb-1">
+                      Payment Date
+                    </label>
+                    <input
+                      type="date"
+                      value={paymentDate}
+                      onChange={e => setPaymentDate(e.target.value)}
+                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
+                      Paid Type / Mode
+                    </label>
+                    <select
+                      value={paidType}
+                      onChange={e => {
+                        setPaidType(e.target.value);
+                        if (!paymentReference) setPaymentReference(e.target.value);
+                      }}
+                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    >
+                      <option value="">Select Mode</option>
+                      <option value="UPI / Online">UPI / Online</option>
+                      <option value="Cash">Cash</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="RTGS / NEFT">RTGS / NEFT</option>
+                      <option value="Counter Receipt">Counter Receipt</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
                       Receipt / Ref No.
                     </label>
                     <input
@@ -591,6 +691,30 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                       value={paymentReference}
                       onChange={e => setPaymentReference(e.target.value)}
                       placeholder="Receipt or Money Receipt no..."
+                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
+                      Payment Source
+                    </label>
+                    <input
+                      type="text"
+                      value={paymentSource}
+                      onChange={e => setPaymentSource(e.target.value)}
+                      placeholder="e.g. Field / Portal / Counter..."
+                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
+                      Outstanding After (₹)
+                    </label>
+                    <input
+                      type="number"
+                      value={outstandingAfter}
+                      onChange={e => setOutstandingAfter(e.target.value)}
+                      placeholder="Remaining due if any..."
                       className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
                     />
                   </div>
@@ -826,8 +950,70 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             </div>
           </div>
 
-          {/* CARD 3: METER READING & REMARKS (Matching IMG_6113.png) */}
+          {/* CARD 3: OPERATIONAL DETAILS (METER READING, DISCON DATE, GIS POLE, REMARKS) */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-4">
+            {/* DISCON DATE & GIS POLE */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  DISCON DATE
+                </span>
+                <input
+                  type="date"
+                  value={disconDate}
+                  onChange={e => setDisconDate(e.target.value)}
+                  className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  GIS POLE NO.
+                </span>
+                <input
+                  type="text"
+                  value={gisPole}
+                  onChange={e => setGisPole(e.target.value)}
+                  placeholder="e.g. POL-1029..."
+                  className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* PAYMENT STATUS & PAYMENT SOURCE (If not already marked as PAID) */}
+            {selectedStatus !== 'PAID' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                    PAYMENT STATUS
+                  </span>
+                  <select
+                    value={paymentStatus}
+                    onChange={e => setPaymentStatus(e.target.value)}
+                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="UNPAID">UNPAID</option>
+                    <option value="PAID">PAID</option>
+                    <option value="PARTIAL">PARTIAL</option>
+                    <option value="DISPUTED">DISPUTED</option>
+                  </select>
+                </div>
+
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                    PAYMENT SOURCE
+                  </span>
+                  <input
+                    type="text"
+                    value={paymentSource}
+                    onChange={e => setPaymentSource(e.target.value)}
+                    placeholder="e.g. Counter / Portal / Cash..."
+                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* METER READING */}
             <div>
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">

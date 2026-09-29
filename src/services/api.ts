@@ -1517,38 +1517,75 @@ export async function uploadDisconnectionTasks(
   // Map each task to the exact 14 WBSEDCL Google Sheet headers and standard model
   const standardizedTasks = tasks.map(t => {
     const cId = String((t as any)['Consumer Id'] || t.consumerId || (t as any)['Consumer ID'] || t.accountNumber || '').trim();
-    const meter = String((t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || t.meterReading || '').trim();
+    const meter = String((t as any)['Number'] || (t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || t.reading || t.meterReading || '').trim();
     const offCode = String((t as any)['off_code'] || t.offCode || t.area || '5233100').trim();
     const mru = String((t as any)['MRU'] || (t as any).mru || t.mruSection || '').trim();
     const name = String((t as any)['Name'] || t.consumerName || (t as any)['Customer Name'] || '').trim();
     const address = String((t as any)['Address'] || t.consumerAddress || '').trim();
-    const bClassPhase = String((t as any)['BClass/Phase'] || t.bClassPhase || t.deviceType || 'I').trim();
-    const consumerClass = String((t as any)['Class'] || t.baseClass || 'Domestic').trim();
-    const govNonGov = String((t as any)['Gov/Non-Gov'] || (t as any)['govNonGov'] || 'Non-Gov').trim();
-    const dueDateRange = String((t as any)['O/S Due date Range'] || t.dueDateRange || '').trim();
+    const baseClass = String((t as any)['Base Class'] || t.baseClass || 'Domestic').trim();
+    const consumerClass = String((t as any)['Class'] || t.classType || t.baseClass || 'Domestic').trim();
+    const device = String((t as any)['Device'] || (t as any)['BClass/Phase'] || (t as any).bClassPhase || t.deviceType || 'I').trim();
+    const dueDateRange = String((t as any)['O/S Duedate Range'] || (t as any)['O/S Due date Range'] || t.dueDateRange || '').trim();
     const d2NetOs = String((t as any)['D2 Net O/S'] || t.outstandingDue || '').trim();
+    const mobile = String((t as any)['Mobile'] || (t as any)['Mobile Number'] || t.phoneNumber || t.mobileNumber || '').trim();
+    const latitude = String((t as any)['Latitude'] || t.latitude || '').trim();
+    const longitude = String((t as any)['Longitude'] || t.longitude || '').trim();
+    const natureOfConn = String((t as any)['Nature of Conn'] || t.natureOfConn || '').trim();
+    const govNonGov = String((t as any)['Gov/Non-Gov'] || (t as any)['govNonGov'] || 'Non-Gov').trim();
     const disconStatus = String((t as any)['Discon Status'] || t.disconStatus || t.taskStatus || 'PENDING').trim().toUpperCase();
     const disconDate = String((t as any)['Discon Date'] || t.disconDate || t.reportDate || '').trim();
-    const mobile = String((t as any)['Mobile Number'] || t.phoneNumber || t.mobileNumber || '').trim();
+    const image = String((t as any)['Image'] || t.photoUrl || t.imageUrl || '').trim();
+    const reading = String((t as any)['Reading'] || t.meterReading || meter || '').trim();
+    const paymentStatus = String((t as any)['Payment Status'] || t.paymentStatus || (disconStatus === 'PAID' ? 'PAID' : 'UNPAID')).trim();
+    const gisPole = String((t as any)['Gis Pole'] || t.gisPole || '').trim();
+    const agency = String((t as any)['Agency'] || t.assignedAgency || t.assignedWorkerName || '').trim();
+    const notes = String((t as any)['Notes'] || t.workerRemarks || t.workerReport || '').trim();
+    const priority = String((t as any)['Priority'] || t.priority || ((parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
+    const paidAmount = String((t as any)['Paid Amount'] || t.paidAmount || '').trim();
+    const paidDate = String((t as any)['Paid Date'] || t.paidDate || t.paymentDate || '').trim();
+    const paidType = String((t as any)['Paid Type'] || t.paidType || t.paymentReference || '').trim();
+    const outstandingAfter = String((t as any)['Outstanding After'] || t.outstandingAfter || d2NetOs).trim();
+    const nextPaymentDate = String((t as any)['Next Payment Date'] || t.nextPaymentDate || '').trim();
+    const paymentSource = String((t as any)['Payment Source'] || t.paymentSource || '').trim();
+    const uploadTimestamp = new Date().toISOString();
 
     return {
-      // 14 Exact Headers
+      // 33 Exact Google Sheet Headers (A:AG)
       'off_code': offCode,
       'MRU': mru,
       'Consumer Id': cId,
       'Name': name,
       'Address': address,
-      'BClass/Phase': bClassPhase,
+      'Base Class': baseClass,
       'Class': consumerClass,
-      'Gov/Non-Gov': govNonGov,
-      'Meter': meter,
-      'O/S Due date Range': dueDateRange,
+      'Device': device,
+      'O/S Duedate Range': dueDateRange,
       'D2 Net O/S': d2NetOs,
+      'Mobile': mobile,
+      'Number': meter,
+      'Latitude': latitude,
+      'Longitude': longitude,
       'Discon Status': disconStatus,
       'Discon Date': disconDate,
-      'Mobile Number': mobile,
+      'Image': image,
+      'Reading': reading,
+      'Payment Status': paymentStatus,
+      'Gis Pole': gisPole,
+      'Agency': agency,
+      'Notes': notes,
+      'Nature of Conn': natureOfConn,
+      'Gov/Non-Gov': govNonGov,
+      'Last Updated': uploadTimestamp,
+      'Priority': priority,
+      'Paid Amount': paidAmount,
+      'Paid Date': paidDate,
+      'Paid Type': paidType,
+      'Outstanding After': outstandingAfter,
+      'Next Payment Date': nextPaymentDate,
+      'Payment Source': paymentSource,
+      'Upload Date': uploadTimestamp,
 
-      // Model fields
+      // Model fields for frontend compatibility
       consumerId: cId,
       consumerName: name,
       meterNumber: meter,
@@ -1635,21 +1672,70 @@ export async function submitDisconnectionTaskReport(report: {
   consumerId?: string;
   phoneNumber?: string;
   reportDate?: string;
-}): Promise<{ success: boolean; message: string; taskId?: string; status?: string }> {
+  disconDate?: string;
+  disconStatus?: string;
+  gisPole?: string;
+  paymentStatus?: string;
+  outstandingAfter?: string;
+  nextPaymentDate?: string;
+  paymentSource?: string;
+  paidDate?: string;
+  paidType?: string;
+  notes?: string;
+  agency?: string;
+  reading?: string;
+  image?: string;
+  offCode?: string;
+  mru?: string;
+  [key: string]: any;
+}): Promise<{ success: boolean; message: string; taskId?: string; status?: string; imageUrl?: string }> {
   const reqId = report.submissionId || `REQ-SUB-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
   const cId = String(report.consumerId || report.taskId || '').replace('TASK-DISC-', '').trim();
-  const dateStr = report.reportDate || new Date().toISOString().split('T')[0];
+  const dateStr = report.disconDate || report.reportDate || new Date().toISOString().split('T')[0];
 
   const payload = {
     ...report,
     consumerId: cId,
     'Consumer Id': cId,
-    'Discon Status': report.taskStatus,
+    'MRU': report.mru || (report as any)['MRU'] || '',
+    'off_code': report.offCode || (report as any)['off_code'] || '',
+    'Discon Status': report.taskStatus || (report as any).disconStatus || 'COMPLETED',
     'Discon Date': dateStr,
-    'Meter': report.meterReading || '',
-    'Mobile Number': report.phoneNumber || '',
+    'Image': report.photoUrl || (report as any).image || '',
+    'Reading': report.meterReading || (report as any).reading || '',
+    'Payment Status': (report as any).paymentStatus || (report.taskStatus === 'PAID' ? 'PAID' : ''),
+    'Gis Pole': (report as any).gisPole || '',
+    'Agency': report.assignedAgency || (report as any).agency || report.workerName || '',
+    'Notes': report.workerRemarks || report.workerReport || (report as any).notes || '',
+    'Priority': report.priority || 'NORMAL',
+    'Paid Amount': report.paidAmount || '',
+    'Paid Date': (report as any).paidDate || report.paymentDate || '',
+    'Paid Type': (report as any).paidType || report.paymentReference || '',
+    'Outstanding After': (report as any).outstandingAfter || '',
+    'Next Payment Date': (report as any).nextPaymentDate || '',
+    'Payment Source': (report as any).paymentSource || '',
+    'Mobile Number': report.phoneNumber || (report as any).mobile || '',
+    'Meter': report.meterReading || (report as any).reading || '',
     requestId: reqId
   };
+
+  // Try direct backend proxy endpoint first
+  try {
+    const res = await fetch('/api/disconnection-tasks/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        invalidateDisconnectionCache();
+        return data;
+      }
+    }
+  } catch (proxyErr) {
+    // Continue to direct GAS
+  }
 
   try {
     const res = await callGasApi<any>('submitDisconnectionReport', payload, 'POST');

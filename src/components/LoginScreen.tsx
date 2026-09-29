@@ -43,9 +43,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     onProceedSession(session);
   };
 
-  // Form states
-  const [loginId, setLoginId] = useState('8695716192');
-  const [password, setPassword] = useState('2004');
+  // Form states - empty by default, no prefilled values
+  const [loginId, setLoginId] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   // Status states
@@ -157,7 +157,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
+            {/* Hidden dummy inputs to prevent aggressive browser autofill */}
+            <input type="text" style={{ display: 'none' }} tabIndex={-1} aria-hidden="true" autoComplete="off" />
+            <input type="password" style={{ display: 'none' }} tabIndex={-1} aria-hidden="true" autoComplete="new-password" />
+
             {/* Field 1: User ID / Phone Number */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
@@ -167,23 +171,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     {lang === 'bn' ? 'ইউজার আইডি / মোবাইল নম্বর' : 'User ID / Phone Number'} <span className="text-red-500">*</span>
                   </span>
                 </span>
-                <span className="text-[11px] text-blue-600 font-medium">ID or Mobile</span>
               </label>
 
               <input
                 type="text"
+                name="auth_login_id"
+                id="auth_login_id"
                 required
-                autoFocus
                 value={loginId}
                 onChange={(e) => setLoginId(e.target.value)}
-                placeholder="যেমন: 8695716192, LM001, ইত্যাদি"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono tracking-wider"
+                placeholder=""
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-mono tracking-wider"
               />
-              <p className="text-[11px] text-slate-500 mt-1">
-                {lang === 'bn' 
-                  ? 'আপনার অফিসিয়াল ইউজার আইডি (যেমন 8695716192 বা LM001) বা মোবাইল নম্বর দিন' 
-                  : 'Enter your registered User ID or Phone Number'}
-              </p>
             </div>
 
             {/* Field 2: Password / PIN */}
@@ -200,11 +203,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  name="auth_login_pwd"
+                  id="auth_login_pwd"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••"
-                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all placeholder:text-slate-400 font-mono tracking-wider"
+                  placeholder=""
+                  autoComplete="new-password"
+                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-mono tracking-wider"
                 />
                 <button
                   type="button"
