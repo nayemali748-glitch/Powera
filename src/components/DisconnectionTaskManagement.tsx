@@ -211,11 +211,15 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       if (workerOnlyFilter && !isAdmin) {
         const myName = String(currentUser?.name || currentUser?.username || '').toLowerCase().trim();
         const myId = String(currentUser?.idNo || '').toLowerCase().trim();
-        const assignedName = String(t.assignedWorkerName || t.assignedAgency || '').toLowerCase().trim();
+        const assignedWorker = String(t.assignedWorkerName || '').toLowerCase().trim();
         const assignedId = String(t.assignedWorkerId || '').toLowerCase().trim();
 
-        const isMine = (myName && assignedName.includes(myName)) || (myId && assignedId === myId);
-        if (!isMine && t.assignedWorkerName) return false;
+        // If explicitly assigned to a specific worker, check if it belongs to this worker
+        if (assignedId || assignedWorker) {
+          const isMine = (myName && assignedWorker.includes(myName)) || (myId && assignedId === myId);
+          if (!isMine) return false;
+        }
+        // If unassigned in CCC pool, all team workers can see and execute it
       }
 
       // Status Filter

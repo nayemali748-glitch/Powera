@@ -438,10 +438,22 @@ app.use((req, res, next) => {
 // ============================================================================
 // SYSTEM HEALTH CHECK (Direct live probe to Google Sheets)
 // ============================================================================
-app.get(['/health', '/healthz', '/api/health'], async (req, res) => {
+// SYSTEM HEALTH CHECK (Fast non-blocking liveness & readiness probes for Cloud Run)
+// ============================================================================
+app.get(['/healthz', '/health', '/ping', '/ready'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.status(200).json({
+    status: 'ok',
+    app: 'POWER Utility Management',
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const gasHealth = await callGoogleAppsScript('health', {}, 'GET', 15000);
+    const gasHealth = await callGoogleAppsScript('health', {}, 'GET', 5000);
     res.status(200).json({
       status: 'ok',
       app: 'POWER Utility Management',
@@ -1513,7 +1525,7 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     cccFeeder: mru,
     disconnectionReason: `Outstanding Bill (D2 Net O/S: ${outstandingDue})`,
     assignedWorkerId: String(entry.workerId || entry.assignedWorkerId || entry['Worker ID'] || '').trim(),
-    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || agency || '').trim(),
+    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || entry['Worker Name'] || '').trim(),
     assignedAgency: agency,
     agency,
     taskStatus: status,
@@ -1524,7 +1536,7 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     notes,
     reportDate,
     reportTime: String(entry.reportTime || '').trim(),
-    submittedBy: String(entry.submittedBy || entry.workerName || agency || '').trim(),
+    submittedBy: String(entry.submittedBy || entry.workerName || '').trim(),
     createdAt: uploadDate || lastUpdated || new Date().toISOString(),
     updatedAt: lastUpdated || new Date().toISOString(),
     lastUpdated,
@@ -1564,8 +1576,8 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const query = req.query;
 
   try {
-    const gasRes = await callGoogleAppsScript('getDisconnectionTasks', query, 'GET', 30000);
-    if (gasRes && gasRes.success && Array.isArray(gasRes.tasks)) {
+    const gasRes = await callGoogleAppsScript('getDisconnectionTasks', query, 'GET', 25000);
+    if (gasRes && gasRes.success && Array.isArray(gasRes.tasks) && gasRes.tasks.length > 0) {
       return res.json(gasRes);
     }
   } catch (err: any) {
@@ -1574,10 +1586,46 @@ app.get('/api/disconnection-tasks', async (req, res) => {
 
   // Fallback direct read from Google Sheets entries
   try {
-    const entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 30000);
+    let entriesRes: any = null;
+    try {
+      entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 15000);
+    } catch {}
+    if (!entriesRes || !entriesRes.entries || entriesRes.entries.length === 0) {
+      try {
+        entriesRes = await callGoogleAppsScript('entries', { category: 'DISCONNECTION' }, 'GET', 15000);
+      } catch {}
+    }
+    if (!entriesRes || !entriesRes.entries || entriesRes.entries.length === 0) {
+      try {
+        entriesRes = await callGoogleAppsScript('entries', {}, 'GET', 15000);
+      } catch {}
+    }
     const rawEntries = entriesRes && (Array.isArray(entriesRes.entries) ? entriesRes.entries : (Array.isArray(entriesRes) ? entriesRes : []));
+    const discEntries = rawEntries.filter((e: any) => {
+      const cat = String(e.category || '').toUpperCase().trim();
+      const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
+      const hasCoreDisc = Boolean(
+        e['Consumer Id'] && (
+          e['D2 Net O/S'] || e.d2NetOs || e['O/S Duedate Range'] || e.disconStatus || e['Discon Status'] || e.off_code || e.mru || e['MRU']
+        )
+      );
+      return isDiscCat || hasCoreDisc;
+    });
+
+    // Deduplicate by consumerId
+    const seenConsumers = new Set<string>();
+    const deduplicatedEntries: any[] = [];
+    for (const e of discEntries) {
+      const cId = String(e['Consumer Id'] || e.consumerId || '').trim().toLowerCase();
+      if (cId) {
+        if (seenConsumers.has(cId)) continue;
+        seenConsumers.add(cId);
+      }
+      deduplicatedEntries.push(e);
+    }
+
     let idx = 1;
-    const tasks = rawEntries.map(e => convertSheetEntryToDisconnectionTask(e, idx++));
+    const tasks = deduplicatedEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
     const role = String(query.role || '').toLowerCase();
     const workerId = String(query.workerId || '').toLowerCase().trim();
     const workerName = String(query.workerName || '').toLowerCase().trim();
@@ -1586,11 +1634,11 @@ app.get('/api/disconnection-tasks', async (req, res) => {
       filtered = filtered.filter(t => {
         const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
         const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-        return (workerId && aId === workerId) || (workerName && aNm === workerName) || (!aId && !aNm);
+        return (!aId && !aNm) || (workerId && aId === workerId) || (workerName && aNm === workerName);
       });
     }
     const stats = computeLocalStats(filtered, workerId, workerName);
-    return res.json({ success: true, tasks: filtered.reverse(), stats });
+    return res.json({ success: true, tasks: filtered, stats });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to fetch disconnection tasks from Google Sheets' });
   }
@@ -1939,8 +1987,8 @@ async function startServer() {
     });
 
     s.on('error', (err: any) => {
-      if (err.code === 'EADDRINUSE' && port !== 3000) {
-        console.warn(`Port ${port} in use (e.g. by ingress proxy), falling back to port 3000...`);
+      if (err.code === 'EADDRINUSE' && !isProduction && port !== 3000) {
+        console.warn(`Port ${port} in use (e.g. by ingress proxy in dev), falling back to port 3000...`);
         startListening(3000);
       } else {
         console.error('Server listen error:', err);

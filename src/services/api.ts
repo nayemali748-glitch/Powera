@@ -1318,193 +1318,222 @@ export async function fetchDisconnectionTasks(params: {
   status?: string;
   includeArchived?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
-  // Step 1: Call Google Apps Script getDisconnectionTasks directly (Google Sheet is source of truth)
+  // Step 1: Call Existing Backend/API (/api/disconnection-tasks)
+  // Required Flow: Google Sheet → Google Apps Script (/exec) → Existing Backend/API → Disconnection Frontend
+  try {
+    const query = new URLSearchParams();
+    if (params.workerId) query.set('workerId', params.workerId);
+    if (params.workerName) query.set('workerName', params.workerName);
+    if (params.role) query.set('role', params.role);
+    if (params.search) query.set('search', params.search);
+    if (params.status) query.set('status', params.status);
+    if (params.includeArchived) query.set('includeArchived', 'true');
+
+    const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.tasks)) {
+        const cleaned = data.tasks.map((t: any, idx: number) => ({
+          ...cleanDisconnectionTask(t),
+          serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+        }));
+        return { tasks: cleaned, stats: data.stats || computeStats(cleaned) };
+      }
+    }
+  } catch (apiErr: any) {
+    console.warn('[Disconnection] Backend API fetch notice, trying GAS failover:', apiErr?.message || apiErr);
+  }
+
+  // Step 2: Direct Google Apps Script Failover (Google Sheet is source of truth)
   try {
     const gasData = await callGasApi<{ success: boolean; tasks: DisconnectionTask[]; stats: DisconnectionStats }>(
       'getDisconnectionTasks',
       params,
       'GET'
     );
-    if (gasData && gasData.success && Array.isArray(gasData.tasks)) {
+    if (gasData && gasData.success && Array.isArray(gasData.tasks) && gasData.tasks.length > 0) {
       const cleaned = gasData.tasks.map((t, idx) => ({
         ...cleanDisconnectionTask(t),
         serialNumber: `SL ${String(idx + 1).padStart(3, '0')}`
       }));
-      writeCache(DISCONNECTION_TASKS_CACHE_KEY, cleaned);
-      return { tasks: cleaned, stats: gasData.stats };
+      return { tasks: cleaned, stats: gasData.stats || computeStats(cleaned) };
     }
   } catch (err: any) {
     console.warn('[Disconnection] GAS getDisconnectionTasks attempt notice:', err?.message || err);
   }
 
-  // Step 2: Fallback direct read from Google Sheet via 'entries' category=Disconnection
-  // (In case user has not redeployed the newest Code.gs to their Google account yet)
+  // Step 3: Fallback direct read from Google Sheet via 'entries' (Disconnection category)
   try {
-    const rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'Disconnection' }, 'GET');
+    let rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'Disconnection' }, 'GET');
+    if (!rawRes || !rawRes.entries || rawRes.entries.length === 0) {
+      rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'DISCONNECTION' }, 'GET');
+    }
     const rawEntries = rawRes && (Array.isArray(rawRes.entries) ? rawRes.entries : (Array.isArray(rawRes) ? rawRes : []));
     if (rawEntries && rawEntries.length > 0) {
-      const mappedTasks: DisconnectionTask[] = rawEntries.map((e, idx) => {
-        const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
-        const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
-        const name = String(e['Name'] || e.consumerName || e.name || '').trim();
-        const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
-        const bClassPhase = String(e['BClass/Phase'] || e.bClassPhase || e.deviceType || 'I').trim();
-        const consumerClass = String(e['Class'] || e.baseClass || e.class || 'Domestic').trim();
-        const govNonGov = String(e['Gov/Non-Gov'] || e.govNonGov || 'Non-Gov').trim();
-        const meter = String(e['Meter'] || e.meterNumber || e.meterNo || '').trim();
-        const dueDateRange = String(e['O/S Due date Range'] || e.dueDateRange || '').trim();
-        const d2NetOs = String(e['D2 Net O/S'] || e.outstandingDue || e.arrearAmount || '').trim();
-        const disconStatus = (String(e['Discon Status'] || e.disconStatus || e.status || 'PENDING').trim().toUpperCase() || 'PENDING') as DisconnectionTaskStatus;
-        const disconDate = String(e['Discon Date'] || e.disconDate || e.reportDate || '').trim();
-        const mobile = String(e['Mobile Number'] || e.phoneNumber || e.mobile || '').trim();
-        const slNumber = `SL ${String(idx + 1).padStart(3, '0')}`;
-
-        return cleanDisconnectionTask({
-          off_code: String(e['off_code'] || e.offCode || '5233100').trim(),
-          MRU: mru,
-          'Consumer Id': cId,
-          Name: name,
-          Address: address,
-          'BClass/Phase': bClassPhase,
-          Class: consumerClass,
-          'Gov/Non-Gov': govNonGov,
-          Meter: meter,
-          'O/S Due date Range': dueDateRange,
-          'D2 Net O/S': d2NetOs,
-          'Discon Status': disconStatus,
-          'Discon Date': disconDate,
-          'Mobile Number': mobile,
-          serialNumber: slNumber,
-          taskId: `TASK-DISC-${cId || idx + 1}`,
-          consumerId: cId,
-          consumerName: name,
-          accountNumber: cId,
-          meterNumber: meter,
-          consumerAddress: address,
-          phoneNumber: mobile,
-          mobileNumber: mobile,
-          area: String(e['off_code'] || '5233100').trim(),
-          disconnectionReason: `Outstanding Bill (D2 Net O/S: ${d2NetOs})`,
-          assignedWorkerId: String(e['Worker ID'] || e.assignedWorkerId || '').trim(),
-          assignedWorkerName: String(e['Worker Name'] || e.assignedWorkerName || '').trim(),
-          taskStatus: disconStatus,
-          workerReport: String(e['Notes'] || e.workerReport || '').trim(),
-          workerRemarks: String(e['Remarks'] || e.workerRemarks || '').trim(),
-          reportDate: disconDate,
-          reportTime: '',
-          submittedBy: String(e['Submitted By'] || e.submittedBy || '').trim(),
-          createdAt: String(e['Created At'] || e.createdAt || disconDate || new Date().toISOString()).trim(),
-          updatedAt: String(e['Updated At'] || e.updatedAt || new Date().toISOString()).trim(),
-          photoUrl: String(e['Photo Evidence'] || e.photoUrl || '').trim(),
-          mruSection: mru,
-          cccFeeder: mru,
-          outstandingDue: d2NetOs,
-          dueDateRange: dueDateRange,
-          baseClass: consumerClass,
-          deviceType: bClassPhase,
-          priority: parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000 ? 'URGENT' : 'NORMAL',
-          assignedAgency: String(e['Agency Name'] || e.assignedAgency || '').trim(),
-          paidAmount: String(e['Paid Amount'] || e.paidAmount || (disconStatus === 'PAID' ? d2NetOs : '')).trim(),
-          paymentDate: String(e['Payment Date'] || e.paymentDate || (disconStatus === 'PAID' ? disconDate : '')).trim(),
-          paymentReference: String(e['Payment Reference'] || e.paymentReference || '').trim(),
-          meterReading: meter,
-          statusHistory: []
-        });
+      const discEntries = rawEntries.filter((e: any) => {
+        const cat = String(e.category || '').toUpperCase().trim();
+        const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
+        const isCoreDisc = Boolean(e['Consumer Id'] && (e['D2 Net O/S'] || e.d2NetOs || e['O/S Duedate Range'] || e.disconStatus || e['Discon Status']));
+        return isDiscCat || isCoreDisc;
       });
 
-      // Filter
-      let filtered = mappedTasks;
-      const role = String(params.role || '').toLowerCase();
-      const workerId = String(params.workerId || '').toLowerCase().trim();
-      const workerName = String(params.workerName || '').toLowerCase().trim();
-      if (role === 'worker' && (workerId || workerName)) {
-        filtered = filtered.filter(t => {
-          const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
-          const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-          return (workerId && aId === workerId) || (workerName && aNm === workerName) || (!aId && !aNm);
+      if (discEntries.length > 0) {
+        const mappedTasks: DisconnectionTask[] = discEntries.map((e, idx) => {
+          const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
+          const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
+          const name = String(e['Name'] || e.consumerName || e.name || '').trim();
+          const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
+          const bClassPhase = String(e['BClass/Phase'] || e.bClassPhase || e.deviceType || 'I').trim();
+          const consumerClass = String(e['Class'] || e.baseClass || e.class || 'Domestic').trim();
+          const govNonGov = String(e['Gov/Non-Gov'] || e.govNonGov || 'Non-Gov').trim();
+          const meter = String(e['Number'] || e['Meter'] || e.meterNumber || e.meterNo || '').trim();
+          const dueDateRange = String(e['O/S Duedate Range'] || e['O/S Due date Range'] || e.dueDateRange || '').trim();
+          const d2NetOs = String(e['D2 Net O/S'] || e.outstandingDue || e.arrearAmount || '').trim();
+          const disconStatus = (String(e['Discon Status'] || e.disconStatus || e.status || 'PENDING').trim().toUpperCase() || 'PENDING') as DisconnectionTaskStatus;
+          const disconDate = String(e['Discon Date'] || e.disconDate || e.reportDate || '').trim();
+          const mobile = String(e['Mobile'] || e['Mobile Number'] || e.phoneNumber || e.mobile || '').trim();
+          const slNumber = `SL ${String(idx + 1).padStart(3, '0')}`;
+
+          return cleanDisconnectionTask({
+            off_code: String(e['off_code'] || e.offCode || '5233100').trim(),
+            MRU: mru,
+            'Consumer Id': cId,
+            Name: name,
+            Address: address,
+            'Base Class': String(e['Base Class'] || consumerClass).trim(),
+            Class: consumerClass,
+            Device: String(e['Device'] || bClassPhase).trim(),
+            'BClass/Phase': bClassPhase,
+            'Gov/Non-Gov': govNonGov,
+            Number: meter,
+            Meter: meter,
+            'O/S Duedate Range': dueDateRange,
+            'O/S Due date Range': dueDateRange,
+            'D2 Net O/S': d2NetOs,
+            'Discon Status': disconStatus,
+            'Discon Date': disconDate,
+            Mobile: mobile,
+            'Mobile Number': mobile,
+            serialNumber: slNumber,
+            taskId: `TASK-DISC-${cId || idx + 1}`,
+            consumerId: cId,
+            consumerName: name,
+            accountNumber: cId,
+            meterNumber: meter,
+            consumerAddress: address,
+            phoneNumber: mobile,
+            mobileNumber: mobile,
+            area: String(e['off_code'] || '5233100').trim(),
+            disconnectionReason: `Outstanding Bill (D2 Net O/S: ${d2NetOs})`,
+            assignedWorkerId: String(e['Worker ID'] || e.assignedWorkerId || '').trim(),
+            assignedWorkerName: String(e['Worker Name'] || e.assignedWorkerName || '').trim(),
+            taskStatus: disconStatus,
+            workerReport: String(e['Notes'] || e.workerReport || '').trim(),
+            workerRemarks: String(e['Remarks'] || e.workerRemarks || '').trim(),
+            reportDate: disconDate,
+            reportTime: '',
+            submittedBy: String(e['Submitted By'] || e.submittedBy || '').trim(),
+            createdAt: String(e['Created At'] || e.createdAt || disconDate || new Date().toISOString()).trim(),
+            updatedAt: String(e['Updated At'] || e.updatedAt || new Date().toISOString()).trim(),
+            photoUrl: String(e['Image'] || e['Photo Evidence'] || e.photoUrl || '').trim(),
+            mruSection: mru,
+            cccFeeder: mru,
+            outstandingDue: d2NetOs,
+            dueDateRange: dueDateRange,
+            baseClass: consumerClass,
+            deviceType: bClassPhase,
+            priority: parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000 ? 'URGENT' : 'NORMAL',
+            assignedAgency: String(e['Agency'] || e['Agency Name'] || e.assignedAgency || '').trim(),
+            paidAmount: String(e['Paid Amount'] || e.paidAmount || (disconStatus === 'PAID' ? d2NetOs : '')).trim(),
+            paymentDate: String(e['Paid Date'] || e['Payment Date'] || e.paymentDate || (disconStatus === 'PAID' ? disconDate : '')).trim(),
+            paymentReference: String(e['Paid Type'] || e['Payment Reference'] || e.paymentReference || '').trim(),
+            meterReading: String(e['Reading'] || meter).trim(),
+            statusHistory: []
+          });
         });
-      }
-      if (params.status && params.status !== 'ALL') {
-        const filterSt = params.status.toUpperCase().trim();
-        filtered = filtered.filter(t => String(t.taskStatus).toUpperCase() === filterSt);
-      }
-      if (params.search) {
-        const q = params.search.toLowerCase().trim();
-        filtered = filtered.filter(t =>
-          `${t.serialNumber} ${t.consumerId} ${t.consumerName} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber}`
-            .toLowerCase()
-            .includes(q)
-        );
-      }
 
-      const total = filtered.length;
-      let completed = 0;
-      let pending = 0;
-      for (const t of filtered) {
-        const st = t.taskStatus;
-        if (st === 'COMPLETED' || st === 'DISCONNECT') completed++;
-        else if (st === 'PENDING') pending++;
-        else if (st === 'PAID') completed++;
+        // Filter
+        let filtered = mappedTasks;
+        const role = String(params.role || '').toLowerCase();
+        const workerId = String(params.workerId || '').toLowerCase().trim();
+        const workerName = String(params.workerName || '').toLowerCase().trim();
+        if (role === 'worker' && (workerId || workerName)) {
+          filtered = filtered.filter(t => {
+            const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
+            return (!aId && !aNm) || (workerId && aId === workerId) || (workerName && aNm === workerName);
+          });
+        }
+        if (params.status && params.status !== 'ALL') {
+          const filterSt = params.status.toUpperCase().trim();
+          filtered = filtered.filter(t => String(t.taskStatus).toUpperCase() === filterSt);
+        }
+        if (params.search) {
+          const q = params.search.toLowerCase().trim();
+          filtered = filtered.filter(t =>
+            `${t.serialNumber} ${t.consumerId} ${t.consumerName} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber}`
+              .toLowerCase()
+              .includes(q)
+          );
+        }
+
+        const stats = computeStats(filtered);
+        return { tasks: filtered, stats };
       }
-
-      const computedStats: DisconnectionStats = {
-        totalTasks: total,
-        completedTasks: completed,
-        pendingTasks: pending,
-        inProgressTasks: 0,
-        unableTasks: 0,
-        reportedTasks: 0,
-        cancelledTasks: 0,
-        completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
-        myAssignedTasks: total,
-        myCompletedTasks: completed,
-        myPendingTasks: pending,
-        myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
-      };
-
-      writeCache(DISCONNECTION_TASKS_CACHE_KEY, filtered);
-      return { tasks: filtered, stats: computedStats };
     }
   } catch (err: any) {
     console.warn('[Disconnection] Google Sheet fallback read notice:', err?.message || err);
   }
 
-  // Step 3: Temporary cache fallback only when offline
-  const cached = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
-  let filtered = cached.map((t, idx) => ({
-    ...cleanDisconnectionTask(t),
-    serialNumber: `SL ${String(idx + 1).padStart(3, '0')}`
-  }));
-  if (params.role === 'worker' && (params.workerId || params.workerName)) {
-    const wId = String(params.workerId || '').toLowerCase().trim();
-    const wNm = String(params.workerName || '').toLowerCase().trim();
-    filtered = filtered.filter(t => {
-      const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
-      const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-      return (wId && aId === wId) || (wNm && aNm === wNm) || (!aId && !aNm);
-    });
-  }
-  const total = filtered.length;
-  const completed = filtered.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT').length;
-  const pending = filtered.filter(t => t.taskStatus === 'PENDING').length;
-  const inProg = filtered.filter(t => t.taskStatus === 'IN PROGRESS').length;
-
+  // Pure live Google Sheets return (no dummy fake data or cache fallback)
   return {
-    tasks: filtered,
+    tasks: [],
     stats: {
-      totalTasks: total,
-      completedTasks: completed,
-      pendingTasks: pending,
-      inProgressTasks: inProg,
-      unableTasks: filtered.filter(t => t.taskStatus === 'UNABLE').length,
-      reportedTasks: filtered.filter(t => t.taskStatus === 'REPORTED').length,
-      cancelledTasks: filtered.filter(t => t.taskStatus === 'CANCELLED').length,
-      completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
-      myAssignedTasks: total,
-      myCompletedTasks: completed,
-      myPendingTasks: pending,
-      myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
+      totalTasks: 0,
+      completedTasks: 0,
+      pendingTasks: 0,
+      inProgressTasks: 0,
+      unableTasks: 0,
+      reportedTasks: 0,
+      cancelledTasks: 0,
+      completionPercentage: 0,
+      myAssignedTasks: 0,
+      myCompletedTasks: 0,
+      myPendingTasks: 0,
+      myCompletionPercentage: 0
     }
+  };
+}
+
+function computeStats(taskList: DisconnectionTask[]): DisconnectionStats {
+  const total = taskList.length;
+  let completed = 0;
+  let pending = 0;
+  let inProgress = 0;
+  let urgent = 0;
+  for (const t of taskList) {
+    const st = String(t.taskStatus || '').toUpperCase();
+    if (st === 'COMPLETED' || st === 'DISCONNECT' || st === 'PAID') completed++;
+    else if (st === 'PENDING') pending++;
+    else if (st === 'IN PROGRESS') inProgress++;
+    if (String(t.priority || '').toUpperCase() === 'URGENT') urgent++;
+  }
+  return {
+    totalTasks: total,
+    completedTasks: completed,
+    pendingTasks: pending,
+    inProgressTasks: inProgress,
+    unableTasks: taskList.filter(t => t.taskStatus === 'UNABLE').length,
+    reportedTasks: taskList.filter(t => t.taskStatus === 'REPORTED').length,
+    cancelledTasks: taskList.filter(t => t.taskStatus === 'CANCELLED').length,
+    paidTasks: taskList.filter(t => t.taskStatus === 'PAID').length,
+    urgentTasks: urgent,
+    completionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+    myAssignedTasks: total,
+    myCompletedTasks: completed,
+    myPendingTasks: pending,
+    myCompletionPercentage: total > 0 ? Math.round((completed / total) * 100) : 0
   };
 }
 

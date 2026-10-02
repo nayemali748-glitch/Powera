@@ -11,7 +11,8 @@ const WORK_ORDERS_FOLDER_NAME = 'WBSEDCL_Work_Orders_Khata_Files';
 const SHEET_ALIASES = {
   'Users': ['Users', 'USERS', 'users', 'User'],
   'NSC': ['NSC', 'NewConnection', 'NEW_CONNECTION', 'New Connection', 'NEW CONNECTION'],
-  'Disconnection': ['Disconnection', 'DISCONNECTION', 'Disconnect', 'DISCONNECT'],
+  'Disconnection': ['DISCONNECTION', 'Disconnection', 'Disconnect', 'DISCONNECT'],
+  'DISCONNECTION': ['DISCONNECTION', 'Disconnection', 'Disconnect', 'DISCONNECT'],
   'Disconnection_History': ['Disconnection_History', 'DisconnectionHistory', 'DISCONNECTION_HISTORY', 'Disconnection_history'],
   'Broken': ['Broken', 'BROKEN', 'POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case'],
   'Meter Replacement': ['Meter Replacement', 'METER REPLACEMENT', 'METER REPLESMENT', 'METER_REPLESMENT', 'MeterReplacement'],
@@ -86,20 +87,39 @@ const NSC_HEADERS = [
 ];
 
 const DISCONNECTION_HEADERS = [
-  'off_code',
-  'MRU',
-  'Consumer Id',
-  'Name',
-  'Address',
-  'BClass/Phase',
-  'Class',
-  'Gov/Non-Gov',
-  'Meter',
-  'O/S Due date Range',
-  'D2 Net O/S',
-  'Discon Status',
-  'Discon Date',
-  'Mobile Number'
+  'off_code',            // A
+  'MRU',                 // B
+  'Consumer Id',         // C
+  'Name',                // D
+  'Address',             // E
+  'Base Class',          // F
+  'Class',               // G
+  'Device',              // H
+  'O/S Duedate Range',   // I
+  'D2 Net O/S',          // J
+  'Mobile',              // K
+  'Number',              // L
+  'Latitude',            // M
+  'Longitude',           // N
+  'Discon Status',       // O
+  'Discon Date',         // P
+  'Image',               // Q
+  'Reading',             // R
+  'Payment Status',      // S
+  'Gis Pole',            // T
+  'Agency',              // U
+  'Notes',               // V
+  'Nature of Conn',      // W
+  'Gov/Non-Gov',         // X
+  'Last Updated',        // Y
+  'Priority',            // Z
+  'Paid Amount',         // AA
+  'Paid Date',           // AB
+  'Paid Type',           // AC
+  'Outstanding After',   // AD
+  'Next Payment Date',   // AE
+  'Payment Source',      // AF
+  'Upload Date'          // AG
 ];
 
 const DISCONNECTION_HISTORY_HEADERS = [
@@ -197,28 +217,54 @@ function ss() {
   return _ss;
 }
 
-// Find existing sheet by canonical name or any alias
+// Find existing sheet by canonical name or any alias case-insensitively
 function getSheet(canonicalName) {
   const spreadsheet = ss();
-  const aliases = SHEET_ALIASES[canonicalName] || [canonicalName];
-  let targetSheet = null;
+  const rawAliases = SHEET_ALIASES[canonicalName] || [canonicalName];
+  const aliases = rawAliases.concat([canonicalName, canonicalName.toUpperCase(), canonicalName.toLowerCase()]);
+  const normAliases = aliases.map(function(a) { 
+    return String(a || '').toUpperCase().replace(/[\s_\-]/g, ''); 
+  });
+  
+  const allSheets = spreadsheet.getSheets();
+  const isTargetHist = normAliases.some(function(a) { return a.indexOf('HIST') >= 0; });
+  const isTargetDisc = normAliases.some(function(a) { return a.indexOf('DISCON') >= 0; });
 
-  for (let i = 0; i < aliases.length; i++) {
-    const s = spreadsheet.getSheetByName(aliases[i]);
-    if (s) {
-      targetSheet = s;
-      break;
+  let bestSheet = null;
+  let maxRows = -1;
+
+  // Case-insensitive search across all sheets in the spreadsheet
+  for (let i = 0; i < allSheets.length; i++) {
+    const s = allSheets[i];
+    const sNorm = s.getName().toUpperCase().replace(/[\s_\-]/g, '');
+    const isSheetHist = sNorm.indexOf('HIST') >= 0;
+
+    // Do not mix history sheet with main disconnection sheet
+    if (isTargetHist !== isSheetHist) continue;
+
+    let matches = (normAliases.indexOf(sNorm) >= 0);
+    if (!matches && isTargetDisc && !isTargetHist) {
+      matches = (sNorm.indexOf('DISCON') >= 0);
+    }
+
+    if (matches) {
+      const rowsCount = s.getLastRow();
+      if (rowsCount > maxRows) {
+        maxRows = rowsCount;
+        bestSheet = s;
+      } else if (!bestSheet) {
+        bestSheet = s;
+      }
     }
   }
 
-  // Case-insensitive / normalized search
+  let targetSheet = bestSheet;
+
+  // Fallback to exact getSheetByName if not found
   if (!targetSheet) {
-    const allSheets = spreadsheet.getSheets();
-    const normAliases = aliases.map(a => a.toUpperCase().replace(/[\s_\-]/g, ''));
-    for (let i = 0; i < allSheets.length; i++) {
-      const s = allSheets[i];
-      const sNorm = s.getName().toUpperCase().replace(/[\s_\-]/g, '');
-      if (normAliases.indexOf(sNorm) >= 0) {
+    for (let i = 0; i < aliases.length; i++) {
+      const s = spreadsheet.getSheetByName(aliases[i]);
+      if (s) {
         targetSheet = s;
         break;
       }
@@ -233,18 +279,18 @@ function getSheet(canonicalName) {
     targetSheet.setFrozenRows(1);
   }
 
-  // Self-heal and strictly ensure Disconnection has exact 14 WBSEDCL headers without deleting data
-  if (canonicalName === 'Disconnection') {
+  const norm = canonicalName.toUpperCase().replace(/[\s_\-]/g, '');
+  if (norm.indexOf('DISCON') >= 0 && norm.indexOf('HIST') === -1) {
     ensureDisconnectionHeaders(targetSheet);
   }
-  if (canonicalName === 'Disconnection_History') {
+  if (norm.indexOf('DISCON') >= 0 && norm.indexOf('HIST') >= 0) {
     ensureDisconnectionHistoryHeaders(targetSheet);
   }
 
   return targetSheet;
 }
 
-// Strictly configure and verify exact 14 Disconnection headers while preserving all existing data
+// Strictly configure and verify exact 33 Disconnection headers while preserving all existing data
 function ensureDisconnectionHeaders(sheet) {
   if (!sheet) return;
   try {
@@ -257,60 +303,10 @@ function ensureDisconnectionHeaders(sheet) {
       return;
     }
 
-    const currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
-      return String(h || '').trim();
-    });
-
-    let isExact = currentHeaders.length === DISCONNECTION_HEADERS.length;
-    if (isExact) {
-      for (let i = 0; i < DISCONNECTION_HEADERS.length; i++) {
-        if (currentHeaders[i] !== DISCONNECTION_HEADERS[i]) {
-          isExact = false;
-          break;
-        }
-      }
-    }
-
-    if (isExact) {
-      return;
-    }
-
-    // Headers do not match exact 14 columns. Migrate rows without losing data!
-    if (lastRow === 1) {
-      sheet.clearContents();
-      sheet.getRange(1, 1, 1, DISCONNECTION_HEADERS.length).setValues([DISCONNECTION_HEADERS]);
-      sheet.setFrozenRows(1);
-      return;
-    }
-
-    // Existing data rows present (lastRow > 1)
-    const rawValues = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-    const oldHeaders = rawValues[0].map(function(h) { return String(h || '').trim(); });
-
-    const migratedRows = [];
-    for (let r = 1; r < rawValues.length; r++) {
-      const row = rawValues[r];
-      const rowObj = {};
-      let hasData = false;
-      for (let c = 0; c < oldHeaders.length; c++) {
-        const hName = oldHeaders[c];
-        if (hName) rowObj[hName] = row[c];
-        if (row[c] !== '' && row[c] !== null && row[c] !== undefined) {
-          hasData = true;
-        }
-      }
-      if (hasData) {
-        const newRow = DISCONNECTION_HEADERS.map(function(targetHeader) {
-          return extractFieldValue(rowObj, targetHeader);
-        });
-        migratedRows.push(newRow);
-      }
-    }
-
-    sheet.clearContents();
-    sheet.getRange(1, 1, 1, DISCONNECTION_HEADERS.length).setValues([DISCONNECTION_HEADERS]);
-    if (migratedRows.length > 0) {
-      sheet.getRange(2, 1, migratedRows.length, DISCONNECTION_HEADERS.length).setValues(migratedRows);
+    // Never clear or wipe existing rows. If fewer than 33 columns, append missing headers
+    if (lastCol < DISCONNECTION_HEADERS.length) {
+      const missingHeaders = DISCONNECTION_HEADERS.slice(lastCol);
+      sheet.getRange(1, lastCol + 1, 1, missingHeaders.length).setValues([missingHeaders]);
     }
     sheet.setFrozenRows(1);
   } catch (err) {
@@ -596,21 +592,54 @@ function getSheetRows(sheetName) {
   const s = getSheet(sheetName);
   const lastRow = s.getLastRow();
   const lastCol = s.getLastColumn();
-  if (lastRow < 2 || lastCol < 1) return [];
+  if (lastRow < 2) return [];
 
-  const values = s.getRange(1, 1, lastRow, lastCol).getValues();
-  const headers = values[0].map(h => String(h || '').trim());
+  const normName = String(sheetName || '').toUpperCase().replace(/[\s_\-]/g, '');
+  const isDisc = (normName === 'DISCONNECTION' || (normName.indexOf('DISCON') >= 0 && normName.indexOf('HIST') === -1));
+
+  // Read full A:AG range (at least 33 columns) for Disconnection
+  const numCols = isDisc ? Math.max(lastCol, 33) : Math.max(lastCol, 1);
+  const values = s.getRange(1, 1, lastRow, numCols).getValues();
+
+  // Determine headers; for Disconnection, ensure full 33 column header mapping
+  const rawHeaders = values[0];
+  const headers = [];
+  for (let c = 0; c < numCols; c++) {
+    const rawH = String(rawHeaders[c] || '').trim();
+    if (rawH) {
+      headers.push(rawH);
+    } else if (isDisc && c < DISCONNECTION_HEADERS.length) {
+      headers.push(DISCONNECTION_HEADERS[c]);
+    } else {
+      headers.push('COL_' + (c + 1));
+    }
+  }
+
   const rows = [];
 
   for (let i = 1; i < values.length; i++) {
     const r = values[i];
     const item = { _rowIndex: i + 1 };
     let hasData = false;
+
+    // Check if row has data anywhere (A:N source data is sufficient, blank O:AG does NOT exclude row)
+    for (let c = 0; c < r.length; c++) {
+      const val = r[c];
+      if (val !== '' && val !== null && val !== undefined) {
+        if (typeof val === 'string' && val.trim() === '') continue;
+        hasData = true;
+        break;
+      }
+    }
+
+    if (!hasData) continue;
+
     for (let j = 0; j < headers.length; j++) {
       const h = headers[j];
       if (h) {
-        const val = r[j];
+        const val = r[j] !== undefined ? r[j] : '';
         item[h] = val;
+
         // Standardized camelCase aliases for developer convenience
         const nh = normHeader(h);
         if (nh === 'userid' || nh === 'idno') item.idNo = val;
@@ -634,26 +663,45 @@ function getSheetRows(sheetName) {
         if (nh === 'locationgps' || nh === 'gpslocation') item.locationGps = val;
         if (nh === 'notes') item.notes = val;
 
-        // Disconnection 14-field exact & normalized mappings
+        // Disconnection 33-field exact & normalized mappings
         if (nh === 'offcode') { item.off_code = val; item.offCode = val; }
         if (nh === 'mru') { item.MRU = val; item.mru = val; item.mruSection = val; }
         if (nh === 'consumerid') { item['Consumer Id'] = val; item.consumerId = val; }
         if (nh === 'name') { item.Name = val; item.name = val; item.consumerName = val; }
         if (nh === 'address') { item.Address = val; item.address = val; item.consumerAddress = val; }
+        if (nh === 'baseclass') { item['Base Class'] = val; item.baseClass = val; item.class = val; }
+        if (nh === 'class') { item.Class = val; item.class = val; item.consumerClass = val; }
+        if (nh === 'device') { item.Device = val; item.device = val; item.deviceType = val; }
         if (nh === 'bclassphase') { item['BClass/Phase'] = val; item.bClassPhase = val; item.deviceType = val; }
-        if (nh === 'class') { item.Class = val; item.class = val; item.baseClass = val; }
-        if (nh === 'govnongov') { item['Gov/Non-Gov'] = val; item.govNonGov = val; }
-        if (nh === 'meter') { item.Meter = val; item.meter = val; item.meterNumber = val; item.meterNo = val; }
-        if (nh === 'osduedaterange') { item['O/S Due date Range'] = val; item.osDueDateRange = val; item.dueDateRange = val; }
+        if (nh === 'osduedaterange') { item['O/S Duedate Range'] = val; item['O/S Due date Range'] = val; item.osDueDateRange = val; item.dueDateRange = val; }
         if (nh === 'd2netos') { item['D2 Net O/S'] = val; item.d2NetOs = val; item.outstandingDue = val; item.arrearAmount = val; }
+        if (nh === 'mobile') { item.Mobile = val; item.mobile = val; item.phoneNumber = val; item.phone = val; }
+        if (nh === 'mobilenumber') { item['Mobile Number'] = val; item.mobileNumber = val; item.phoneNumber = val; item.phone = val; }
+        if (nh === 'number') { item.Number = val; item.number = val; item.meterNumber = val; item.meterNo = val; }
+        if (nh === 'meter') { item.Meter = val; item.meter = val; item.meterNumber = val; item.meterNo = val; }
+        if (nh === 'latitude') { item.Latitude = val; item.latitude = val; }
+        if (nh === 'longitude') { item.Longitude = val; item.longitude = val; }
         if (nh === 'disconstatus') { item['Discon Status'] = val; item.disconStatus = val; item.taskStatus = val; item.status = val; }
         if (nh === 'discondate') { item['Discon Date'] = val; item.disconDate = val; item.reportDate = val; }
-        if (nh === 'mobilenumber') { item['Mobile Number'] = val; item.mobileNumber = val; item.phoneNumber = val; item.phone = val; }
-
-        if (val !== '' && val !== null && val !== undefined) hasData = true;
+        if (nh === 'image') { item.Image = val; item.image = val; item.photoUrl = val; }
+        if (nh === 'reading') { item.Reading = val; item.reading = val; item.meterReading = val; }
+        if (nh === 'paymentstatus') { item['Payment Status'] = val; item.paymentStatus = val; }
+        if (nh === 'gispole') { item['Gis Pole'] = val; item.gisPole = val; item.poleNo = val; }
+        if (nh === 'agency') { item.Agency = val; item.agency = val; item.assignedAgency = val; }
+        if (nh === 'natureofconn') { item['Nature of Conn'] = val; item.natureOfConn = val; }
+        if (nh === 'govnongov') { item['Gov/Non-Gov'] = val; item.govNonGov = val; }
+        if (nh === 'lastupdated') { item['Last Updated'] = val; item.lastUpdated = val; item.updatedAt = val; }
+        if (nh === 'priority') { item.Priority = val; item.priority = val; }
+        if (nh === 'paidamount') { item['Paid Amount'] = val; item.paidAmount = val; }
+        if (nh === 'paiddate') { item['Paid Date'] = val; item.paidDate = val; item.paymentDate = val; }
+        if (nh === 'paidtype') { item['Paid Type'] = val; item.paidType = val; item.paymentReference = val; }
+        if (nh === 'outstandingafter') { item['Outstanding After'] = val; item.outstandingAfter = val; }
+        if (nh === 'nextpaymentdate') { item['Next Payment Date'] = val; item.nextPaymentDate = val; }
+        if (nh === 'paymentsource') { item['Payment Source'] = val; item.paymentSource = val; }
+        if (nh === 'uploaddate') { item['Upload Date'] = val; item.uploadDate = val; item.createdAt = val; }
       }
     }
-    if (hasData) rows.push(item);
+    rows.push(item);
   }
   return rows;
 }
@@ -734,21 +782,39 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'gpslocation' || targetNorm === 'locationgps') return dataObj.locationGps || '';
   if (targetNorm === 'notes') return dataObj.notes || '';
 
-  // Disconnection 14-field exact & normalized extractors
+  // Disconnection 33-field exact & normalized extractors
   if (targetNorm === 'offcode') return dataObj['off_code'] || dataObj.off_code || dataObj.offCode || dataObj.officeCode || dataObj.substation || dataObj.area || '5233100';
   if (targetNorm === 'mru') return dataObj['MRU'] || dataObj.MRU || dataObj.mru || dataObj.mruSection || dataObj['MRU Section'] || 'FIL33MMR';
   if (targetNorm === 'consumerid') return dataObj['Consumer Id'] || dataObj['Consumer ID'] || dataObj.consumerId || dataObj.accountNumber || dataObj.consumerNo || '';
   if (targetNorm === 'name') return dataObj['Name'] || dataObj.Name || dataObj.name || dataObj.consumerName || dataObj.customerName || '';
   if (targetNorm === 'address') return dataObj['Address'] || dataObj.Address || dataObj.address || dataObj.consumerAddress || '';
-  if (targetNorm === 'bclassphase') return dataObj['BClass/Phase'] || dataObj['BClass_Phase'] || dataObj.bClassPhase || dataObj.deviceType || dataObj.phase || 'I';
+  if (targetNorm === 'baseclass') return dataObj['Base Class'] || dataObj.baseClass || dataObj.class || 'Domestic';
   if (targetNorm === 'class') return dataObj['Class'] || dataObj.Class || dataObj.class || dataObj.baseClass || dataObj.tariffCategory || 'Domestic';
-  if (targetNorm === 'govnongov') return dataObj['Gov/Non-Gov'] || dataObj['Gov_Non_Gov'] || dataObj.govNonGov || dataObj.govStatus || 'Non-Gov';
-  if (targetNorm === 'meter') return dataObj['Meter'] || dataObj.Meter || dataObj.meter || dataObj.meterNumber || dataObj.meterNo || dataObj['Meter No'] || dataObj.finalReading || '';
-  if (targetNorm === 'osduedaterange') return dataObj['O/S Due date Range'] || dataObj.dueDateRange || dataObj.osDueDateRange || dataObj.dueDate || '';
+  if (targetNorm === 'device') return dataObj['Device'] || dataObj['BClass/Phase'] || dataObj.device || dataObj.deviceType || dataObj.bClassPhase || 'I';
+  if (targetNorm === 'bclassphase') return dataObj['BClass/Phase'] || dataObj['Device'] || dataObj.deviceType || dataObj.bClassPhase || 'I';
+  if (targetNorm === 'osduedaterange') return dataObj['O/S Duedate Range'] || dataObj['O/S Due date Range'] || dataObj.dueDateRange || dataObj.osDueDateRange || '';
   if (targetNorm === 'd2netos') return dataObj['D2 Net O/S'] || dataObj['D2 Net OS'] || dataObj.outstandingDue || dataObj.arrearAmount || dataObj.d2NetOs || '';
+  if (targetNorm === 'mobile' || targetNorm === 'mobilenumber') return dataObj['Mobile'] || dataObj['Mobile Number'] || dataObj['Mobile No'] || dataObj.mobile || dataObj.mobileNumber || dataObj.phoneNumber || dataObj.phone || '';
+  if (targetNorm === 'number') return dataObj['Number'] || dataObj.number || dataObj['Meter'] || dataObj.meterNumber || dataObj.meterNo || '';
+  if (targetNorm === 'latitude') return dataObj['Latitude'] || dataObj.latitude || '';
+  if (targetNorm === 'longitude') return dataObj['Longitude'] || dataObj.longitude || '';
   if (targetNorm === 'disconstatus') return dataObj['Discon Status'] || dataObj.disconStatus || dataObj.taskStatus || dataObj.status || dataObj['Status'] || 'PENDING';
   if (targetNorm === 'discondate') return dataObj['Discon Date'] || dataObj.disconDate || dataObj.reportDate || dataObj.date || dataObj['Date'] || '';
-  if (targetNorm === 'mobilenumber') return dataObj['Mobile Number'] || dataObj['Mobile No'] || dataObj.mobileNumber || dataObj.phoneNumber || dataObj.mobile || dataObj.phone || '';
+  if (targetNorm === 'image') return dataObj['Image'] || dataObj.image || dataObj.photoUrl || dataObj.directImageUrl || '';
+  if (targetNorm === 'reading') return dataObj['Reading'] || dataObj.reading || dataObj.meterReading || dataObj['Meter'] || '';
+  if (targetNorm === 'paymentstatus') return dataObj['Payment Status'] || dataObj.paymentStatus || (dataObj.taskStatus === 'PAID' ? 'PAID' : '');
+  if (targetNorm === 'gispole') return dataObj['Gis Pole'] || dataObj.gisPole || dataObj.poleNo || '';
+  if (targetNorm === 'agency') return dataObj['Agency'] || dataObj.agency || dataObj.assignedAgency || dataObj.assignedWorkerName || '';
+  if (targetNorm === 'natureofconn') return dataObj['Nature of Conn'] || dataObj.natureOfConn || '';
+  if (targetNorm === 'govnongov') return dataObj['Gov/Non-Gov'] || dataObj['Gov_Non_Gov'] || dataObj.govNonGov || dataObj.govStatus || 'Non-Gov';
+  if (targetNorm === 'lastupdated') return dataObj['Last Updated'] || dataObj.lastUpdated || dataObj.updatedAt || now();
+  if (targetNorm === 'paidamount') return dataObj['Paid Amount'] || dataObj.paidAmount || '';
+  if (targetNorm === 'paiddate') return dataObj['Paid Date'] || dataObj.paidDate || dataObj.paymentDate || '';
+  if (targetNorm === 'paidtype') return dataObj['Paid Type'] || dataObj.paidType || dataObj.paymentReference || '';
+  if (targetNorm === 'outstandingafter') return dataObj['Outstanding After'] || dataObj.outstandingAfter || '';
+  if (targetNorm === 'nextpaymentdate') return dataObj['Next Payment Date'] || dataObj.nextPaymentDate || '';
+  if (targetNorm === 'paymentsource') return dataObj['Payment Source'] || dataObj.paymentSource || '';
+  if (targetNorm === 'uploaddate') return dataObj['Upload Date'] || dataObj.uploadDate || dataObj.createdAt || now();
 
   return '';
 }
@@ -1339,21 +1405,43 @@ function queryRecords(filters) {
           photoAfterUrl: String(r['Photo After'] || r.photoAfterUrl || ''),
           notes: String(r['Notes'] || r.notes || ''),
 
-          // 14 Standard WBSEDCL Disconnection Headers
+          // 33 Standard WBSEDCL Disconnection Headers (A:AG)
           'off_code': String(r['off_code'] || r.off_code || '5233100'),
           'MRU': String(r['MRU'] || r.mru || ''),
           'Consumer Id': String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || ''),
           'Name': String(r['Name'] || r['Consumer Name'] || r.consumerName || ''),
           'Address': String(r['Address'] || r.address || ''),
-          'BClass/Phase': String(r['BClass/Phase'] || r.bClassPhase || 'I'),
+          'Base Class': String(r['Base Class'] || r.baseClass || 'Domestic'),
           'Class': String(r['Class'] || r.baseClass || 'Domestic'),
-          'Gov/Non-Gov': String(r['Gov/Non-Gov'] || r.govNonGov || 'Non-Gov'),
-          'Meter': String(r['Meter'] || r['Meter No'] || r.meterNo || ''),
-          'O/S Due date Range': String(r['O/S Due date Range'] || r.dueDateRange || ''),
+          'Device': String(r['Device'] || r['BClass/Phase'] || r.bClassPhase || 'I'),
+          'BClass/Phase': String(r['BClass/Phase'] || r.bClassPhase || 'I'),
+          'O/S Duedate Range': String(r['O/S Duedate Range'] || r['O/S Due date Range'] || r.dueDateRange || ''),
+          'O/S Due date Range': String(r['O/S Duedate Range'] || r['O/S Due date Range'] || r.dueDateRange || ''),
           'D2 Net O/S': String(r['D2 Net O/S'] || r['Arrear Amount'] || r.arrearAmount || ''),
+          'Mobile': String(r['Mobile'] || r['Mobile Number'] || r['Mobile No'] || r.mobile || ''),
+          'Mobile Number': String(r['Mobile Number'] || r['Mobile No'] || r.mobile || ''),
+          'Number': String(r['Number'] || r['Meter'] || r.meterNo || ''),
+          'Meter': String(r['Meter'] || r['Number'] || r.meterNo || ''),
+          'Latitude': String(r['Latitude'] || r.latitude || ''),
+          'Longitude': String(r['Longitude'] || r.longitude || ''),
           'Discon Status': String(r['Discon Status'] || r['Status'] || r.status || 'PENDING'),
           'Discon Date': String(r['Discon Date'] || r['Date'] || r.date || ''),
-          'Mobile Number': String(r['Mobile Number'] || r['Mobile No'] || r.mobile || '')
+          'Image': String(r['Image'] || r.photoUrl || ''),
+          'Reading': String(r['Reading'] || r.reading || ''),
+          'Payment Status': String(r['Payment Status'] || r.paymentStatus || ''),
+          'Gis Pole': String(r['Gis Pole'] || r.gisPole || r.poleNo || ''),
+          'Agency': String(r['Agency'] || r.agency || ''),
+          'Nature of Conn': String(r['Nature of Conn'] || r.natureOfConn || ''),
+          'Gov/Non-Gov': String(r['Gov/Non-Gov'] || r.govNonGov || 'Non-Gov'),
+          'Last Updated': String(r['Last Updated'] || r.lastUpdated || ''),
+          'Priority': String(r['Priority'] || r.priority || 'NORMAL'),
+          'Paid Amount': String(r['Paid Amount'] || r.paidAmount || ''),
+          'Paid Date': String(r['Paid Date'] || r.paidDate || ''),
+          'Paid Type': String(r['Paid Type'] || r.paidType || ''),
+          'Outstanding After': String(r['Outstanding After'] || r.outstandingAfter || ''),
+          'Next Payment Date': String(r['Next Payment Date'] || r.nextPaymentDate || ''),
+          'Payment Source': String(r['Payment Source'] || r.paymentSource || ''),
+          'Upload Date': String(r['Upload Date'] || r.uploadDate || '')
         };
         allRecords.push(item);
       });
@@ -1597,7 +1685,7 @@ function doGet(e) {
     }
 
     // 9. Disconnection Tasks & Module
-    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks') {
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection') {
       return out(getDisconnectionTasksData(p), 'Disconnection tasks retrieved');
     }
     if (action === 'getDisconnectionHistory' || action === 'disconnectionHistory') {
@@ -1798,6 +1886,9 @@ function doPost(e) {
     if (action === 'restoreDisconnectionTask') {
       return out(handleRestoreDisconnectionTask(body), 'Disconnection task restored', reqId);
     }
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection') {
+      return out(getDisconnectionTasksData(body), 'Disconnection tasks retrieved', reqId);
+    }
     if (action === 'getDisconnectionHistory' || action === 'disconnectionHistory') {
       return out(getDisconnectionHistory(body), 'Disconnection history retrieved', reqId);
     }
@@ -1819,7 +1910,10 @@ function getDisconnectionTasksData(params) {
   params = params || {};
   let rawRows = [];
   try {
-    rawRows = getSheetRows('Disconnection');
+    rawRows = getSheetRows('DISCONNECTION');
+    if (!rawRows || rawRows.length === 0) {
+      rawRows = getSheetRows('Disconnection');
+    }
   } catch (e) {
     rawRows = [];
   }
@@ -1862,36 +1956,74 @@ function getDisconnectionTasksData(params) {
   }
 
   const tasks = [];
-  const seenConsumerIds = {};
+  const seenRecordKeys = {};
 
   for (let i = 0; i < rawRows.length; i++) {
     const r = rawRows[i];
+    const offCode = String(r['off_code'] || r.off_code || r.offCode || r['Substation'] || r.area || '5233100').trim();
+    const mru = String(r['MRU'] || r.mru || r['MRU Section'] || r.mruSection || '').trim();
     const consumerId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || r['Account Number'] || '').trim();
-    if (consumerId && seenConsumerIds[consumerId.toLowerCase()]) {
+    const consumerName = String(r['Name'] || r['Consumer Name'] || r.consumerName || r.name || '').trim();
+    const consumerAddress = String(r['Address'] || r.consumerAddress || r.address || '').trim();
+
+    // Check if row has any identifying data in columns A:N
+    const hasRowData = Boolean(
+      consumerId || 
+      consumerName || 
+      mru || 
+      consumerAddress ||
+      String(r['Number'] || r.number || r['Meter'] || '').trim() ||
+      String(r['Mobile'] || r.mobile || '').trim() ||
+      String(r['D2 Net O/S'] || r.outstandingDue || '').trim()
+    );
+    if (!hasRowData) {
       continue;
     }
-    if (consumerId) {
-      seenConsumerIds[consumerId.toLowerCase()] = true;
+
+    // Preserve every valid sheet row (do not drop test/live rows)
+    const rowUniqueKey = String(r._rowIndex || (i + 1));
+    if (seenRecordKeys[rowUniqueKey]) {
+      continue;
     }
+    seenRecordKeys[rowUniqueKey] = true;
+
+    // Deduplicate by consumerId if present
+    const normCId = consumerId ? consumerId.toLowerCase() : '';
+    if (normCId && seenRecordKeys['CID_' + normCId]) {
+      continue;
+    }
+    if (normCId) seenRecordKeys['CID_' + normCId] = true;
 
     const slNumber = 'SL ' + ('000' + (tasks.length + 1)).slice(-3);
     const taskId = 'TASK-DISC-' + (consumerId || (tasks.length + 1));
-
-    const offCode = String(r['off_code'] || r.off_code || r.offCode || r['Substation'] || r.area || '5233100').trim();
-    const mru = String(r['MRU'] || r.mru || r['MRU Section'] || r.mruSection || '').trim();
-    const consumerName = String(r['Name'] || r['Consumer Name'] || r.consumerName || r.name || '').trim();
-    const consumerAddress = String(r['Address'] || r.consumerAddress || r.address || '').trim();
-    const bClassPhase = String(r['BClass/Phase'] || r.bClassPhase || r['Device Type'] || r.deviceType || 'I').trim();
-    const consumerClass = String(r['Class'] || r.baseClass || r['Base Class'] || r.class || 'Domestic').trim();
+    const baseClass = String(r['Base Class'] || r.baseClass || r.class || 'Domestic').trim();
+    const consumerClass = String(r['Class'] || r.classType || r.class || r.baseClass || 'Domestic').trim();
+    const device = String(r['Device'] || r['BClass/Phase'] || r.device || r.deviceType || r.bClassPhase || 'I').trim();
+    const dueDateRange = String(r['O/S Duedate Range'] || r['O/S Due date Range'] || r.dueDateRange || r.osDueDateRange || '').trim();
+    const outstandingDue = String(r['D2 Net O/S'] || r['Arrear Amount'] || r.outstandingDue || r.d2NetOs || '').trim();
+    const mobile = String(r['Mobile'] || r['Mobile Number'] || r['Mobile No'] || r.mobile || r.phoneNumber || '').trim();
+    const numberVal = String(r['Number'] || r.number || r['Meter'] || r.meterNumber || r.meterNo || '').trim();
+    const latitude = String(r['Latitude'] || r.latitude || '').trim();
+    const longitude = String(r['Longitude'] || r.longitude || '').trim();
+    const status = String(r['Discon Status'] || r['Status'] || r['Task Status'] || r.disconStatus || r.status || 'PENDING').trim().toUpperCase() || 'PENDING';
+    const disconDate = String(r['Discon Date'] || r['Date'] || r.disconDate || r.reportDate || '').trim();
+    const imageUrl = String(r['Image'] || r.image || r.photoUrl || r['Photo Evidence'] || '').trim();
+    const reading = String(r['Reading'] || r.reading || r.meterReading || numberVal || '').trim();
+    const paymentStatus = String(r['Payment Status'] || r.paymentStatus || (status === 'PAID' ? 'PAID' : '')).trim();
+    const gisPole = String(r['Gis Pole'] || r.gisPole || r.poleNo || '').trim();
+    const agency = String(r['Agency'] || r.agency || r.assignedAgency || '').trim();
+    const notes = String(r['Notes'] || r.notes || r.workerRemarks || r.workerReport || '').trim();
+    const natureOfConn = String(r['Nature of Conn'] || r.natureOfConn || '').trim();
     const govNonGov = String(r['Gov/Non-Gov'] || r.govNonGov || 'Non-Gov').trim();
-    const meterNumber = String(r['Meter'] || r['Meter No'] || r['Final Reading'] || r['Old Meter No'] || r.meterNumber || '').trim();
-    const dueDateRange = String(r['O/S Due date Range'] || r['Due Date Range'] || r.dueDateRange || '').trim();
-    const outstandingDue = String(r['D2 Net O/S'] || r['Arrear Amount'] || r.outstandingDue || '').trim();
-    const rawStatus = String(r['Discon Status'] || r['Status'] || r['Task Status'] || r.disconStatus || r.status || 'PENDING').trim().toUpperCase();
-    const reportDate = String(r['Discon Date'] || r['Date'] || r.disconDate || r.reportDate || '').trim();
-    const phoneNumber = String(r['Mobile Number'] || r['Mobile No'] || r['Worker Phone'] || r.phoneNumber || '').trim();
-
-    const status = rawStatus || 'PENDING';
+    const lastUpdated = String(r['Last Updated'] || r.lastUpdated || r.updatedAt || '').trim();
+    const priority = String(r['Priority'] || r.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
+    const paidAmount = String(r['Paid Amount'] || r.paidAmount || (status === 'PAID' ? outstandingDue : '')).trim();
+    const paidDate = String(r['Paid Date'] || r.paidDate || r.paymentDate || (status === 'PAID' ? disconDate : '')).trim();
+    const paidType = String(r['Paid Type'] || r.paidType || r.paymentReference || '').trim();
+    const outstandingAfter = String(r['Outstanding After'] || r.outstandingAfter || '').trim();
+    const nextPaymentDate = String(r['Next Payment Date'] || r.nextPaymentDate || '').trim();
+    const paymentSource = String(r['Payment Source'] || r.paymentSource || '').trim();
+    const uploadDate = String(r['Upload Date'] || r.uploadDate || r.createdAt || '').trim();
 
     // Get real status history for this consumer, newest first
     const cHist = consumerId ? (historyMap[consumerId.toLowerCase()] || []) : [];
@@ -1899,21 +2031,40 @@ function getDisconnectionTasksData(params) {
     const latestHist = sortedHist.length > 0 ? sortedHist[0] : null;
 
     const task = {
-      // 14 Standard WBSEDCL Disconnection Headers (Exact Order & Names)
+      // Exact 33 Google Sheet Columns (A:AG)
       'off_code': offCode,
       'MRU': mru,
       'Consumer Id': consumerId,
       'Name': consumerName,
       'Address': consumerAddress,
-      'BClass/Phase': bClassPhase,
+      'Base Class': baseClass,
       'Class': consumerClass,
-      'Gov/Non-Gov': govNonGov,
-      'Meter': meterNumber,
-      'O/S Due date Range': dueDateRange,
+      'Device': device,
+      'O/S Duedate Range': dueDateRange,
       'D2 Net O/S': outstandingDue,
+      'Mobile': mobile,
+      'Number': numberVal,
+      'Latitude': latitude,
+      'Longitude': longitude,
       'Discon Status': status,
-      'Discon Date': reportDate,
-      'Mobile Number': phoneNumber,
+      'Discon Date': disconDate,
+      'Image': imageUrl,
+      'Reading': reading,
+      'Payment Status': paymentStatus,
+      'Gis Pole': gisPole,
+      'Agency': agency,
+      'Notes': notes,
+      'Nature of Conn': natureOfConn,
+      'Gov/Non-Gov': govNonGov,
+      'Last Updated': lastUpdated,
+      'Priority': priority,
+      'Paid Amount': paidAmount,
+      'Paid Date': paidDate,
+      'Paid Type': paidType,
+      'Outstanding After': outstandingAfter,
+      'Next Payment Date': nextPaymentDate,
+      'Payment Source': paymentSource,
+      'Upload Date': uploadDate,
 
       // Frontend compatibility fields
       serialNumber: slNumber,
@@ -1921,35 +2072,60 @@ function getDisconnectionTasksData(params) {
       consumerId: consumerId,
       consumerName: consumerName,
       accountNumber: consumerId,
-      meterNumber: meterNumber,
+      meterNumber: numberVal || reading,
       consumerAddress: consumerAddress,
-      phoneNumber: phoneNumber,
-      mobileNumber: phoneNumber,
+      phoneNumber: mobile,
+      mobileNumber: mobile,
       area: offCode,
-      disconnectionReason: 'Outstanding Bill (D2 Net O/S: ' + outstandingDue + ')',
-      assignedWorkerId: String(latestHist && latestHist['Worker ID'] ? latestHist['Worker ID'] : (r['Worker ID'] || r.assignedWorkerId || '')).trim(),
-      assignedWorkerName: String(latestHist && latestHist['Worker Name'] ? latestHist['Worker Name'] : (r['Worker Name'] || r.assignedWorkerName || '')).trim(),
-      taskStatus: status,
-      workerReport: String(latestHist ? latestHist.remarks : (r['Notes'] || r.workerReport || '')).trim(),
-      workerRemarks: String(latestHist ? latestHist.remarks : (r['Notes'] || r.workerRemarks || '')).trim(),
-      reportDate: reportDate,
-      reportTime: String(latestHist ? latestHist.time : (r.reportTime || '')).trim(),
-      submittedBy: String(latestHist ? latestHist.workerName : (r['Submitted By'] || r.submittedBy || '')).trim(),
-      createdAt: String(r['Created At'] || r.createdAt || reportDate || now()).trim(),
-      updatedAt: String(latestHist ? latestHist.date : (r['Updated At'] || r.updatedAt || now())).trim(),
-      photoUrl: String(latestHist && latestHist.photoUrl ? latestHist.photoUrl : (r['Photo Evidence'] || r.photoUrl || '')).trim(),
+      offCode: offCode,
+      mru: mru,
       mruSection: mru,
       cccFeeder: mru,
+      disconnectionReason: 'Outstanding Bill (D2 Net O/S: ' + outstandingDue + ')',
+      assignedWorkerId: String(latestHist && latestHist['Worker ID'] ? latestHist['Worker ID'] : (r['Worker ID'] || r.workerId || '')).trim(),
+      assignedWorkerName: String(latestHist && latestHist['Worker Name'] ? latestHist['Worker Name'] : (r['Worker Name'] || r.workerName || '')).trim(),
+      taskStatus: status,
+      disconStatus: status,
+      workerReport: notes,
+      workerRemarks: notes,
+      reportDate: disconDate,
+      disconDate: disconDate,
+      reportTime: String(latestHist ? latestHist.time : '').trim(),
+      submittedBy: String(latestHist ? latestHist.workerName : (agency || '')).trim(),
+      createdAt: uploadDate || lastUpdated || now(),
+      updatedAt: lastUpdated || now(),
+      photoUrl: imageUrl,
+      imageUrl: imageUrl,
       outstandingDue: outstandingDue,
+      d2NetOs: outstandingDue,
       dueDateRange: dueDateRange,
-      baseClass: consumerClass,
-      deviceType: bClassPhase,
-      priority: (latestHist && latestHist['Priority']) ? latestHist['Priority'] : ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL'),
-      assignedAgency: String(latestHist && latestHist['Assigned Agency'] ? latestHist['Assigned Agency'] : (r['Agency Name'] || r.assignedAgency || '')).trim(),
-      paidAmount: String(latestHist && latestHist['Paid Amount'] ? latestHist['Paid Amount'] : (r['Paid Amount'] || r.paidAmount || (status === 'PAID' ? outstandingDue : ''))).trim(),
-      paymentDate: String(latestHist && latestHist['Payment Date'] ? latestHist['Payment Date'] : (r['Payment Date'] || r.paymentDate || (status === 'PAID' ? reportDate : ''))).trim(),
-      paymentReference: String(latestHist && latestHist['Payment Reference'] ? latestHist['Payment Reference'] : (r['Payment Reference'] || r.paymentReference || '')).trim(),
-      meterReading: meterNumber,
+      osDueDateRange: dueDateRange,
+      baseClass: baseClass,
+      classType: consumerClass,
+      deviceType: device,
+      device: device,
+      priority: priority,
+      assignedAgency: agency,
+      agency: agency,
+      paidAmount: paidAmount,
+      paidDate: paidDate,
+      paymentDate: paidDate,
+      paidType: paidType,
+      paymentReference: paidType,
+      meterReading: reading,
+      reading: reading,
+      paymentStatus: paymentStatus,
+      gisPole: gisPole,
+      notes: notes,
+      natureOfConn: natureOfConn,
+      govNonGov: govNonGov,
+      lastUpdated: lastUpdated,
+      outstandingAfter: outstandingAfter,
+      nextPaymentDate: nextPaymentDate,
+      paymentSource: paymentSource,
+      uploadDate: uploadDate,
+      latitude: latitude,
+      longitude: longitude,
       statusHistory: sortedHist
     };
     tasks.push(task);
@@ -1979,7 +2155,16 @@ function getDisconnectionTasksData(params) {
   if (params.search) {
     const q = String(params.search).toLowerCase().trim();
     filteredTasks = filteredTasks.filter(function(t) {
-      const hay = (t.serialNumber + ' ' + t.consumerId + ' ' + t.consumerName + ' ' + t.meterNumber + ' ' + t.consumerAddress + ' ' + t.phoneNumber).toLowerCase();
+      const hay = (
+        (t.serialNumber || '') + ' ' +
+        (t.consumerId || '') + ' ' +
+        (t.consumerName || '') + ' ' +
+        (t.mru || '') + ' ' +
+        (t.offCode || '') + ' ' +
+        (t.meterNumber || '') + ' ' +
+        (t.consumerAddress || '') + ' ' +
+        (t.phoneNumber || '')
+      ).toLowerCase();
       return hay.includes(q);
     });
   }
@@ -2038,13 +2223,17 @@ function getDisconnectionTasksData(params) {
 
 function handleUploadDisconnectionTasks(body) {
   const lock = LockService.getScriptLock();
-  const hasLock = lock.tryLock(30000);
+  const hasLock = lock.tryLock(45000);
   if (!hasLock) {
     throw Error('Server is busy processing another upload. Please retry in a few seconds.');
   }
 
   try {
-    const tasks = body.tasks || [];
+    const tasks = Array.isArray(body.tasks) ? body.tasks : (Array.isArray(body) ? body : []);
+    if (!tasks || tasks.length === 0) {
+      return { success: true, count: 0, insertedCount: 0, updatedCount: 0, message: 'No tasks to process' };
+    }
+
     const reqId = body.requestId || ('REQ-UPL-' + Date.now());
 
     // Idempotency check with CacheService to prevent double-insert
@@ -2063,67 +2252,123 @@ function handleUploadDisconnectionTasks(body) {
     const data = s.getDataRange().getValues();
     const headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : DISCONNECTION_HEADERS;
     const cIdIdx = headers.indexOf('Consumer Id');
+    const mruIdx = headers.indexOf('MRU');
+    const offIdx = headers.indexOf('off_code');
 
     let inserted = 0;
     let updated = 0;
+    const uploadTimestamp = now();
 
     for (let i = 0; i < tasks.length; i++) {
       const t = tasks[i];
-      const cId = String(t['Consumer Id'] || t.consumerId || t['Consumer ID'] || t.accountNumber || '').trim();
-      const mNo = String(t['Meter'] || t.meterNumber || t['Meter No'] || t.meterNo || '').trim();
       const offCode = String(t['off_code'] || t.offCode || t.area || '5233100').trim();
       const mru = String(t['MRU'] || t.mru || t.mruSection || '').trim();
+      const cId = String(t['Consumer Id'] || t.consumerId || t['Consumer ID'] || t.accountNumber || '').trim();
       const name = String(t['Name'] || t.consumerName || t.name || '').trim();
       const address = String(t['Address'] || t.consumerAddress || t.address || '').trim();
-      const bClassPhase = String(t['BClass/Phase'] || t.bClassPhase || t.deviceType || 'I').trim();
-      const consumerClass = String(t['Class'] || t.baseClass || t.class || 'Domestic').trim();
-      const govNonGov = String(t['Gov/Non-Gov'] || t.govNonGov || 'Non-Gov').trim();
-      const dueDateRange = String(t['O/S Due date Range'] || t.dueDateRange || '').trim();
+      const baseClass = String(t['Base Class'] || t.baseClass || t.class || 'Domestic').trim();
+      const consumerClass = String(t['Class'] || t.classType || t.class || 'Domestic').trim();
+      const device = String(t['Device'] || t['BClass/Phase'] || t.deviceType || t.bClassPhase || 'I').trim();
+      const dueDateRange = String(t['O/S Duedate Range'] || t['O/S Due date Range'] || t.dueDateRange || '').trim();
       const d2NetOs = String(t['D2 Net O/S'] || t.outstandingDue || t.arrearAmount || '').trim();
-      const disconStatus = String(t['Discon Status'] || t.disconStatus || t.taskStatus || t.status || 'PENDING').trim();
-      const disconDate = String(t['Discon Date'] || t.disconDate || t.reportDate || '').trim();
-      const mobile = String(t['Mobile Number'] || t.phoneNumber || t.mobile || '').trim();
+      const mobile = String(t['Mobile'] || t['Mobile Number'] || t.phoneNumber || t.mobile || '').trim();
+      const numberVal = String(t['Number'] || t.number || t['Meter'] || t.meterNumber || t.meterNo || '').trim();
+      const latitude = String(t['Latitude'] || t.latitude || '').trim();
+      const longitude = String(t['Longitude'] || t.longitude || '').trim();
+      const natureOfConn = String(t['Nature of Conn'] || t.natureOfConn || '').trim();
+      const govNonGov = String(t['Gov/Non-Gov'] || t.govNonGov || 'Non-Gov').trim();
 
-      const record14 = {
-        'off_code': offCode,
-        'MRU': mru,
-        'Consumer Id': cId,
-        'Name': name,
-        'Address': address,
-        'BClass/Phase': bClassPhase,
-        'Class': consumerClass,
-        'Gov/Non-Gov': govNonGov,
-        'Meter': mNo,
-        'O/S Due date Range': dueDateRange,
-        'D2 Net O/S': d2NetOs,
-        'Discon Status': disconStatus,
-        'Discon Date': disconDate,
-        'Mobile Number': mobile
-      };
-
+      // Stable composite record key matching: prefer Consumer Id + MRU + off_code
       let existingRow = -1;
       if (cId && cIdIdx !== -1) {
         for (let r = 1; r < data.length; r++) {
           const rowCId = String(data[r][cIdIdx] || '').trim();
-          if (rowCId && rowCId.toLowerCase() === cId.toLowerCase()) {
-            existingRow = r + 1;
-            break;
+          const rowMru = mruIdx !== -1 ? String(data[r][mruIdx] || '').trim() : '';
+          const rowOff = offIdx !== -1 ? String(data[r][offIdx] || '').trim() : '';
+
+          if (rowCId.toLowerCase() === cId.toLowerCase()) {
+            if (mru && offCode && rowMru.toLowerCase() === mru.toLowerCase() && rowOff.toLowerCase() === offCode.toLowerCase()) {
+              existingRow = r + 1;
+              break;
+            } else if (mru && rowMru.toLowerCase() === mru.toLowerCase()) {
+              existingRow = r + 1;
+              break;
+            } else if (existingRow === -1) {
+              existingRow = r + 1;
+            }
           }
         }
       }
 
       if (existingRow > 1) {
-        // Update existing row in place
+        // Update existing row in place: ONLY update A:N source data and W, X, Y
+        // PRESERVE worker operational data in columns O:AF!
+        const sourceDataMap = {
+          'off_code': offCode,
+          'MRU': mru,
+          'Consumer Id': cId,
+          'Name': name,
+          'Address': address,
+          'Base Class': baseClass,
+          'Class': consumerClass,
+          'Device': device,
+          'O/S Duedate Range': dueDateRange,
+          'D2 Net O/S': d2NetOs,
+          'Mobile': mobile,
+          'Number': numberVal,
+          'Latitude': latitude,
+          'Longitude': longitude,
+          'Nature of Conn': natureOfConn,
+          'Gov/Non-Gov': govNonGov,
+          'Last Updated': uploadTimestamp
+        };
+
         for (let col = 0; col < headers.length; col++) {
           const colName = headers[col];
-          const val = record14[colName] !== undefined ? record14[colName] : extractFieldValue(record14, colName);
-          if (val !== undefined && val !== null && String(val) !== '') {
-            s.getRange(existingRow, col + 1).setValue(val);
+          if (sourceDataMap[colName] !== undefined && sourceDataMap[colName] !== null && String(sourceDataMap[colName]) !== '') {
+            s.getRange(existingRow, col + 1).setValue(sourceDataMap[colName]);
           }
         }
         updated++;
       } else {
-        appendSheetRecord('Disconnection', record14);
+        // Append brand new row with default operational status PENDING and Upload Date
+        const isUrgent = parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000;
+        const newRecord33 = {
+          'off_code': offCode,
+          'MRU': mru,
+          'Consumer Id': cId,
+          'Name': name,
+          'Address': address,
+          'Base Class': baseClass,
+          'Class': consumerClass,
+          'Device': device,
+          'O/S Duedate Range': dueDateRange,
+          'D2 Net O/S': d2NetOs,
+          'Mobile': mobile,
+          'Number': numberVal,
+          'Latitude': latitude,
+          'Longitude': longitude,
+          'Discon Status': 'PENDING',
+          'Discon Date': '',
+          'Image': '',
+          'Reading': '',
+          'Payment Status': 'UNPAID',
+          'Gis Pole': '',
+          'Agency': '',
+          'Notes': '',
+          'Nature of Conn': natureOfConn,
+          'Gov/Non-Gov': govNonGov,
+          'Last Updated': uploadTimestamp,
+          'Priority': isUrgent ? 'URGENT' : 'NORMAL',
+          'Paid Amount': '',
+          'Paid Date': '',
+          'Paid Type': '',
+          'Outstanding After': d2NetOs,
+          'Next Payment Date': '',
+          'Payment Source': '',
+          'Upload Date': uploadTimestamp
+        };
+        appendSheetRecord('Disconnection', newRecord33);
         inserted++;
       }
     }
@@ -2160,20 +2405,54 @@ function handleSubmitDisconnectionReport(body) {
       return JSON.parse(cached);
     }
 
-    const cId = String(body['Consumer Id'] || body.consumerId || body['Consumer ID'] || body.accountNumber || '').trim();
-    const status = String(body['Discon Status'] || body.taskStatus || body.status || 'COMPLETED').trim().toUpperCase();
-    const reportDate = String(body['Discon Date'] || body.reportDate || body.date || now()).trim();
-    const meterReading = String(body['Meter'] || body.meterReading || body.meterNumber || '').trim();
-    const phone = String(body['Mobile Number'] || body.phoneNumber || body.mobile || '').trim();
-    const remarks = String(body.remarks || body.workerRemarks || body.workerReport || '').trim();
+    const targetConsumerId = String(body['Consumer Id'] || body.consumerId || body['Consumer ID'] || body.accountNumber || '').trim();
+    const targetMru = String(body['MRU'] || body.mru || body.mruSection || '').trim();
+    const targetOffCode = String(body['off_code'] || body.off_code || body.offCode || '').trim();
+
+    const status = String(body['Discon Status'] || body.taskStatus || body.disconStatus || body.status || 'COMPLETED').trim().toUpperCase();
+    const reportDate = String(body['Discon Date'] || body.disconDate || body.reportDate || body.date || now()).trim();
+    const reading = String(body['Reading'] || body.reading || body.meterReading || body['Meter'] || '').trim();
+    const paymentStatus = String(body['Payment Status'] || body.paymentStatus || (status === 'PAID' ? 'PAID' : '')).trim();
+    const gisPole = String(body['Gis Pole'] || body.gisPole || body.poleNo || '').trim();
+    const agency = String(body['Agency'] || body.agency || body.assignedAgency || body.workerName || '').trim();
+    const notes = String(body['Notes'] || body.notes || body.remarks || body.workerRemarks || body.workerReport || '').trim();
+    const priority = String(body['Priority'] || body.priority || 'NORMAL').trim().toUpperCase();
+    const paidAmount = String(body['Paid Amount'] || body.paidAmount || '').trim();
+    const paidDate = String(body['Paid Date'] || body.paidDate || body.paymentDate || '').trim();
+    const paidType = String(body['Paid Type'] || body.paidType || body.paymentReference || '').trim();
+    const outstandingAfter = String(body['Outstanding After'] || body.outstandingAfter || '').trim();
+    const nextPaymentDate = String(body['Next Payment Date'] || body.nextPaymentDate || '').trim();
+    const paymentSource = String(body['Payment Source'] || body.paymentSource || '').trim();
     const workerId = String(body.workerId || '').trim();
     const workerName = String(body.workerName || '').trim();
-    const paidAmount = String(body.paidAmount || '').trim();
-    const paymentDate = String(body.paymentDate || '').trim();
-    const paymentRef = String(body.paymentReference || '').trim();
-    const priority = String(body.priority || 'NORMAL').trim();
-    const assignedAgency = String(body.assignedAgency || '').trim();
-    const photoUrl = String(body.photoUrl || '').trim();
+    const rawPhoto = String(body['Image'] || body.image || body.photoUrl || body.directImageUrl || '').trim();
+
+    // IMAGE HANDLING: Save through Google Drive and save resulting URL in Image column
+    // Never store large base64 data directly inside the sheet cell!
+    let finalImageUrl = rawPhoto;
+    if (finalImageUrl && finalImageUrl.startsWith('data:')) {
+      try {
+        const parts = finalImageUrl.split(';base64,');
+        const contentType = parts[0].replace('data:', '') || 'image/jpeg';
+        const base64Data = parts[1];
+        const decodedBytes = Utilities.base64Decode(base64Data);
+        const ext = contentType.includes('png') ? '.png' : (contentType.includes('pdf') ? '.pdf' : '.jpg');
+        const fileName = 'DISC_' + (targetConsumerId || Date.now()) + '_' + Date.now() + ext;
+        const blob = Utilities.newBlob(decodedBytes, contentType, fileName);
+
+        const folder = getOrCreateWorkOrdersDriveFolder();
+        const file = folder.createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+        const fileId = file.getId();
+        finalImageUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+      } catch (driveErr) {
+        Logger.log('Drive upload notice: ' + driveErr);
+        if (finalImageUrl.length > 500) {
+          finalImageUrl = '[Photo Attached - Cached]';
+        }
+      }
+    }
 
     const s = getSheet('Disconnection');
     ensureDisconnectionHeaders(s);
@@ -2182,47 +2461,123 @@ function handleSubmitDisconnectionReport(body) {
     const headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : DISCONNECTION_HEADERS;
 
     const cIdIdx = headers.indexOf('Consumer Id');
-    const statusIdx = headers.indexOf('Discon Status');
-    const dateIdx = headers.indexOf('Discon Date');
-    const meterIdx = headers.indexOf('Meter');
-    const phoneIdx = headers.indexOf('Mobile Number');
+    const mruIdx = headers.indexOf('MRU');
+    const offIdx = headers.indexOf('off_code');
 
     let foundRow = -1;
     let prevStatus = 'PENDING';
-    let slNo = '';
 
-    for (let r = 1; r < data.length; r++) {
-      const rowCId = cIdIdx !== -1 ? String(data[r][cIdIdx] || '').trim() : '';
-      if (cId && rowCId && rowCId.toLowerCase() === cId.toLowerCase()) {
-        foundRow = r + 1;
-        if (statusIdx !== -1) prevStatus = String(data[r][statusIdx] || 'PENDING').trim();
-        slNo = 'SL ' + ('000' + r).slice(-3);
-        break;
+    // 1. Match using stable unique record key: prefer Consumer Id + MRU + off_code
+    if (targetConsumerId && cIdIdx !== -1) {
+      for (let r = 1; r < data.length; r++) {
+        const rowCId = String(data[r][cIdIdx] || '').trim();
+        const rowMru = mruIdx !== -1 ? String(data[r][mruIdx] || '').trim() : '';
+        const rowOff = offIdx !== -1 ? String(data[r][offIdx] || '').trim() : '';
+
+        if (rowCId.toLowerCase() === targetConsumerId.toLowerCase()) {
+          if (targetMru && targetOffCode) {
+            if (rowMru.toLowerCase() === targetMru.toLowerCase() && rowOff.toLowerCase() === targetOffCode.toLowerCase()) {
+              foundRow = r + 1;
+              const stIdx = headers.indexOf('Discon Status');
+              if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+              break;
+            }
+          } else if (targetMru) {
+            if (rowMru.toLowerCase() === targetMru.toLowerCase()) {
+              foundRow = r + 1;
+              const stIdx = headers.indexOf('Discon Status');
+              if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+              break;
+            }
+          } else if (foundRow === -1) {
+            foundRow = r + 1;
+            const stIdx = headers.indexOf('Discon Status');
+            if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+          }
+        }
+      }
+
+      // If triple match didn't find, fallback to Consumer Id match
+      if (foundRow === -1) {
+        for (let r = 1; r < data.length; r++) {
+          const rowCId = String(data[r][cIdIdx] || '').trim();
+          if (rowCId.toLowerCase() === targetConsumerId.toLowerCase()) {
+            foundRow = r + 1;
+            const stIdx = headers.indexOf('Discon Status');
+            if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+            break;
+          }
+        }
       }
     }
 
+    const nowTimestamp = now();
+
+    // Map of operational columns allowed to be updated by worker (O:AF, and Y)
+    // Worker CANNOT modify A:N source data or AG Upload Date!
+    const operationalUpdateMap = {
+      'Discon Status': status,
+      'Discon Date': reportDate,
+      'Image': finalImageUrl,
+      'Reading': reading,
+      'Payment Status': paymentStatus,
+      'Gis Pole': gisPole,
+      'Agency': agency,
+      'Notes': notes,
+      'Last Updated': nowTimestamp,
+      'Priority': priority,
+      'Paid Amount': paidAmount,
+      'Paid Date': paidDate,
+      'Paid Type': paidType,
+      'Outstanding After': outstandingAfter,
+      'Next Payment Date': nextPaymentDate,
+      'Payment Source': paymentSource
+    };
+
     if (foundRow > 1) {
-      if (statusIdx !== -1) s.getRange(foundRow, statusIdx + 1).setValue(status);
-      if (dateIdx !== -1) s.getRange(foundRow, dateIdx + 1).setValue(reportDate);
-      if (meterIdx !== -1 && meterReading) s.getRange(foundRow, meterIdx + 1).setValue(meterReading);
-      if (phoneIdx !== -1 && phone) s.getRange(foundRow, phoneIdx + 1).setValue(phone);
+      // Update that row only - NEVER create a duplicate row!
+      for (let col = 0; col < headers.length; col++) {
+        const colName = headers[col];
+        if (operationalUpdateMap[colName] !== undefined && operationalUpdateMap[colName] !== null && String(operationalUpdateMap[colName]) !== '') {
+          s.getRange(foundRow, col + 1).setValue(operationalUpdateMap[colName]);
+        }
+      }
     } else {
-      slNo = 'SL ' + ('000' + data.length).slice(-3);
+      // If row not found at all, create single complete row
       const newRecord = {
-        'off_code': body['off_code'] || body.offCode || '5233100',
-        'MRU': body['MRU'] || body.mru || '',
-        'Consumer Id': cId,
+        'off_code': targetOffCode || '5233100',
+        'MRU': targetMru || '',
+        'Consumer Id': targetConsumerId,
         'Name': body['Name'] || body.consumerName || '',
         'Address': body['Address'] || body.consumerAddress || '',
-        'BClass/Phase': body['BClass/Phase'] || body.bClassPhase || 'I',
-        'Class': body['Class'] || body.baseClass || 'Domestic',
-        'Gov/Non-Gov': body['Gov/Non-Gov'] || body.govNonGov || 'Non-Gov',
-        'Meter': meterReading || body.meterNumber || '',
-        'O/S Due date Range': body['O/S Due date Range'] || body.dueDateRange || '',
-        'D2 Net O/S': body['D2 Net O/S'] || body.outstandingDue || body.arrearAmount || '',
+        'Base Class': body['Base Class'] || body.baseClass || 'Domestic',
+        'Class': body['Class'] || body.classType || 'Domestic',
+        'Device': body['Device'] || body.deviceType || 'I',
+        'O/S Duedate Range': body['O/S Duedate Range'] || body.dueDateRange || '',
+        'D2 Net O/S': body['D2 Net O/S'] || body.outstandingDue || '',
+        'Mobile': body['Mobile'] || body.phoneNumber || '',
+        'Number': reading,
+        'Latitude': body.latitude || '',
+        'Longitude': body.longitude || '',
         'Discon Status': status,
         'Discon Date': reportDate,
-        'Mobile Number': phone
+        'Image': finalImageUrl,
+        'Reading': reading,
+        'Payment Status': paymentStatus,
+        'Gis Pole': gisPole,
+        'Agency': agency,
+        'Notes': notes,
+        'Nature of Conn': body.natureOfConn || '',
+        'Gov/Non-Gov': body.govNonGov || 'Non-Gov',
+        'Last Updated': nowTimestamp,
+        'Priority': priority,
+        'Paid Amount': paidAmount,
+        'Paid Date': paidDate,
+        'Paid Type': paidType,
+        'Outstanding After': outstandingAfter,
+        'Next Payment Date': nextPaymentDate,
+        'Payment Source': paymentSource,
+        'Upload Date': nowTimestamp
       };
       appendSheetRecord('Disconnection', newRecord);
     }
@@ -2233,31 +2588,34 @@ function handleSubmitDisconnectionReport(body) {
 
     const historyRow = [
       reqId,
-      cId,
-      slNo,
+      targetConsumerId,
+      'SL ' + ('000' + (foundRow > 1 ? (foundRow - 1) : 1)).slice(-3),
       prevStatus,
       status,
       workerId,
-      workerName,
-      remarks,
+      workerName || agency,
+      notes,
       paidAmount,
-      paymentDate,
-      paymentRef,
-      meterReading,
-      assignedAgency,
+      paidDate,
+      paidType,
+      reading,
+      agency,
       priority,
-      photoUrl,
+      finalImageUrl,
       'UPDATE',
-      now()
+      nowTimestamp
     ];
     histSheet.appendRow(historyRow);
 
     const res = {
       success: true,
-      message: 'Disconnection report saved successfully in Google Sheet',
-      taskId: 'TASK-DISC-' + cId,
-      consumerId: cId,
+      message: 'Disconnection report saved successfully in Google Sheets',
+      taskId: 'TASK-DISC-' + targetConsumerId,
+      consumerId: targetConsumerId,
       status: status,
+      sheet: 'Disconnection',
+      imageUrl: finalImageUrl,
+      rowUpdated: foundRow > 1 ? foundRow : 'appended',
       requestId: reqId
     };
 
