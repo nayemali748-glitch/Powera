@@ -931,12 +931,30 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
                           {/* Password & Quick Actions */}
                           <div className="flex items-center gap-2 self-end sm:self-center">
-                            {/* Security PIN Indicator */}
-                            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg text-xs" title="SHA-256 Cloud Encrypted PIN">
-                              <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                              <span className="font-mono text-slate-500 text-[11px] tracking-wider">
-                                •••• (Encrypted)
+                            {/* Security PIN Indicator with Reveal & Copy */}
+                            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg text-xs" title="User Login Password / PIN">
+                              <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                              <span className="font-mono font-bold text-slate-900 text-xs tracking-wider">
+                                {revealedPasswords[u.idNo] !== false ? (u.password || '••••') : '••••'}
                               </span>
+                              <button
+                                type="button"
+                                onClick={() => setRevealedPasswords(prev => ({ ...prev, [u.idNo]: prev[u.idNo] === false ? true : false }))}
+                                className="text-slate-400 hover:text-slate-700 cursor-pointer ml-0.5"
+                                title={revealedPasswords[u.idNo] !== false ? 'Hide Password' : 'Show Password'}
+                              >
+                                {revealedPasswords[u.idNo] !== false ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                              {u.password && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(String(u.password), `pass_${u.idNo}`)}
+                                  className="text-slate-400 hover:text-blue-600 cursor-pointer ml-0.5"
+                                  title="Copy Password"
+                                >
+                                  {copiedKey === `pass_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              )}
                             </div>
 
                             {/* Edit Password Button */}

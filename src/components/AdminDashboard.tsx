@@ -42,34 +42,45 @@ import {
   Activity,
   Hash,
   ArrowRight,
-  AlertTriangle
+  AlertTriangle,
+  LayoutDashboard,
+  UploadCloud,
+  MessageSquareWarning,
+  RotateCcw,
+  Loader2
 } from 'lucide-react';
-import { PowerEntry, CategoryType, StatusType, SyncMode } from '../types';
-import { updateEntry, deleteEntry, clearAllEntries } from '../services/api';
+import { PowerEntry, CategoryType, StatusType, SyncMode, DisconnectionTask } from '../types';
+import { updateEntry, deleteEntry, clearAllEntries, deleteDisconnectionTask, submitDisconnectionTaskReport } from '../services/api';
 import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
+import { DisconnectionPerformanceDashboard } from './DisconnectionPerformanceDashboard';
 import { Language, translations } from '../utils/translations';
+import { cleanNameOnly } from '../utils/entryNormalizer';
+import { getReissueLockState, cleanDisconnectionNotes } from '../utils/disconnectionClassifier';
 import { 
   syncAllEntriesToGoogleSheet, 
   getSavedSpreadsheetUrl, 
   getSavedSpreadsheetId, 
   createPowerSpreadsheet 
 } from '../services/googleSheets';
+import { formatDateDDMMYYYY, formatTime12Hour, formatDateTime12Hour, getNowDateDDMMYYYY } from '../utils/dateTimeFormat';
 
 interface AdminDashboardProps {
   entries: PowerEntry[];
+  disconnectionTasks?: DisconnectionTask[];
   onRefresh: () => void;
   onExportCsv: () => void;
   onLogout?: () => void;
   lang?: Language;
   onOpenLanguageModal?: () => void;
   syncMode?: SyncMode;
-  onNavigateToDisconnection?: () => void;
+  onNavigateToDisconnection?: (tab?: 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST') => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   entries,
+  disconnectionTasks = [],
   onRefresh,
   onExportCsv,
   onLogout,
@@ -93,16 +104,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [sheetsSyncMessage, setSheetsSyncMessage] = useState<string | null>(null);
   const [currentSheetUrl, setCurrentSheetUrl] = useState<string | null>(() => getSavedSpreadsheetUrl());
 
-  // Record Deletion Confirmation State
+  // Record Deletion Confirmation State + Instant 0ms Local Tombstone Set
   const [entryToDelete, setEntryToDelete] = useState<PowerEntry | null>(null);
   const [isDeletingEntry, setIsDeletingEntry] = useState<boolean>(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(new Set());
 
   // Mandatory Clear All Confirmation State
   const [isClearAllModalOpen, setIsClearAllModalOpen] = useState<boolean>(false);
   const [clearAllConfirmText, setClearAllConfirmText] = useState<string>('');
   const [isClearingAll, setIsClearingAll] = useState<boolean>(false);
   const [clearAllError, setClearAllError] = useState<string | null>(null);
+  const [approvingReissueId, setApprovingReissueId] = useState<string | null>(null);
+
+  const handleAdminApproveReissue = async (task: DisconnectionTask) => {
+    const cId = String(task.consumerId || task.taskId || '');
+    setApprovingReissueId(cId);
+    try {
+      const cleanedNotes = cleanDisconnectionNotes(task.workerRemarks || task.notes || '');
+      const approvedMarker = `${cleanedNotes ? cleanedNotes + ' | ' : ''}[REISSUE_APPROVED]`;
+      await submitDisconnectionTaskReport({
+        taskId: task.taskId || `TASK-DISC-${cId}`,
+        consumerId: cId,
+        consumerName: task.consumerName || '',
+        taskStatus: 'REISSUE' as any,
+        disconStatus: 'REISSUE',
+        workerRemarks: approvedMarker,
+        notes: approvedMarker,
+        agency: cleanNameOnly(task.assignedAgency || task.agency || ''),
+        workerId: '',
+        workerName: cleanNameOnly(task.assignedWorkerName || '')
+      });
+      onRefresh();
+    } finally {
+      setApprovingReissueId(null);
+    }
+  };
 
   const handleSyncToGoogleSheets = async () => {
     setIsSyncingSheets(true);
@@ -144,7 +181,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    const dateStamp = new Date().toISOString().slice(0, 10);
+    const dateStamp = getNowDateDDMMYYYY();
     let filename = `WBSEDCL_${targetCategory}_Report_${dateStamp}.csv`;
     let headers: string[] = [];
     let rows: string[][] = [];
@@ -172,11 +209,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'Premises / Location Address',
         'Meter Installation Date',
         'Inspection Agency Name',
-        'Lineman / Staff Name',
+        'Worker Name',
         'Agency Name',
         'CCC Name',
-        'Feeder Name',
-        'Substation',
         'Status',
         'GPS Coordinates',
         'Remarks / Notes'
@@ -184,9 +219,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${e.workOrderNo || ''}"`,
-        `"${e.workOrderDate || ''}"`,
+        `"${formatDateDDMMYYYY(e.workOrderDate)}"`,
         `"${e.applicationNo || ''}"`,
         `"${e.consumerId || ''}"`,
         `"${e.meterNo || ''}"`,
@@ -200,13 +235,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         `"${e.tariffCategory || ''}"`,
         `"${e.serviceCableLength || ''}"`,
         `"${(e.address || '').replace(/"/g, '""')}"`,
-        `"${e.meterInstallDate || ''}"`,
-        `"${(e.inspectionAgencyName || '').replace(/"/g, '""')}"`,
-        `"${(e.workerName || '').replace(/"/g, '""')}"`,
-        `"${(e.agencyName || '').replace(/"/g, '""')}"`,
+        `"${formatDateDDMMYYYY(e.meterInstallDate)}"`,
+        `"${cleanNameOnly(e.inspectionAgencyName || '').replace(/"/g, '""')}"`,
+        `"${cleanNameOnly(e.workerName || '').replace(/"/g, '""')}"`,
+        `"${cleanNameOnly(e.agencyName || '').replace(/"/g, '""')}"`,
         `"${(e.cccName || e.cccOffice || '').replace(/"/g, '""')}"`,
-        `"${(e.feederName || '').replace(/"/g, '""')}"`,
-        `"${(e.substation || '').replace(/"/g, '""')}"`,
         `"${e.status}"`,
         `"${e.locationGps || ''}"`,
         `"${(e.notes || '').replace(/"/g, '""')}"`
@@ -226,8 +259,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'Final Meter Reading (kWh)',
         'Meter No',
         'Pole No',
-        'Lineman / Staff Name',
-        'Feeder Name',
+        'Worker Name',
         'CCC Office',
         'Status',
         'GPS Coordinates',
@@ -236,7 +268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${e.consumerId || ''}"`,
         `"${(e.consumerName || '').replace(/"/g, '""')}"`,
         `"${e.mobile || ''}"`,
@@ -246,8 +278,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         `"${e.finalReading || ''}"`,
         `"${e.meterNo || ''}"`,
         `"${e.poleNo || ''}"`,
-        `"${(e.workerName || '').replace(/"/g, '""')}"`,
-        `"${(e.feederName || '').replace(/"/g, '""')}"`,
+        `"${cleanNameOnly(e.workerName || '').replace(/"/g, '""')}"`,
         `"${(e.cccOffice || '').replace(/"/g, '""')}"`,
         `"${e.status}"`,
         `"${e.locationGps || ''}"`,
@@ -275,7 +306,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${e.poleNo || ''}"`,
         `"${(e.issueType || '').replace(/"/g, '""')}"`,
         `"${e.priority || ''}"`,
@@ -314,7 +345,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${e.consumerId || ''}"`,
         `"${(e.consumerName || '').replace(/"/g, '""')}"`,
         `"${e.mobile || ''}"`,
@@ -354,7 +385,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${(e.dtrName || '').replace(/"/g, '""')}"`,
         `"${e.existingCapacity || ''}"`,
         `"${e.newCapacity || ''}"`,
@@ -422,7 +453,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rows = targetEntries.map((e, idx) => [
         String(idx + 1),
         `"${e.id}"`,
-        `"${new Date(e.date).toLocaleString()}"`,
+        `"${formatDateTime12Hour(e.date)}"`,
         `"${e.category}"`,
         `"${(e.workerName || '').replace(/"/g, '""')}"`,
         `"${(e.agencyName || '').replace(/"/g, '""')}"`,
@@ -431,7 +462,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         `"${(e.substation || '').replace(/"/g, '""')}"`,
         `"${e.status}"`,
         `"${e.workOrderNo || ''}"`,
-        `"${e.workOrderDate || ''}"`,
+        `"${formatDateDDMMYYYY(e.workOrderDate)}"`,
         `"${e.applicationNo || ''}"`,
         `"${e.consumerId || ''}"`,
         `"${(e.consumerName || '').replace(/"/g, '""')}"`,
@@ -446,7 +477,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         `"${e.phase || ''}"`,
         `"${e.tariffCategory || ''}"`,
         `"${e.serviceCableLength || ''}"`,
-        `"${e.meterInstallDate || ''}"`,
+        `"${formatDateDDMMYYYY(e.meterInstallDate)}"`,
         `"${(e.inspectionAgencyName || '').replace(/"/g, '""')}"`,
         `"${e.poleNo || ''}"`,
         `"${e.arrearAmount || ''}"`,
@@ -486,8 +517,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     onRefresh();
   }, []);
 
+  const isDeletedLocally = React.useCallback((item: any) => {
+    if (!item || locallyDeletedIds.size === 0) return false;
+    const candidates = [
+      item.id,
+      item.submissionId,
+      item.consumerId,
+      item['Consumer Id'],
+      item.taskId,
+      item.consumerId ? `TASK-DISC-${item.consumerId}` : ''
+    ];
+    for (const c of candidates) {
+      if (c && locallyDeletedIds.has(String(c).trim())) return true;
+    }
+    return false;
+  }, [locallyDeletedIds]);
+
+  const activeEntries = React.useMemo(() => entries.filter(e => !isDeletedLocally(e)), [entries, isDeletedLocally]);
+
   // Filter calculations
-  const filteredEntries = entries.filter((item) => {
+  const filteredEntries = activeEntries.filter((item) => {
     if (selectedCategory !== 'ALL' && item.category !== selectedCategory) {
       return false;
     }
@@ -502,17 +551,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return true;
   });
 
+  const effectiveDiscTasks: DisconnectionTask[] = React.useMemo(() => {
+    if (disconnectionTasks && disconnectionTasks.length > 0) {
+      return disconnectionTasks.filter(t => !isDeletedLocally(t));
+    }
+    return activeEntries
+      .filter((e) => e.category === 'DISCONNECTION')
+      .map((e) => ({
+        id: e.id || `TASK-DISC-${e.consumerId}`,
+        consumerId: e.consumerId || e.id,
+        consumerName: e.consumerName || 'N/A',
+        address: e.address || '',
+        mobile: e.mobile || '',
+        meterNo: e.meterNo || '',
+        poleNo: e.poleNo || '',
+        arrearAmount: e.arrearAmount || '0',
+        disconStatus: e.disconStatus || e.status || 'CONNECTED',
+        agencyName: e.agencyName || '',
+        updatedBy: e.workerName || '',
+        updatedAt: e.date || '',
+        remarks: e.notes || e.reason || '',
+        baseClass: e.baseClass || e.tariffCategory || '',
+        device: e.device || e.phase || '',
+        category: e.tariffCategory || e.baseClass || '',
+      }));
+  }, [disconnectionTasks, activeEntries, isDeletedLocally]);
+
   // Metrics summary
-  const total = entries.length;
-  const nscCount = entries.filter(e => e.category === 'NSC').length;
-  const discCount = entries.filter(e => e.category === 'DISCONNECTION').length;
-  const poleCount = entries.filter(e => e.category === 'POLE CASE').length;
-  const meterCount = entries.filter(e => e.category === 'METER REPLESMENT').length;
-  const dtrCount = entries.filter(e => e.category === 'DTR REPLESMENT').length;
+  const nscCount = activeEntries.filter(e => e.category === 'NSC').length;
+  const discCount = Math.max(activeEntries.filter(e => e.category === 'DISCONNECTION').length, effectiveDiscTasks.length);
+  const poleCount = activeEntries.filter(e => e.category === 'POLE CASE').length;
+  const meterCount = activeEntries.filter(e => e.category === 'METER REPLESMENT').length;
+  const dtrCount = activeEntries.filter(e => e.category === 'DTR REPLESMENT').length;
+  const total = Math.max(activeEntries.length, nscCount + discCount + poleCount + meterCount + dtrCount);
   
-  const pendingCount = entries.filter(e => e.status === 'Pending').length;
-  const completedCount = entries.filter(e => e.status === 'Completed').length;
-  const approvedCount = entries.filter(e => e.status === 'Approved').length;
+  const pendingCount = activeEntries.filter(e => e.status === 'Pending').length;
+  const completedCount = activeEntries.filter(e => e.status === 'Completed').length;
+  const approvedCount = activeEntries.filter(e => e.status === 'Approved').length;
 
   const handleStatusChange = async (id: string, newStatus: StatusType) => {
     setUpdatingId(id);
@@ -532,7 +607,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDelete = (entryOrId: PowerEntry | string) => {
     let target: PowerEntry | undefined;
     if (typeof entryOrId === 'string') {
-      target = entries.find(e => e.id === entryOrId || e.submissionId === entryOrId);
+      target = activeEntries.find(e => e.id === entryOrId || e.submissionId === entryOrId);
       if (!target && selectedEntry && (selectedEntry.id === entryOrId || selectedEntry.submissionId === entryOrId)) {
         target = selectedEntry;
       }
@@ -549,29 +624,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const executeDeleteEntry = async () => {
     if (!entryToDelete) return;
+    const target = entryToDelete;
 
-    setIsDeletingEntry(true);
-    setDeleteError(null);
-
-    try {
-      await deleteEntry(entryToDelete.id, entryToDelete.category, entryToDelete.submissionId, {
-        confirmCritical: true,
-        reason: 'Confirmed by Admin',
-        status: entryToDelete.status,
-        meterNo: entryToDelete.meterNo,
-        sealNo: entryToDelete.sealNo,
-        entry: entryToDelete
-      });
-
-      if (selectedEntry?.id === entryToDelete.id || selectedEntry?.submissionId === entryToDelete.id) {
-        setSelectedEntry(null);
+    // 1. Immediately mark as deleted in UI (0ms delay) and close confirmation modal
+    setLocallyDeletedIds(prev => {
+      const next = new Set(prev);
+      if (target.id) next.add(String(target.id).trim());
+      if (target.submissionId) next.add(String(target.submissionId).trim());
+      if (target.consumerId) {
+        next.add(String(target.consumerId).trim());
+        next.add(`TASK-DISC-${String(target.consumerId).trim()}`);
       }
-      setEntryToDelete(null);
+      return next;
+    });
+    if (selectedEntry?.id === target.id || selectedEntry?.submissionId === target.id) {
+      setSelectedEntry(null);
+    }
+    setEntryToDelete(null);
+    setIsDeletingEntry(false);
+
+    // 2. Permanently delete on server & Backend Google Sheet
+    try {
+      if (target.category === 'DISCONNECTION' || String(target.id || '').startsWith('TASK-DISC-')) {
+        await deleteDisconnectionTask({
+          id: target.id,
+          consumerId: target.consumerId || target.id
+        });
+      } else {
+        await deleteEntry(target.id, target.category, target.submissionId, {
+          confirmCritical: true,
+          reason: 'Confirmed by Admin',
+          status: target.status,
+          meterNo: target.meterNo,
+          sealNo: target.sealNo,
+          entry: target
+        });
+      }
       onRefresh();
     } catch (err: any) {
-      setDeleteError(err.message || (lang === 'bn' ? 'ডিলিট করতে ব্যর্থ হয়েছে' : 'Failed to delete entry'));
-    } finally {
-      setIsDeletingEntry(false);
+      console.warn('Delete background notice:', err);
     }
   };
 
@@ -648,7 +739,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div class="card">
             <div class="card-title">Submission Date & Time</div>
-            <div class="card-val">${new Date(entry.date).toLocaleString()}</div>
+            <div class="card-val">${formatDateTime12Hour(entry.date)}</div>
           </div>
           <div class="card">
             <div class="card-title">Substation & Feeder</div>
@@ -1134,7 +1225,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'DISCONNECTION' ? 'text-white' : 'text-slate-900'}`}>{discCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100 font-semibold' : 'text-slate-500'}`}>Disconnections</span>
+              <span className={`text-[10px] font-bold ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-700'}`}>
+                {lang === 'bn' ? `মোট লিস্ট: ${discCount}` : `Total List: ${discCount}`}
+              </span>
               {selectedCategory === 'DISCONNECTION' && (
                 <span className="text-[9px] bg-white text-rose-700 font-bold px-1.5 py-0.2 rounded">Active</span>
               )}
@@ -1213,6 +1306,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
         </div>
+
+        {/* DISCONNECTION MANAGEMENT COMPACT 4-OPTION BAR (Matching 1. NSC / 2. DISCONNECT / 3. POLE CASE style) */}
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <PowerOff className="w-3 h-3 text-rose-600" />
+              <span>Disconnection Management Quick Options</span>
+            </span>
+            <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+              Total List: {discCount}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="admin-disconnection-quick-options">
+            <button
+              type="button"
+              onClick={() => {
+                if (onNavigateToDisconnection) {
+                  onNavigateToDisconnection('DASHBOARD');
+                } else {
+                  setSelectedCategory('DISCONNECTION');
+                }
+              }}
+              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-amber-50 hover:border-amber-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+            >
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-amber-700">
+                <span className="truncate">1. PERFORMANCE DASHBOARD</span>
+                <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
+                <span>Live Deck & Paid/Discon</span>
+                <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">Open</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('UPLOAD')}
+              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-indigo-50 hover:border-indigo-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+            >
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-indigo-700">
+                <span className="truncate">2. UPLOAD LIST</span>
+                <UploadCloud className="w-3.5 h-3.5 shrink-0" />
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
+                <span>Excel / CSV to Sheet</span>
+                <span className="text-[9px] bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.2 rounded">Upload</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('REPORT')}
+              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-emerald-50 hover:border-emerald-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+            >
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-emerald-700">
+                <span className="truncate">3. WORKER-WISE REPORT</span>
+                <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
+                <span>Worker & Agency Stats</span>
+                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">Report</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('VIEW_LIST')}
+              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-rose-50 hover:border-rose-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+            >
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-rose-700">
+                <span className="truncate">4. VIEW LIST</span>
+                <Users className="w-3.5 h-3.5 shrink-0" />
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
+                <span>All Consumers</span>
+                <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.2 rounded">{discCount}</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* ADMIN SMS-LIKE RE-ISSUE REQUEST NOTIFICATION INBOX */}
+        {effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length > 0 && (
+          <div className="mt-3 bg-amber-50 border-2 border-amber-400 rounded-xl p-3.5 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-amber-500 text-slate-950">
+                  <MessageSquareWarning className="w-4 h-4" />
+                </span>
+                <div>
+                  <h4 className="text-xs font-black text-amber-950 uppercase">
+                    {lang === 'bn'
+                      ? `📩 ওয়ার্কার রি-ইস্যু মেসেজ (${effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length} টি পেন্ডিং)`
+                      : `📩 Worker Re-issue SMS Requests (${effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length} Pending)`}
+                  </h4>
+                  <p className="text-[11px] font-semibold text-amber-800">
+                    {lang === 'bn'
+                      ? 'ডিসকানেকশন লিস্টে ওয়ার্কার পুনরায় স্ট্যাটাস আপডেট করার জন্য Re-issue অনুরোধ পাঠিয়েছে।'
+                      : 'Workers requested Re-issue permission to update Disconnection status again.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {effectiveDiscTasks
+                .filter(t => getReissueLockState(t).reissueRequested)
+                .map((rt, rIdx) => {
+                  const lockInfo = getReissueLockState(rt);
+                  const cId = rt.consumerId || (rt as any)['Consumer Id'] || `ROW-${rIdx}`;
+                  return (
+                    <div
+                      key={`${cId}-${rIdx}`}
+                      className="bg-white border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2.5 shadow-2xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-black uppercase">
+                            {lockInfo.requestedBy || cleanNameOnly(rt.assignedWorkerName || rt.assignedAgency) || 'Worker'}
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-slate-500">ID: {cId}</span>
+                        </div>
+                        <p className="text-xs font-black text-slate-900 truncate mt-0.5">{rt.consumerName || 'Consumer'}</p>
+                        <p className="text-[10px] font-semibold text-slate-500">
+                          Status: <span className="font-bold text-slate-800">{rt.disconStatus || rt.taskStatus}</span>
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleAdminApproveReissue(rt)}
+                        disabled={approvingReissueId === String(cId)}
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                      >
+                        {approvingReissueId === String(cId) ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        )}
+                        <span>{lang === 'bn' ? 'Re-issue করুন' : 'Re-issue'}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ADMIN WORK ORDER / KHATA PHOTO MANAGEMENT SECTION */}
@@ -1242,7 +1481,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <WorkOrderNoticeSection
-            category="NSC"
+            category="ALL"
             currentUser={{
               idNo: '8695716192',
               phone: '8695716192',
@@ -1259,7 +1498,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* DEDICATED CATEGORY DATA SECTION CONTAINER */}
       <div id="admin-category-data-view" className="space-y-4 pt-2">
         {/* Dynamic Category Hero Banner */}
-        <div className={`p-4 sm:p-5 rounded-2xl border transition-all shadow-sm ${
+        <div className={`p-3.5 sm:p-4 rounded-2xl border transition-all shadow-sm ${
           selectedCategory === 'NSC' ? 'bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-amber-300' :
           selectedCategory === 'DISCONNECTION' ? 'bg-gradient-to-r from-rose-500/10 via-rose-500/5 to-transparent border-rose-300' :
           selectedCategory === 'POLE CASE' ? 'bg-gradient-to-r from-sky-500/10 via-sky-500/5 to-transparent border-sky-300' :
@@ -1267,9 +1506,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           selectedCategory === 'DTR REPLESMENT' ? 'bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-transparent border-indigo-300' :
           'bg-gradient-to-r from-slate-900/10 via-slate-900/5 to-transparent border-slate-300'
         }`}>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-start sm:items-center gap-3">
-              <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
                 selectedCategory === 'NSC' ? 'bg-amber-500 text-slate-950' :
                 selectedCategory === 'DISCONNECTION' ? 'bg-rose-600 text-white' :
                 selectedCategory === 'POLE CASE' ? 'bg-sky-600 text-white' :
@@ -1277,19 +1516,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 selectedCategory === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white' :
                 'bg-slate-900 text-white'
               }`}>
-                {selectedCategory === 'NSC' && <Zap className="w-6 h-6 fill-current" />}
-                {selectedCategory === 'DISCONNECTION' && <PowerOff className="w-6 h-6" />}
-                {selectedCategory === 'POLE CASE' && <ShieldAlert className="w-6 h-6" />}
-                {selectedCategory === 'METER REPLESMENT' && <RefreshCw className="w-6 h-6" />}
-                {selectedCategory === 'DTR REPLESMENT' && <Activity className="w-6 h-6" />}
-                {selectedCategory === 'ALL' && <Layers className="w-6 h-6" />}
+                {selectedCategory === 'NSC' && <Zap className="w-5 h-5 fill-current" />}
+                {selectedCategory === 'DISCONNECTION' && <PowerOff className="w-5 h-5" />}
+                {selectedCategory === 'POLE CASE' && <ShieldAlert className="w-5 h-5" />}
+                {selectedCategory === 'METER REPLESMENT' && <RefreshCw className="w-5 h-5" />}
+                {selectedCategory === 'DTR REPLESMENT' && <Activity className="w-5 h-5" />}
+                {selectedCategory === 'ALL' && <Layers className="w-5 h-5" />}
               </div>
               
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-                    {selectedCategory === 'NSC' && (lang === 'bn' ? '⚡ NSC — নতুন সার্ভিস কানেকশন ডাটা (New Service Connection)' : '⚡ NSC — New Service Connection Data')}
-                    {selectedCategory === 'DISCONNECTION' && (lang === 'bn' ? '🚫 DISCONNECTION — বিদ্যুৎ বিচ্ছিন্নকরণ ডাটা' : '🚫 DISCONNECTION — Power Disconnection Data')}
+                  <h2 className="text-sm sm:text-base font-black text-slate-900 tracking-tight">
+                    {selectedCategory === 'NSC' && (lang === 'bn' ? '⚡ NSC — নতুন সার্ভিস কানেকশন ডাটা' : '⚡ NSC — New Service Connection Data')}
+                    {selectedCategory === 'DISCONNECTION' && (lang === 'bn' ? 'ডিসকানেকশন ম্যানেজমেন্ট' : 'Disconnection Management')}
                     {selectedCategory === 'POLE CASE' && (lang === 'bn' ? '🏗️ POLE CASE — খুঁটি ও তার লাইন মেরামত ডাটা' : '🏗️ POLE CASE — Poles & Overhead Line Data')}
                     {selectedCategory === 'METER REPLESMENT' && (lang === 'bn' ? '🔄 METER REPLACEMENT — মিটার পরিবর্তন ও নতুন সিল ডাটা' : '🔄 METER REPLACEMENT — Meter Replacement Data')}
                     {selectedCategory === 'DTR REPLESMENT' && (lang === 'bn' ? '⚡ DTR REPLACEMENT — ট্রান্সফরমার পরিবর্তন ও মেরামত ডাটা' : '⚡ DTR REPLACEMENT — Distribution Transformer Data')}
@@ -1303,7 +1542,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     selectedCategory === 'DTR REPLESMENT' ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
                     'bg-slate-200 text-slate-900 border-slate-300'
                   }`}>
-                    {filteredEntries.length} Records Found
+                    {selectedCategory === 'DISCONNECTION' ? `${discCount} Total List` : `${filteredEntries.length} Records Found`}
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5">
@@ -1342,17 +1581,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {selectedCategory === 'DISCONNECTION' && onNavigateToDisconnection && (
                 <button
                   id="admin-open-disconnection-btn"
-                  onClick={onNavigateToDisconnection}
+                  onClick={() => onNavigateToDisconnection('VIEW_LIST')}
                   className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
-                  title="Open Full Disconnection Module (Consumer List, Upload, Reports)"
+                  title="Open Full Disconnection Management"
                 >
                   <PowerOff className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? '⚡ ডিসকানেকশন মডিউল (লিস্ট ও রিপোর্ট)' : '⚡ Open Disconnection Module'}</span>
+                  <span>{lang === 'bn' ? `⚡ ডিসকানেকশন ম্যানেজমেন্ট (মোট লিস্ট: ${discCount})` : `⚡ Disconnection Management (Total List: ${discCount})`}</span>
                 </button>
               )}
             </div>
           </div>
         </div>
+
+        {/* Interactive Disconnection Performance Deck Board inside Admin Panel when DISCONNECTION is selected */}
+        {selectedCategory === 'DISCONNECTION' && (
+          <DisconnectionPerformanceDashboard
+            tasks={effectiveDiscTasks}
+            lang={lang}
+            isAdmin={true}
+            onRefresh={onRefresh}
+            onDeleteTask={async (task) => {
+              setLocallyDeletedIds(prev => {
+                const next = new Set(prev);
+                if (task.id) next.add(String(task.id).trim());
+                if (task.consumerId) {
+                  next.add(String(task.consumerId).trim());
+                  next.add(`TASK-DISC-${String(task.consumerId).trim()}`);
+                }
+                return next;
+              });
+              await deleteDisconnectionTask({
+                id: task.id,
+                consumerId: task.consumerId,
+              });
+              onRefresh();
+            }}
+          />
+        )}
 
         {/* Filter and Search Controls Bar */}
         <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
@@ -1464,7 +1729,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <th className="px-3.5 py-3">Consumer Details</th>
                       <th className="px-3.5 py-3">Meter No & Seal No</th>
                       <th className="px-3.5 py-3">Load & Phase & Reading</th>
-                      <th className="px-3.5 py-3">Lineman & Substation</th>
+                      <th className="px-3.5 py-3">Worker & Agency Name</th>
                       <th className="px-3.5 py-3">Khata Slip / Photo</th>
                       <th className="px-3.5 py-3">Status</th>
                       <th className="px-3.5 py-3 text-right">Actions</th>
@@ -1483,7 +1748,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <th className="px-3.5 py-3">Disconnection Reason</th>
                       <th className="px-3.5 py-3">Final Reading (kWh)</th>
                       <th className="px-3.5 py-3">Meter & Pole No</th>
-                      <th className="px-3.5 py-3">Lineman & Feeder</th>
+                      <th className="px-3.5 py-3">Worker & Agency Name</th>
                       <th className="px-3.5 py-3">Status</th>
                       <th className="px-3.5 py-3 text-right">Actions</th>
                     </tr>
@@ -1575,9 +1840,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* Common ID & Date Column */}
                         <td className="px-3.5 py-3 whitespace-nowrap">
                           <div className="font-mono font-bold text-slate-900">{item.id}</div>
-                          <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5 font-mono">
                             <Clock className="w-3 h-3 text-slate-400" />
-                            {new Date(item.date).toLocaleDateString('en-IN')} {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            <span>{formatDateDDMMYYYY(item.date)}</span>
+                            <span className="text-blue-600 font-bold">{formatTime12Hour(item.date)}</span>
                           </div>
                         </td>
 
@@ -1617,11 +1883,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="px-3.5 py-3 whitespace-nowrap">
                               <div className="font-medium text-slate-800 flex items-center gap-1">
                                 <User className="w-3 h-3 text-slate-400" />
-                                <span>{item.workerName || 'Worker'}</span>
+                                <span>{cleanNameOnly(item.workerName) || 'Worker'}</span>
                               </div>
-                              <div className="text-[10px] text-slate-500 truncate max-w-[130px]">
-                                {item.substation || item.feederName || 'Substation'}
-                              </div>
+                              {item.agencyName && (
+                                <div className="text-[10px] text-slate-500 truncate max-w-[130px]">
+                                  {cleanNameOnly(item.agencyName)}
+                                </div>
+                              )}
                             </td>
 
                             <td className="px-3.5 py-3 whitespace-nowrap">
@@ -1677,8 +1945,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </td>
 
                             <td className="px-3.5 py-3 whitespace-nowrap">
-                              <div className="font-medium text-slate-800">{item.workerName || 'Worker'}</div>
-                              <div className="text-[10px] text-slate-500">{item.cccOffice || item.feederName || 'CCC'}</div>
+                              <div className="font-medium text-slate-800">{cleanNameOnly(item.workerName) || 'Worker'}</div>
+                              {item.agencyName && (
+                                <div className="text-[10px] text-slate-500">{cleanNameOnly(item.agencyName)}</div>
+                              )}
                             </td>
                           </>
                         )}
@@ -1843,14 +2113,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="px-3.5 py-3 whitespace-nowrap">
                               <div className="flex items-center gap-1.5 text-slate-700 font-medium">
                                 <User className="w-3.5 h-3.5 text-slate-400" />
-                                <span>{item.workerName || 'Worker'}</span>
+                                <span>{cleanNameOnly(item.workerName) || 'Worker'}</span>
                               </div>
                             </td>
 
                             <td className="px-3.5 py-3 whitespace-nowrap text-slate-600 text-xs">
-                              <div>{item.feederName || 'Main Feeder'}</div>
+                              {(!isNsc && !isDisc) && <div>{item.feederName || 'Main Feeder'}</div>}
                               <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
-                                {item.substation || item.address || 'Site'}
+                                {(!isNsc && !isDisc) ? (item.substation || item.address || 'Site') : (item.address || 'Site')}
                               </div>
                             </td>
                           </>
@@ -1981,21 +2251,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* Grid of Key Info */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="text-[10px] uppercase font-bold text-slate-500">Worker</div>
-                  <div className="font-bold text-slate-900 mt-0.5">{selectedEntry.workerName}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Worker Name</div>
+                  <div className="font-bold text-slate-900 mt-0.5">{cleanNameOnly(selectedEntry.workerName)}</div>
                 </div>
 
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                   <div className="text-[10px] uppercase font-bold text-slate-500">Date & Time</div>
-                  <div className="font-bold text-slate-900 mt-0.5">
-                    {new Date(selectedEntry.date).toLocaleDateString('en-IN')}
+                  <div className="font-bold text-slate-900 mt-0.5 font-mono text-xs">
+                    {formatDateTime12Hour(selectedEntry.date)}
                   </div>
                 </div>
 
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="text-[10px] uppercase font-bold text-slate-500">Feeder Name</div>
-                  <div className="font-bold text-slate-900 mt-0.5">{selectedEntry.feederName || 'N/A'}</div>
-                </div>
+                {selectedEntry.category !== 'NSC' && selectedEntry.category !== 'DISCONNECTION' ? (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Feeder Name</div>
+                    <div className="font-bold text-slate-900 mt-0.5">{selectedEntry.feederName || 'N/A'}</div>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Agency Name</div>
+                    <div className="font-bold text-slate-900 mt-0.5">{cleanNameOnly(selectedEntry.agencyName) || 'N/A'}</div>
+                  </div>
+                )}
               </div>
 
               {/* Category specific details list */}

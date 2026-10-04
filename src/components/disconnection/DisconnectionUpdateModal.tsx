@@ -24,6 +24,8 @@ import {
 import { DisconnectionTask, DisconnectionTaskStatus } from '../../types';
 import { compressImageFile } from '../../utils/imageCompressor';
 import { submitDisconnectionTaskReport, fetchDisconnectionHistory } from '../../services/api';
+import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../../utils/dateTimeFormat';
+import { cleanDisconnectionNotes, cleanWorkerOrAgencyName } from '../../utils/disconnectionClassifier';
 
 interface DisconnectionUpdateModalProps {
   task: DisconnectionTask;
@@ -112,11 +114,11 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const initialSt = (task.taskStatus as DisconnectionTaskStatus) || 'DISCONNECT';
       setSelectedStatus(initialSt === 'PENDING' ? 'DISCONNECT' : initialSt);
       setIsUrgent(String(task.priority || '').toUpperCase() === 'URGENT');
-      setAssignedAgency(task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || '');
+      setAssignedAgency(cleanWorkerOrAgencyName(task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || ''));
       setPhotoDataUrl(task.photoUrl || (task as any)['Image'] || '');
       setMeterReading(task.meterReading || (task as any)['Reading'] || '');
-      setRemarks(task.workerRemarks || task.workerReport || (task as any)['Notes'] || '');
-      setPaidAmount(task.paidAmount || (task as any)['Paid Amount'] || (task.outstandingDue ? String(task.outstandingDue) : ''));
+      setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || ''));
+      setPaidAmount(initialSt === 'PAID' ? (task.paidAmount || (task as any)['Paid Amount'] || '') : '');
       setPaymentDate(task.paymentDate || (task as any)['Paid Date'] || new Date().toISOString().split('T')[0]);
       setPaymentReference(task.paymentReference || (task as any)['Paid Type'] || '');
       setDisconDate(task.disconDate || task.reportDate || (task as any)['Discon Date'] || new Date().toISOString().split('T')[0]);
@@ -260,13 +262,12 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     if (!file) return;
     setIsProcessingPhoto(true);
     try {
-      const workerName = currentUser?.name || currentUser?.username || 'Worker';
-      const workerId = currentUser?.idNo || 'WID';
-      const dateStr = new Date().toLocaleDateString('en-GB');
-      const timeStr = new Date().toLocaleTimeString();
+      const workerName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || 'Worker');
+      const dateStr = getNowDateDDMMYYYY();
+      const timeStr = getNowTime12Hour();
 
-      const watermarkText = `TASK: ${task.taskId} | CID: ${task.consumerId}`;
-      const subText = `WORKER: ${workerName} (${workerId}) | ${dateStr} ${timeStr}`;
+      const watermarkText = `CONSUMER: ${task.consumerId}`;
+      const subText = `WORKER: ${workerName} | ${dateStr} ${timeStr}`;
 
       const compressed = await compressImageFile(file, {
         maxDimension: 900,
@@ -303,50 +304,54 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     setIsSubmitting(true);
 
     try {
+      const isAdminUser = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
       const workerId = currentUser?.idNo || currentUser?.username || 'WORKER';
-      const workerName = currentUser?.name || currentUser?.username || 'Field Worker';
-      const dateNow = new Date().toISOString().split('T')[0];
-      const timeNow = new Date().toLocaleTimeString();
+      const workerName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || 'Field Worker');
+      const dateNow = getNowDateDDMMYYYY();
+      const timeNow = getNowTime12Hour();
 
-      let combinedRemarks = remarks.trim();
+      let combinedRemarks = cleanDisconnectionNotes(remarks.trim());
       if (conditionalReason && !combinedRemarks.includes(conditionalReason)) {
         combinedRemarks = combinedRemarks ? `[${conditionalReason}] ${combinedRemarks}` : `[${conditionalReason}]`;
       }
+      // If Admin sets status to REISSUE, mark [REISSUE_APPROVED] so worker is unlocked to update status once
+      if (isAdminUser && selectedStatus === 'REISSUE') {
+        combinedRemarks = `${combinedRemarks} [REISSUE_APPROVED]`.trim();
+      }
+
+      const cleanAgency = cleanWorkerOrAgencyName(assignedAgency || workerName);
 
       const reportPayload = {
+        ...task,
         taskId: task.taskId,
         consumerId: task.consumerId || (task as any)['Consumer Id'],
-        consumerName: task.consumerName || (task as any)['Name'],
-        consumerAddress: task.consumerAddress || (task as any)['Address'],
-        phoneNumber: modalPhone || task.phoneNumber || (task as any)['Mobile'],
-        offCode: task.offCode || (task as any)['off_code'] || task.area,
-        mru: task.mru || (task as any)['MRU'] || task.mruSection,
         workerId,
         workerName,
         taskStatus: selectedStatus,
         disconStatus: selectedStatus,
-        disconDate: disconDate,
-        reportDate: disconDate,
+        disconDate: formatDateDDMMYYYY(disconDate) || dateNow,
+        reportDate: formatDateDDMMYYYY(disconDate) || dateNow,
+        reportTime: timeNow,
         workerReport: combinedRemarks,
         workerRemarks: combinedRemarks,
         notes: combinedRemarks,
-        photoUrl: photoDataUrl,
-        image: photoDataUrl,
+        photoUrl: photoDataUrl || undefined,
+        image: photoDataUrl || undefined,
         meterReading: meterReading || undefined,
         reading: meterReading || undefined,
-        paymentStatus: selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
+        paymentStatus: selectedStatus === 'PAID' ? 'PAID' : 'UNPAID',
         gisPole: gisPole || undefined,
         priority: isUrgent ? 'URGENT' : 'NORMAL',
-        assignedAgency: assignedAgency || undefined,
-        agency: assignedAgency || undefined,
-        paidAmount: selectedStatus === 'PAID' ? paidAmount : (paidAmount || undefined),
-        paymentDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || undefined),
-        paidDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || undefined),
-        paidType: paidType || paymentReference || undefined,
-        paymentReference: paidType || paymentReference || undefined,
-        outstandingAfter: outstandingAfter || undefined,
-        nextPaymentDate: nextPaymentDate || undefined,
-        paymentSource: paymentSource || undefined
+        assignedAgency: cleanAgency || undefined,
+        agency: cleanAgency || undefined,
+        paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
+        paymentDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : undefined,
+        paidDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : undefined,
+        paidType: selectedStatus === 'PAID' ? (paidType || paymentReference || undefined) : undefined,
+        paymentReference: selectedStatus === 'PAID' ? (paidType || paymentReference || undefined) : undefined,
+        outstandingAfter: selectedStatus === 'PAID' ? (outstandingAfter || undefined) : undefined,
+        nextPaymentDate: selectedStatus === 'PAID' ? (nextPaymentDate || undefined) : undefined,
+        paymentSource: selectedStatus === 'PAID' ? (paymentSource || undefined) : undefined
       };
 
       const res = await submitDisconnectionTaskReport(reportPayload);
@@ -359,7 +364,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
           workerName,
           previousStatus: task.taskStatus,
           newStatus: selectedStatus,
-          remarks: combinedRemarks,
+          remarks: cleanDisconnectionNotes(combinedRemarks),
           paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
           meterReading: meterReading || undefined,
           photoUrl: finalImgUrl || undefined
@@ -367,58 +372,47 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
         const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
 
+        // Keep consumer details in the Disconnection module completely unchanged; update status badge, remark, and operational fields
         const updatedTaskObj: DisconnectionTask = {
           ...task,
           taskStatus: selectedStatus,
           disconStatus: selectedStatus,
           'Discon Status': selectedStatus,
-          disconDate: disconDate,
-          reportDate: disconDate,
-          'Discon Date': disconDate,
-          priority: isUrgent ? 'URGENT' : 'NORMAL',
-          'Priority': isUrgent ? 'URGENT' : 'NORMAL',
-          assignedAgency: assignedAgency || task.assignedAgency,
-          assignedWorkerName: assignedAgency || task.assignedWorkerName,
-          'Agency': assignedAgency || (task as any)['Agency'],
           workerRemarks: combinedRemarks,
           workerReport: combinedRemarks,
           'Notes': combinedRemarks,
-          photoUrl: finalImgUrl,
-          'Image': finalImgUrl,
+          notes: combinedRemarks,
+          reissueRequested: false,
+          reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
+          disconDate: formatDateDDMMYYYY(disconDate) || dateNow,
+          reportDate: formatDateDDMMYYYY(disconDate) || dateNow,
+          'Discon Date': formatDateDDMMYYYY(disconDate) || dateNow,
+          assignedAgency: cleanAgency || task.assignedAgency,
+          Agency: cleanAgency || (task as any)['Agency'],
+          priority: (isUrgent ? 'URGENT' : 'NORMAL') as any,
+          Priority: isUrgent ? 'URGENT' : 'NORMAL',
           meterReading: meterReading || task.meterReading,
-          'Reading': meterReading || (task as any)['Reading'],
-          paymentStatus: selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
-          'Payment Status': selectedStatus === 'PAID' ? 'PAID' : paymentStatus,
-          gisPole: gisPole || task.gisPole,
-          'Gis Pole': gisPole || (task as any)['Gis Pole'],
-          paidAmount: selectedStatus === 'PAID' ? paidAmount : (paidAmount || task.paidAmount),
-          'Paid Amount': selectedStatus === 'PAID' ? paidAmount : (paidAmount || (task as any)['Paid Amount']),
-          paymentDate: selectedStatus === 'PAID' ? paymentDate : (paymentDate || task.paymentDate),
-          'Paid Date': selectedStatus === 'PAID' ? paymentDate : (paymentDate || (task as any)['Paid Date']),
-          paymentReference: paidType || paymentReference || task.paymentReference,
-          'Paid Type': paidType || paymentReference || (task as any)['Paid Type'],
-          outstandingAfter: outstandingAfter || task.outstandingAfter,
-          'Outstanding After': outstandingAfter || (task as any)['Outstanding After'],
-          nextPaymentDate: nextPaymentDate || task.nextPaymentDate,
-          'Next Payment Date': nextPaymentDate || (task as any)['Next Payment Date'],
-          paymentSource: paymentSource || task.paymentSource,
-          'Payment Source': paymentSource || (task as any)['Payment Source'],
-          reportTime: timeNow,
-          submittedBy: workerName,
-          updatedAt: new Date().toISOString(),
-          lastUpdated: new Date().toISOString(),
-          'Last Updated': new Date().toISOString(),
+          Reading: meterReading || (task as any)['Reading'],
+          photoUrl: finalImgUrl || task.photoUrl,
+          Image: finalImgUrl || (task as any)['Image'],
+          paidAmount: selectedStatus === 'PAID' ? paidAmount : task.paidAmount,
+          'Paid Amount': selectedStatus === 'PAID' ? paidAmount : (task as any)['Paid Amount'],
+          paymentDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : task.paymentDate,
+          'Paid Date': selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : (task as any)['Paid Date'],
+          paymentReference: selectedStatus === 'PAID' ? (paidType || paymentReference || '') : task.paymentReference,
+          'Paid Type': selectedStatus === 'PAID' ? (paidType || paymentReference || '') : (task as any)['Paid Type'],
           statusHistory: [newHistoryItem, ...existingHistory]
         };
 
+        // Immediately propagate update to parent list (0ms delay)
+        onUpdateSuccess(updatedTaskObj);
         setSavedTaskResult(updatedTaskObj);
         setShowRoundSavePopup(true);
 
-        // Auto close round popup after 1.8 seconds and complete update
+        // Auto close confirmation popup quickly (550ms)
         setTimeout(() => {
-          onUpdateSuccess(updatedTaskObj);
           onClose();
-        }, 1800);
+        }, 550);
       } else {
         throw new Error(res?.message || 'Server rejected status update');
       }
@@ -453,11 +447,11 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
   const displayOutstanding = task.outstandingDue
     ? Number(task.outstandingDue).toLocaleString('en-IN')
-    : '12,96,888';
-  const displayClass = task.baseClass || 'I';
-  const displayDevice = task.meterNumber || task.deviceType || (task as any)['device'] || 'ST328707';
-  const displayDueDate = task.dueDateRange || '21.09.2011–21.09.2011';
-  const displaySection = task.mruSection || 'FIL33MMR';
+    : '0';
+  const displayClass = task.baseClass || (task as any)['Base Class'] || (task as any)['Class'] || '-';
+  const displayDevice = task.meterNumber || task.deviceType || (task as any)['device'] || (task as any)['Number'] || (task as any)['Device'] || '-';
+  const displayDueDate = task.dueDateRange || (task as any)['O/S Duedate Range'] || '-';
+  const displaySection = task.mruSection || (task as any)['MRU'] || '-';
 
   return (
     <div
@@ -503,15 +497,17 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight uppercase truncate">
-                  {task.consumerName || 'HESAMUDDIN'}
+                  {task.consumerName || (task as any)['Name'] || 'Consumer'}
                 </h3>
                 {/* Location row */}
-                <div className="flex items-start gap-1.5 mt-1 text-slate-600 text-xs">
-                  <MapPin className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
-                  <span className="uppercase leading-snug">
-                    {task.consumerAddress || 'VILL. MOTTIGANJ,,P.O. SAMSI,DIST.MALDA,'}
-                  </span>
-                </div>
+                {(task.consumerAddress || (task as any)['Address']) ? (
+                  <div className="flex items-start gap-1.5 mt-1 text-slate-600 text-xs">
+                    <MapPin className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
+                    <span className="uppercase leading-snug">
+                      {task.consumerAddress || (task as any)['Address']}
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               {/* Outstanding Badge with OUTSTANDING text underneath */}
@@ -534,7 +530,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                   CONSUMER ID
                 </span>
                 <span className="text-sm sm:text-base font-bold text-slate-900 block font-mono">
-                  {task.consumerId || '342049760'}
+                  {task.consumerId || (task as any)['Consumer Id'] || 'N/A'}
                 </span>
               </div>
 
@@ -811,14 +807,17 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                   onChange={e => setAssignedAgency(e.target.value)}
                   className="w-full py-3 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                 >
-                  <option value="">Select Agency</option>
-                  {availableWorkers.map(w => (
-                    <option key={w.idNo} value={w.name}>
-                      {w.name} ({w.idNo})
-                    </option>
-                  ))}
-                  {task.assignedAgency && !availableWorkers.some(w => w.name === task.assignedAgency) && (
-                    <option value={task.assignedAgency}>{task.assignedAgency}</option>
+                  <option value="">Select Worker / Agency</option>
+                  {availableWorkers.map((w, idx) => {
+                    const cleanW = cleanWorkerOrAgencyName(w.name);
+                    return (
+                      <option key={`${cleanW}-${idx}`} value={cleanW}>
+                        {cleanW}
+                      </option>
+                    );
+                  })}
+                  {task.assignedAgency && !availableWorkers.some(w => cleanWorkerOrAgencyName(w.name) === cleanWorkerOrAgencyName(task.assignedAgency)) && (
+                    <option value={cleanWorkerOrAgencyName(task.assignedAgency)}>{cleanWorkerOrAgencyName(task.assignedAgency)}</option>
                   )}
                 </select>
                 <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
@@ -1170,9 +1169,9 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
               ) : (
                 historyList.map((h: any, i: number) => (
                   <div key={i} className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
-                      <span>{h.date} {h.time && `• ${h.time}`}</span>
-                      <span className="font-bold text-slate-700">{h.workerName || 'Worker'}</span>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1 font-mono">
+                      <span>{formatDateDDMMYYYY(h.date)} {h.time ? `• ${formatTime12Hour(h.time)}` : ''}</span>
+                      <span className="font-bold text-slate-700 font-sans">{h.workerName || 'Worker'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="px-2.5 py-0.5 rounded-md bg-white border border-slate-200 font-bold text-[10px] text-slate-800">

@@ -39,12 +39,14 @@ import { Language, translations } from '../utils/translations';
 import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 import { compressImageFile } from '../utils/imageCompressor';
 import { DisconnectionTaskManagement } from './DisconnectionTaskManagement';
+import { formatDateDDMMYYYY, formatTime12Hour, formatDateTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 
 interface EntryFormProps {
   category: CategoryType;
   workerName: string;
   onSuccess: (entry: PowerEntry) => void;
   onBack?: () => void;
+  onDataUpdated?: () => void;
   lang?: Language;
   currentUser?: UserSession | null;
   initialNotice?: WorkOrderNotice | null;
@@ -56,6 +58,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   workerName,
   onSuccess,
   onBack,
+  onDataUpdated,
   lang = 'en',
   currentUser,
   initialNotice,
@@ -289,7 +292,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           maxDimension: 1024,
           quality: 0.72,
           watermarkText: `WBSEDCL [${category}]`,
-          subText: `${new Date().toLocaleDateString('en-GB')} • Lineman: ${worker || 'Staff'}`,
+          subText: `${getNowDateDDMMYYYY()} ${getNowTime12Hour()} • Lineman: ${worker || 'Staff'}`,
         });
         setPhotoPreview(compressed);
         clearError('photo');
@@ -443,10 +446,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
-    const workerIdVal = String(currentUser?.idNo || currentUser?.id || '');
+    const workerIdVal = '';
     const workerNameVal = String(currentUser?.name || (category === 'NSC' ? nscWorkerName : worker) || '').trim();
     const workerRoleVal = String(currentUser?.role || 'Field Worker');
-    const submittedByVal = currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : workerNameVal;
+    const submittedByVal = workerNameVal;
     const workerPhoneVal = String(currentUser?.phone || workerPhone || '').trim();
 
     const entryPayload: Partial<PowerEntry> = {
@@ -473,7 +476,11 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.workOrderDate = workOrderDate;
       // Attach Official Work Order & Khata Photo uploaded by Admin
       if (selectedWorkOrderNotice) {
-        entryPayload.workOrderPhoto = resolveWorkOrderImageUrl(selectedWorkOrderNotice);
+        const resolvedUrl = resolveWorkOrderImageUrl(selectedWorkOrderNotice);
+        entryPayload.workOrderPhoto =
+          resolvedUrl && resolvedUrl.startsWith('data:') && resolvedUrl.length > 42000 && selectedWorkOrderNotice.id
+            ? `/api/work-orders/${encodeURIComponent(selectedWorkOrderNotice.id)}/file`
+            : resolvedUrl;
         entryPayload.workOrderNoticeId = selectedWorkOrderNotice.id;
         entryPayload.workOrderNoticeTitle = selectedWorkOrderNotice.title;
         entryPayload.workOrderNoticeDate = `${selectedWorkOrderNotice.uploadDate} ${selectedWorkOrderNotice.uploadTime}`;
@@ -577,6 +584,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         currentUser={currentUser}
         lang={lang}
         onBack={onBack}
+        onDataUpdated={onDataUpdated}
       />
     );
   }
@@ -751,6 +759,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                     const target = e.currentTarget;
                     if (selectedWorkOrderNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
                       target.src = `/api/drive-proxy/${selectedWorkOrderNotice.fileId}`;
+                    } else if (selectedWorkOrderNotice.id && !target.src.includes('/api/work-orders/')) {
+                      target.src = `/api/work-orders/${encodeURIComponent(selectedWorkOrderNotice.id)}/file`;
                     }
                   }}
                 />
@@ -2101,9 +2111,13 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   <span className="font-bold text-slate-800">{submissionModalEntry.consumerName}</span>
                 </div>
               )}
-              <div className="flex justify-between">
+              <div className="flex justify-between border-b border-slate-200 pb-1.5">
                 <span className="text-slate-500 font-medium">{t.workerName}:</span>
                 <span className="font-bold text-slate-800">{submissionModalEntry.workerName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-medium">Date & Time:</span>
+                <span className="font-mono font-bold text-slate-800">{formatDateTime12Hour(submissionModalEntry.date)}</span>
               </div>
               <div className="pt-1.5 border-t border-slate-200">
                 <div className="p-2 bg-emerald-50 border border-emerald-200/80 rounded-lg text-[11px] text-emerald-800 font-bold flex items-center justify-center gap-1.5">
@@ -2141,7 +2155,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   {zoomModalNotice.title}
                 </h4>
                 <p className="text-[11px] text-slate-400">
-                  {zoomModalNotice.uploadDate && `📅 ${zoomModalNotice.uploadDate} ${zoomModalNotice.uploadTime || ''}`}
+                  {zoomModalNotice.uploadDate && `📅 ${formatDateDDMMYYYY(zoomModalNotice.uploadDate)} ${formatTime12Hour(zoomModalNotice.uploadTime)}`}
                   {zoomModalNotice.adminName && ` • 👤 ${zoomModalNotice.adminName}`}
                 </p>
               </div>

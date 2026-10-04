@@ -201,7 +201,7 @@ export interface Translations {
 export const translations: Record<Language, Translations> = {
   bn: {
     appName: 'POWER',
-    appSubtitle: 'WBSEDCL ফিল্ড সার্ভিস ম্যানেজমেন্ট ও ডাটা এন্ট্রি',
+    appSubtitle: '',
     wbsedclTagline: 'পশ্চিমবঙ্গ রাজ্য বিদ্যুৎ বণ্টন সংস্থা লিমিটেড (WBSEDCL)',
     mainModules: 'MAIN MODULES (প্রধান মেনু)',
     fiveCategories: '৫টি প্রধান ক্যাটাগরি',
@@ -395,7 +395,7 @@ export const translations: Record<Language, Translations> = {
 
   en: {
     appName: 'POWER',
-    appSubtitle: 'WBSEDCL Field Utility Operations & Data Management',
+    appSubtitle: '',
     wbsedclTagline: 'West Bengal State Electricity Distribution Company Limited',
     mainModules: 'MAIN MODULES',
     fiveCategories: '5 Main Categories',
@@ -589,7 +589,7 @@ export const translations: Record<Language, Translations> = {
 
   hi: {
     appName: 'POWER',
-    appSubtitle: 'WBSEDCL फील्ड सेवा प्रबंधन एवं डेटा प्रविष्टि',
+    appSubtitle: '',
     wbsedclTagline: 'पश्चिम बंगाल राज्य विद्युत वितरण कंपनी लिमिटेड (WBSEDCL)',
     mainModules: 'MAIN MODULES (मुख्य मेन्यू)',
     fiveCategories: '5 मुख्य श्रेणियां',
@@ -783,7 +783,7 @@ export const translations: Record<Language, Translations> = {
 
   ur: {
     appName: 'POWER',
-    appSubtitle: 'ڈبلیو بی ایس ای ڈی سی ایل فیلڈ آپریشنز اور ڈیٹا مینجمنٹ',
+    appSubtitle: '',
     wbsedclTagline: 'مغربی بنگال اسٹیٹ الیکٹریسٹی ڈسٹری بیوشن کمپنی لمیٹڈ',
     mainModules: 'MAIN MODULES (اہم ماڈیولز)',
     fiveCategories: '5 اہم زمرے',

@@ -15,6 +15,7 @@ import {
 import { WorkOrderNotice, CategoryType } from '../types';
 import { Language, translations } from '../utils/translations';
 import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
+import { formatDateDDMMYYYY, formatTime12Hour } from '../utils/dateTimeFormat';
 
 interface AdminNoticesBannerProps {
   workOrders: WorkOrderNotice[];
@@ -118,7 +119,10 @@ export const AdminNoticesBanner: React.FC<AdminNoticesBannerProps> = ({
                       </span>
                       <span className="text-[10px] font-medium text-slate-500 flex items-center gap-1 font-mono">
                         <Calendar className="w-3 h-3 text-slate-400" />
-                        <span>{notice.uploadDate}</span>
+                        <span>{formatDateDDMMYYYY(notice.uploadDate || notice.createdAt)}</span>
+                        {(notice.uploadTime || notice.createdAt) && (
+                          <span className="text-blue-600 font-bold">• {formatTime12Hour(notice.uploadTime || notice.createdAt)}</span>
+                        )}
                       </span>
                     </div>
 

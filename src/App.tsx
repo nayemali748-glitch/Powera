@@ -12,10 +12,11 @@ import { InstallAppModal } from './components/InstallAppModal';
 import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
 import { DisconnectionTaskManagement } from './components/DisconnectionTaskManagement';
-import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode } from './types';
-import { fetchEntries, fetchStats, fetchWorkOrders, logoutUser } from './services/api';
+import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode, DisconnectionTask } from './types';
+import { fetchEntries, fetchStats, fetchWorkOrders, logoutUser, fetchDisconnectionTasks } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
+import { formatDateTime12Hour, formatTime12Hour, getNowDateDDMMYYYY } from './utils/dateTimeFormat';
 import { 
   Zap, 
   ShieldCheck, 
@@ -96,6 +97,7 @@ export default function App() {
   const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>([]);
+  const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const lastDataHashRef = useRef<string>('');
@@ -160,15 +162,10 @@ export default function App() {
   }, []);
 
   const inFlightRef = useRef(false);
-  const [syncMode, setSyncMode] = useState<SyncMode>(() => {
-    try {
-      return (localStorage.getItem('power_sync_mode') as SyncMode) || 'auto';
-    } catch {
-      return 'auto';
-    }
-  });
+  const [syncMode, setSyncMode] = useState<SyncMode>('auto');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   const [isSyncing, setIsSyncing] = useState(false);
+  const [disconnectionInitialTab, setDisconnectionInitialTab] = useState<'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST'>('VIEW_LIST');
 
   const loadData = async (silent: boolean | unknown = false) => {
     if (!currentUser) return;
@@ -177,15 +174,73 @@ export default function App() {
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
-      if (!isSilent) setLoading(true);
-      const [data, orders] = await Promise.all([
-        fetchEntries(),
-        fetchWorkOrders().catch(() => [])
+      if (!isSilent && entries.length === 0) setLoading(true);
+      const [data, orders, discRes] = await Promise.all([
+        fetchEntries().catch(() => []),
+        fetchWorkOrders().catch(() => []),
+        fetchDisconnectionTasks({
+          role: currentUser?.role,
+          workerId: currentUser?.idNo,
+          workerName: currentUser?.name
+        }).catch(() => ({ tasks: [], stats: null }))
       ]);
-      const currentData = data || [];
-      const newHash = computeJsonChangeHash(currentData);
+      const rawEntries = Array.isArray(data) ? data : [];
+      const validDiscTasks: DisconnectionTask[] = Array.isArray(discRes)
+        ? discRes
+        : Array.isArray((discRes as any)?.tasks)
+          ? (discRes as any).tasks
+          : [];
+      setDisconnectionTasks(validDiscTasks);
 
-      // JSON-based change-tracking: verify if server data has actually updated before triggering state update
+      // Ensure every consumer in validDiscTasks is also represented in entries under 'DISCONNECTION'
+      const existingDiscIds = new Set(
+        rawEntries
+          .filter((e) => String(e.category || '').toUpperCase() === 'DISCONNECTION')
+          .map((e) => String(e.consumerId || e.id || '').replace(/^TASK-DISC-/i, '').trim())
+          .filter(Boolean)
+      );
+
+      const extraDiscEntries: PowerEntry[] = validDiscTasks
+        .filter((t) => {
+          const cid = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '').replace(/^TASK-DISC-/i, '').trim();
+          return cid && !existingDiscIds.has(cid);
+        })
+        .map((t) => {
+          const cid = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+          const st = String(t.taskStatus || t.disconStatus || (t as any)['Discon Status'] || 'PENDING').toUpperCase();
+          return {
+            id: t.taskId || `TASK-DISC-${cid}`,
+            submissionId: cid || t.taskId,
+            category: 'DISCONNECTION' as CategoryType,
+            workerName: t.assignedWorkerName || t.assignedAgency || (t as any)['Agency'] || 'Field Team',
+            feederName: t.mruSection || (t as any)['MRU'] || '',
+            substation: '',
+            date: t.disconDate || t.reportDate || t.updatedAt || t.createdAt || '',
+            createdAt: t.createdAt || t.disconDate || t.reportDate || new Date().toISOString(),
+            status:
+              st.includes('PAID') || st.includes('DISCONNECT') || st.includes('COMPLETE')
+                ? 'Completed'
+                : 'Pending',
+            notes: t.workerRemarks || t.workerReport || (t as any)['Notes'] || '',
+            consumerId: cid,
+            consumerName: t.consumerName || (t as any)['Name'] || '',
+            mobile: t.phoneNumber || (t as any)['Mobile'] || '',
+            address: t.consumerAddress || (t as any)['Address'] || '',
+            meterNo: t.meterNumber || (t as any)['Number'] || '',
+            poleNo: t.gisPole || (t as any)['Gis Pole'] || '',
+            arrearAmount: t.outstandingDue || (t as any)['D2 Net O/S'] || '0',
+            disconStatus: st,
+            baseClass: t.baseClass || (t as any)['Base Class'] || (t as any)['Class'] || '',
+            device: t.deviceType || (t as any)['Device'] || '',
+            phase: t.deviceType || (t as any)['Device'] || '',
+            tariffCategory: t.baseClass || (t as any)['Class'] || '',
+            agencyName: t.assignedAgency || (t as any)['Agency'] || '',
+          };
+        });
+
+      const currentData = [...rawEntries, ...extraDiscEntries];
+      const newHash = `${computeJsonChangeHash(currentData)}_disc:${validDiscTasks.length}`;
+
       if (newHash !== lastDataHashRef.current) {
         lastDataHashRef.current = newHash;
         setEntries(currentData);
@@ -199,7 +254,7 @@ export default function App() {
     } finally {
       inFlightRef.current = false;
       setIsSyncing(false);
-      if (!isSilent) setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -209,19 +264,18 @@ export default function App() {
       return;
     }
 
+    try {
+      localStorage.setItem('power_sync_mode', 'auto');
+    } catch {}
+
     loadData(false);
 
-    // In manual sync mode: disable 8-second interval and focus polling to conserve mobile data
-    if (syncMode !== 'auto') {
-      return;
-    }
-
-    // Real-time background sync every 15 seconds, only when tab is visible
+    // Continuous 8-second live two-way sync with Backend Google Sheets
     const interval = setInterval(() => {
       if (!document.hidden) {
         loadData(true);
       }
-    }, 15000);
+    }, 8000);
 
     const onFocus = () => loadData(true);
     const onVisibilityChange = () => {
@@ -236,20 +290,18 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [syncMode, currentUser?.idNo]);
+  }, [currentUser?.idNo]);
 
-  const handleToggleSyncMode = (mode: SyncMode) => {
-    setSyncMode(mode);
+  const handleToggleSyncMode = (_mode: SyncMode) => {
+    setSyncMode('auto');
     try {
-      localStorage.setItem('power_sync_mode', mode);
+      localStorage.setItem('power_sync_mode', 'auto');
     } catch {}
-    if (mode === 'auto') {
-      loadData(true);
-    }
+    loadData(true);
   };
 
   const handleManualSync = () => {
-    loadData(false);
+    loadData(true);
   };
 
   // Strict role sync: Workers NEVER have admin privileges
@@ -355,7 +407,7 @@ export default function App() {
 
     const rows = entries.map(e => [
       e.id,
-      `"${e.date}"`,
+      `"${formatDateTime12Hour(e.date)}"`,
       `"${e.category}"`,
       `"${e.workerName || ''}"`,
       `"${e.feederName || ''}"`,
@@ -393,7 +445,7 @@ export default function App() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `POWER_FIELD_EXPORT_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute('download', `POWER_FIELD_EXPORT_${getNowDateDDMMYYYY()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -409,7 +461,10 @@ export default function App() {
   // Helper count badges
   const categoryCounts: Record<CategoryType, number> = {
     'NSC': entries.filter(e => e.category === 'NSC').length,
-    'DISCONNECTION': entries.filter(e => e.category === 'DISCONNECTION').length,
+    'DISCONNECTION': Math.max(
+      entries.filter(e => e.category === 'DISCONNECTION').length,
+      disconnectionTasks.length
+    ),
     'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
     'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
     'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
@@ -607,76 +662,43 @@ export default function App() {
             </span>
           </button>
 
-          {/* AUTO-SYNC MODE OPTION INSIDE MAIN MODULES (ABOVE LOGOUT BUTTON) */}
+          {/* AUTO-SYNC MODE OPTION INSIDE MAIN MODULES (ALWAYS LIVE 8S TWO-WAY SHEET SYNC) */}
           <div 
             id="sidebar-sync-mode-container"
-            className="bg-slate-800/85 border border-slate-700/80 rounded-lg p-2.5 space-y-2 shadow-xs transition-all"
+            className="bg-slate-800/85 border border-emerald-500/30 rounded-lg p-2.5 space-y-2 shadow-xs transition-all"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                  syncMode === 'auto' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
-                }`}>
-                  {syncMode === 'auto' ? (
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  ) : (
-                    <WifiOff className="w-3.5 h-3.5" />
-                  )}
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-500/20 text-emerald-400">
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                 </div>
                 <div>
                   <span className="text-xs font-bold text-slate-200 leading-none block">{t.syncModeTitle}</span>
-                  <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">
-                    {syncMode === 'auto' ? 'Auto (8s Sync)' : t.dataSaver}
+                  <p className="text-[10px] text-emerald-400 mt-0.5 leading-tight font-semibold">
+                    Auto (8s Live Sheet Sync)
                   </p>
                 </div>
               </div>
 
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider ${
-                syncMode === 'auto'
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-              }`}>
-                {syncMode === 'auto' ? 'Auto 8s' : 'Manual'}
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                AUTO 8S
               </span>
             </div>
 
-            {/* Segmented Switcher for Auto-Sync vs Manual Sync */}
-            <div className="grid grid-cols-2 gap-1 bg-slate-900/90 p-1 rounded-md border border-slate-700/70 text-xs">
-              <button
-                id="sidebar-sync-mode-auto-btn"
-                type="button"
-                onClick={() => handleToggleSyncMode('auto')}
-                className={`py-1.5 px-2 rounded font-bold text-[11px] transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  syncMode === 'auto'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
-                }`}
-                title="প্রতি ৮ সেকেন্ড পর পর স্বয়ংক্রিয় লাইভ সিঙ্ক"
-              >
-                <RefreshCw className={`w-3 h-3 ${isSyncing && syncMode === 'auto' ? 'animate-spin' : ''}`} />
+            {/* Active Auto-Sync (8s) Banner */}
+            <div className="bg-emerald-600/20 border border-emerald-500/40 py-1.5 px-2.5 rounded-md flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
+                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
                 <span>{t.autoSync}</span>
-              </button>
-
-              <button
-                id="sidebar-sync-mode-manual-btn"
-                type="button"
-                onClick={() => handleToggleSyncMode('manual')}
-                className={`py-1.5 px-2 rounded font-bold text-[11px] transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  syncMode === 'manual'
-                    ? 'bg-amber-500 text-slate-950 font-extrabold shadow-xs'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
-                }`}
-                title="মোবাইল ইন্টারনেট ডাটা সাশ্রয় করতে ব্যাকগ্রাউন্ড সিঙ্ক বন্ধ থাকবে"
-              >
-                <WifiOff className="w-3 h-3" />
-                <span>{t.manualSync}</span>
-              </button>
+              </div>
+              <span className="text-[9px] font-bold text-emerald-200">Live & Up-to-Date</span>
             </div>
 
             {/* Sync Information & One-click Sync Now */}
             <div className="flex items-center justify-between pt-1 border-t border-slate-700/50 text-[10px] text-slate-400">
               <span className="truncate max-w-[130px]">
-                {lastSyncedAt ? `${t.lastSynced}: ${lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Synced'}
+                {lastSyncedAt ? `${t.lastSynced}: ${formatTime12Hour(lastSyncedAt, true)}` : 'Synced'}
               </span>
 
               <button
@@ -684,7 +706,7 @@ export default function App() {
                 type="button"
                 onClick={handleManualSync}
                 disabled={isSyncing}
-                className="px-2 py-1 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold rounded text-[10px] flex items-center gap-1 shadow-xs transition-all disabled:opacity-50 cursor-pointer shrink-0"
+                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold rounded text-[10px] flex items-center gap-1 shadow-xs transition-all disabled:opacity-50 cursor-pointer shrink-0"
                 title={t.syncNow}
               >
                 <RefreshCw className={`w-2.5 h-2.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -946,6 +968,7 @@ export default function App() {
                             categoryCounts={categoryCounts}
                             onSelectCategory={navToCategory}
                             currentLanguage={currentLanguage}
+                            disconnectionTasks={disconnectionTasks}
                           />
                         </div>
                       </div>
@@ -963,37 +986,41 @@ export default function App() {
                     currentLanguage={currentLanguage}
                   />
 
-                  {/* Clean Helper Card & Recent Submissions */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold">
-                          <Zap className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                            {t.appSubtitle}
-                          </h3>
-                          <p className="text-xs text-slate-500">
-                            {t.selectCategory} (NSC, DISCONNECTION, POLE CASE, METER, DTR)
-                          </p>
-                        </div>
+                  {/* Work Order & Khata Quick Access Banner on Home Screen */}
+                  <div className="bg-linear-to-r from-amber-500/15 via-amber-50 to-orange-500/10 border-2 border-amber-400/80 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
+                        <FileSpreadsheet className="w-6 h-6" />
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          onClick={() => {
-                            setSelectedCategory('NSC');
-                            setActiveFormCategory('NSC');
-                          }}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>NSC Form</span>
-                        </button>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm sm:text-base font-black text-slate-900">
+                            {t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata)'}
+                          </h3>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
+                            {workOrders.filter(w => isAdmin || !w.isHidden).length} Live
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          {t.workOrderNoticeDesc}
+                        </p>
                       </div>
                     </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('work-orders')}
+                        className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        <FileSpreadsheet className="w-4 h-4" />
+                        <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata'}</span>
+                      </button>
+                    </div>
+                  </div>
 
-                    <div className="mt-5">
+                  {/* Recent Submissions */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
+                    <div>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-slate-600" />
@@ -1072,6 +1099,7 @@ export default function App() {
                       setActiveFormCategory(null);
                       setSelectedWorkOrderForEntry(null);
                     }}
+                    onDataUpdated={() => loadData(false)}
                     lang={currentLanguage}
                   />
                 </div>
@@ -1138,6 +1166,7 @@ export default function App() {
                   setActiveTab('entry');
                 }}
                 currentLanguage={currentLanguage}
+                disconnectionTasks={disconnectionTasks}
               />
 
               {/* Recent Activity in Performance view */}
@@ -1174,13 +1203,17 @@ export default function App() {
             <div>
               <AdminDashboard
                 entries={entries}
-                onRefresh={loadData}
+                disconnectionTasks={disconnectionTasks}
+                onRefresh={() => loadData(true)}
                 onExportCsv={handleExportCsv}
                 onLogout={handleUserLogout}
                 lang={currentLanguage}
                 onOpenLanguageModal={() => setShowLanguageModal(true)}
-                syncMode={syncMode}
-                onNavigateToDisconnection={() => setActiveTab('disconnection')}
+                syncMode="auto"
+                onNavigateToDisconnection={(tab) => {
+                  setDisconnectionInitialTab(tab || 'VIEW_LIST');
+                  setActiveTab('disconnection');
+                }}
               />
             </div>
           )}
@@ -1209,7 +1242,7 @@ export default function App() {
                 isAdmin={isAdmin}
                 lang={currentLanguage}
                 standalonePage={true}
-                syncMode={syncMode}
+                syncMode="auto"
                 onStartWorkWithNotice={(notice) => {
                   setSelectedWorkOrderForEntry(notice);
                   const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
@@ -1223,11 +1256,13 @@ export default function App() {
 
           {/* VIEW 5: DISCONNECTION MODULE (TWO-WAY SYNC WITH GOOGLE SHEET) */}
           {activeTab === 'disconnection' && (
-            <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="space-y-4 animate-in fade-in duration-150">
               <DisconnectionTaskManagement
                 currentUser={currentUser}
                 lang={currentLanguage}
+                initialTab={disconnectionInitialTab}
                 onBack={() => setActiveTab('entry')}
+                onTasksChange={() => loadData(true)}
               />
             </div>
           )}
@@ -1292,7 +1327,7 @@ export default function App() {
             <div className="space-y-2 text-xs text-slate-600">
               <div><strong className="text-slate-800">Consumer / Site:</strong> {previewEntry.consumerName || previewEntry.dtrName || previewEntry.poleNo}</div>
               <div><strong className="text-slate-800">Worker:</strong> {previewEntry.workerName}</div>
-              <div><strong className="text-slate-800">Date:</strong> {new Date(previewEntry.date).toLocaleString()}</div>
+              <div><strong className="text-slate-800">Date & Time:</strong> {formatDateTime12Hour(previewEntry.date)}</div>
               <div><strong className="text-slate-800">Feeder:</strong> {previewEntry.feederName}</div>
               {previewEntry.notes && <div><strong className="text-slate-800">Notes:</strong> {previewEntry.notes}</div>}
             </div>

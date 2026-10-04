@@ -9,6 +9,7 @@ export interface CompressionOptions {
   quality?: number;
   watermarkText?: string;
   subText?: string;
+  maxBase64Length?: number;
 }
 
 export function compressImageFile(
@@ -20,6 +21,7 @@ export function compressImageFile(
     quality = 0.65,
     watermarkText,
     subText,
+    maxBase64Length = 43000,
   } = options;
 
   return new Promise((resolve, reject) => {
@@ -28,11 +30,11 @@ export function compressImageFile(
       return;
     }
 
-    // Video files cannot be canvas-compressed directly
-    if (file.type && file.type.startsWith('video/')) {
+    // Video or PDF files cannot be canvas-compressed directly
+    if (file.type && (file.type.startsWith('video/') || file.type === 'application/pdf')) {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error('Failed to read video file'));
+      reader.onerror = () => reject(new Error('Failed to read file'));
       reader.readAsDataURL(file);
       return;
     }
@@ -47,60 +49,72 @@ export function compressImageFile(
 
       const img = new Image();
       img.onload = () => {
-        let width = img.naturalWidth || img.width;
-        let height = img.naturalHeight || img.height;
+        const renderAtScale = (dimLimit: number, q: number): string => {
+          let width = img.naturalWidth || img.width;
+          let height = img.naturalHeight || img.height;
 
-        // Calculate aspect-preserving dimensions capped at maxDimension
-        if (width > height) {
-          if (width > maxDimension) {
-            height = Math.round((height * maxDimension) / width);
-            width = maxDimension;
+          // Calculate aspect-preserving dimensions capped at dimLimit
+          if (width > height) {
+            if (width > dimLimit) {
+              height = Math.round((height * dimLimit) / width);
+              width = dimLimit;
+            }
+          } else {
+            if (height > dimLimit) {
+              width = Math.round((width * dimLimit) / height);
+              height = dimLimit;
+            }
           }
-        } else {
-          if (height > maxDimension) {
-            width = Math.round((width * maxDimension) / height);
-            height = maxDimension;
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d', { alpha: false });
+
+          if (!ctx) {
+            return result;
           }
-        }
 
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d', { alpha: false });
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
 
-        if (!ctx) {
-          resolve(result);
-          return;
-        }
+          // Optional official WBSEDCL timestamp badge
+          if (watermarkText || subText) {
+            const badgeHeight = 36;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.fillRect(0, height - badgeHeight, width, badgeHeight);
 
-        // Use high quality image smoothing
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+            ctx.fillStyle = '#f59e0b';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(watermarkText || 'WBSEDCL FIELD OPS', 10, height - 14);
 
-        // Draw compressed image
-        ctx.drawImage(img, 0, 0, width, height);
-
-        // Optional official WBSEDCL timestamp badge
-        if (watermarkText || subText) {
-          const badgeHeight = 36;
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.75)'; // Slate 900 semi-transparent
-          ctx.fillRect(0, height - badgeHeight, width, badgeHeight);
-
-          ctx.fillStyle = '#f59e0b'; // Amber 500
-          ctx.font = 'bold 12px sans-serif';
-          ctx.fillText(watermarkText || 'WBSEDCL FIELD OPS', 10, height - 14);
-
-          if (subText) {
-            ctx.fillStyle = '#e2e8f0'; // Slate 200
-            ctx.font = '11px monospace';
-            const textWidth = ctx.measureText(subText).width;
-            ctx.fillText(subText, Math.max(width - textWidth - 10, 160), height - 14);
+            if (subText) {
+              ctx.fillStyle = '#e2e8f0';
+              ctx.font = '11px monospace';
+              const textWidth = ctx.measureText(subText).width;
+              ctx.fillText(subText, Math.max(width - textWidth - 10, 160), height - 14);
+            }
           }
-        }
 
-        // Export as JPEG with optimal compression
+          return canvas.toDataURL('image/jpeg', q);
+        };
+
         try {
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          let curDim = maxDimension;
+          let curQual = quality;
+          let compressedDataUrl = renderAtScale(curDim, curQual);
+
+          let attempts = 0;
+          while (compressedDataUrl.length > maxBase64Length && attempts < 6) {
+            attempts++;
+            curQual = Math.max(0.36, curQual - 0.1);
+            curDim = Math.max(460, Math.round(curDim * 0.78));
+            compressedDataUrl = renderAtScale(curDim, curQual);
+          }
+
           resolve(compressedDataUrl);
         } catch {
           resolve(result);
@@ -121,3 +135,4 @@ export function compressImageFile(
     reader.readAsDataURL(file);
   });
 }
+

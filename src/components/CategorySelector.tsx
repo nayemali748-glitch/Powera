@@ -131,18 +131,25 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                   <Icon className="w-5 h-5" />
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${cat.badgeBg}`}>
-                    {count} {t.recordsCount.split(' ')[0]}
+                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${cat.badgeBg}`}>
+                    {cat.id === 'DISCONNECTION'
+                      ? (currentLanguage === 'bn' ? `মোট লিস্ট: ${count}` : `Total List: ${count}`)
+                      : `${count} ${t.recordsCount.split(' ')[0]}`}
                   </span>
                 </div>
               </div>
 
               {/* Title & Subtitle */}
               <div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-[11px] font-mono font-bold text-slate-400">
                     {cat.code}
                   </span>
+                  {cat.id === 'DISCONNECTION' && (
+                    <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                      {currentLanguage === 'bn' ? `মোট ${count} টি` : `${count} Consumers`}
+                    </span>
+                  )}
                 </div>
                 <h3 className="font-extrabold text-sm text-slate-900 mt-0.5 leading-tight group-hover:text-blue-600 transition-colors">
                   {cat.title}
@@ -157,7 +164,11 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
 
               {/* Action Button Indicator */}
               <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-600 group-hover:text-blue-600">
-                <span className="text-[11px]">{t.dataEntry} →</span>
+                <span className="text-[11px]">
+                  {cat.id === 'DISCONNECTION'
+                    ? (currentLanguage === 'bn' ? `ডিসকানেকশন লিস্ট (${count}) →` : `Disconnection List (${count}) →`)
+                    : `${t.dataEntry} →`}
+                </span>
                 <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
               </div>
             </button>

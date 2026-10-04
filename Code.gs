@@ -783,15 +783,15 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'notes') return dataObj.notes || '';
 
   // Disconnection 33-field exact & normalized extractors
-  if (targetNorm === 'offcode') return dataObj['off_code'] || dataObj.off_code || dataObj.offCode || dataObj.officeCode || dataObj.substation || dataObj.area || '5233100';
-  if (targetNorm === 'mru') return dataObj['MRU'] || dataObj.MRU || dataObj.mru || dataObj.mruSection || dataObj['MRU Section'] || 'FIL33MMR';
+  if (targetNorm === 'offcode') return dataObj['off_code'] || dataObj.off_code || dataObj.offCode || dataObj.officeCode || dataObj.substation || dataObj.area || '';
+  if (targetNorm === 'mru') return dataObj['MRU'] || dataObj.MRU || dataObj.mru || dataObj.mruSection || dataObj['MRU Section'] || '';
   if (targetNorm === 'consumerid') return dataObj['Consumer Id'] || dataObj['Consumer ID'] || dataObj.consumerId || dataObj.accountNumber || dataObj.consumerNo || '';
   if (targetNorm === 'name') return dataObj['Name'] || dataObj.Name || dataObj.name || dataObj.consumerName || dataObj.customerName || '';
   if (targetNorm === 'address') return dataObj['Address'] || dataObj.Address || dataObj.address || dataObj.consumerAddress || '';
-  if (targetNorm === 'baseclass') return dataObj['Base Class'] || dataObj.baseClass || dataObj.class || 'Domestic';
-  if (targetNorm === 'class') return dataObj['Class'] || dataObj.Class || dataObj.class || dataObj.baseClass || dataObj.tariffCategory || 'Domestic';
-  if (targetNorm === 'device') return dataObj['Device'] || dataObj['BClass/Phase'] || dataObj.device || dataObj.deviceType || dataObj.bClassPhase || 'I';
-  if (targetNorm === 'bclassphase') return dataObj['BClass/Phase'] || dataObj['Device'] || dataObj.deviceType || dataObj.bClassPhase || 'I';
+  if (targetNorm === 'baseclass') return dataObj['Base Class'] || dataObj.baseClass || dataObj.class || '';
+  if (targetNorm === 'class') return dataObj['Class'] || dataObj.Class || dataObj.class || dataObj.baseClass || dataObj.tariffCategory || '';
+  if (targetNorm === 'device') return dataObj['Device'] || dataObj['BClass/Phase'] || dataObj.device || dataObj.deviceType || dataObj.bClassPhase || '';
+  if (targetNorm === 'bclassphase') return dataObj['BClass/Phase'] || dataObj['Device'] || dataObj.deviceType || dataObj.bClassPhase || '';
   if (targetNorm === 'osduedaterange') return dataObj['O/S Duedate Range'] || dataObj['O/S Due date Range'] || dataObj.dueDateRange || dataObj.osDueDateRange || '';
   if (targetNorm === 'd2netos') return dataObj['D2 Net O/S'] || dataObj['D2 Net OS'] || dataObj.outstandingDue || dataObj.arrearAmount || dataObj.d2NetOs || '';
   if (targetNorm === 'mobile' || targetNorm === 'mobilenumber') return dataObj['Mobile'] || dataObj['Mobile Number'] || dataObj['Mobile No'] || dataObj.mobile || dataObj.mobileNumber || dataObj.phoneNumber || dataObj.phone || '';
@@ -806,7 +806,7 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'gispole') return dataObj['Gis Pole'] || dataObj.gisPole || dataObj.poleNo || '';
   if (targetNorm === 'agency') return dataObj['Agency'] || dataObj.agency || dataObj.assignedAgency || dataObj.assignedWorkerName || '';
   if (targetNorm === 'natureofconn') return dataObj['Nature of Conn'] || dataObj.natureOfConn || '';
-  if (targetNorm === 'govnongov') return dataObj['Gov/Non-Gov'] || dataObj['Gov_Non_Gov'] || dataObj.govNonGov || dataObj.govStatus || 'Non-Gov';
+  if (targetNorm === 'govnongov') return dataObj['Gov/Non-Gov'] || dataObj['Gov_Non_Gov'] || dataObj.govNonGov || dataObj.govStatus || '';
   if (targetNorm === 'lastupdated') return dataObj['Last Updated'] || dataObj.lastUpdated || dataObj.updatedAt || now();
   if (targetNorm === 'paidamount') return dataObj['Paid Amount'] || dataObj.paidAmount || '';
   if (targetNorm === 'paiddate') return dataObj['Paid Date'] || dataObj.paidDate || dataObj.paymentDate || '';
@@ -1286,7 +1286,8 @@ function updateEntry(targetId, category, updateData) {
 // Delete Record from Google Sheets with Protection
 function deleteEntry(targetId, category, options) {
   options = options || {};
-  const cleanId = String(targetId || '').trim();
+  const cleanId = String(targetId || options.consumerId || options['Consumer Id'] || '').trim();
+  const cleanConsumerId = cleanId.replace(/^TASK-DISC-/i, '').trim();
   if (!cleanId) throw Error('Entry ID required for deletion');
 
   const sheetsToSearch = category 
@@ -1302,10 +1303,18 @@ function deleteEntry(targetId, category, options) {
       const s = getSheet(sheetName);
       if (!s) continue;
       const rows = getSheetRows(sheetName);
-      const found = rows.find(r => 
-        String(r['Record ID'] || r.id || r.ID || '').trim() === cleanId ||
-        String(r['Submission ID'] || r.submissionId || '').trim() === cleanId
-      );
+      const found = rows.find(function(r) {
+        const recId = String(r['Record ID'] || r.id || r.ID || '').trim();
+        const subId = String(r['Submission ID'] || r.submissionId || '').trim();
+        const conId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
+        const tId = String(r['Task ID'] || r.taskId || '').trim();
+        return (
+          recId === cleanId ||
+          subId === cleanId ||
+          (cleanConsumerId && conId === cleanConsumerId) ||
+          (cleanId && tId === cleanId)
+        );
+      });
       if (found) {
         matchedSheet = s;
         matchedRow = found;
@@ -1322,7 +1331,7 @@ function deleteEntry(targetId, category, options) {
   try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
   logSystemActivity('admin', cleanId, '', '', 'DELETE_RECORD', 'Deleted record: ' + cleanId);
 
-  return { success: true, message: 'Record deleted from Google Sheets', id: cleanId };
+  return { success: true, deleted: true, message: 'Record deleted from Google Sheets', id: cleanId };
 }
 
 // Query Entries across dedicated sheets
@@ -1685,7 +1694,7 @@ function doGet(e) {
     }
 
     // 9. Disconnection Tasks & Module
-    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection') {
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection-tasks' || action === 'disconnection_tasks' || action === 'disconnection') {
       return out(getDisconnectionTasksData(p), 'Disconnection tasks retrieved');
     }
     if (action === 'getDisconnectionHistory' || action === 'disconnectionHistory') {
@@ -1874,8 +1883,13 @@ function doPost(e) {
     if (action === 'uploadDisconnectionTasks') {
       return out(handleUploadDisconnectionTasks(body), 'Disconnection tasks processed', reqId);
     }
-    if (action === 'submitDisconnectionReport' || action === 'submitDisconnectionTaskReport') {
+    if (action === 'submitDisconnectionReport' || action === 'submitDisconnectionTaskReport' || action === 'updateDisconnection') {
       return out(handleSubmitDisconnectionReport(body), 'Disconnection report saved', reqId);
+    }
+    if (action === 'deleteDisconnectionTask') {
+      const targetId = body.consumerId || body['Consumer Id'] || body.id || body.taskId || data.consumerId || data.id;
+      const res = deleteEntry(targetId, 'Disconnection', body);
+      return out(res, 'Disconnection task deleted from Google Sheets', reqId);
     }
     if (action === 'assignDisconnectionTask') {
       return out(handleAssignDisconnectionTask(body), 'Disconnection task assigned', reqId);
@@ -1886,7 +1900,7 @@ function doPost(e) {
     if (action === 'restoreDisconnectionTask') {
       return out(handleRestoreDisconnectionTask(body), 'Disconnection task restored', reqId);
     }
-    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection') {
+    if (action === 'getDisconnectionTasks' || action === 'disconnectiontasks' || action === 'disconnectionTasks' || action === 'disconnection-tasks' || action === 'disconnection_tasks' || action === 'disconnection') {
       return out(getDisconnectionTasksData(body), 'Disconnection tasks retrieved', reqId);
     }
     if (action === 'getDisconnectionHistory' || action === 'disconnectionHistory') {
@@ -1960,7 +1974,7 @@ function getDisconnectionTasksData(params) {
 
   for (let i = 0; i < rawRows.length; i++) {
     const r = rawRows[i];
-    const offCode = String(r['off_code'] || r.off_code || r.offCode || r['Substation'] || r.area || '5233100').trim();
+    const offCode = String(r['off_code'] || r.off_code || r.offCode || r['Substation'] || r.area || '').trim();
     const mru = String(r['MRU'] || r.mru || r['MRU Section'] || r.mruSection || '').trim();
     const consumerId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || r['Account Number'] || '').trim();
     const consumerName = String(r['Name'] || r['Consumer Name'] || r.consumerName || r.name || '').trim();
@@ -1996,9 +2010,9 @@ function getDisconnectionTasksData(params) {
 
     const slNumber = 'SL ' + ('000' + (tasks.length + 1)).slice(-3);
     const taskId = 'TASK-DISC-' + (consumerId || (tasks.length + 1));
-    const baseClass = String(r['Base Class'] || r.baseClass || r.class || 'Domestic').trim();
-    const consumerClass = String(r['Class'] || r.classType || r.class || r.baseClass || 'Domestic').trim();
-    const device = String(r['Device'] || r['BClass/Phase'] || r.device || r.deviceType || r.bClassPhase || 'I').trim();
+    const baseClass = String(r['Base Class'] || r.baseClass || r.class || '').trim();
+    const consumerClass = String(r['Class'] || r.classType || r.class || r.baseClass || '').trim();
+    const device = String(r['Device'] || r['BClass/Phase'] || r.device || r.deviceType || r.bClassPhase || '').trim();
     const dueDateRange = String(r['O/S Duedate Range'] || r['O/S Due date Range'] || r.dueDateRange || r.osDueDateRange || '').trim();
     const outstandingDue = String(r['D2 Net O/S'] || r['Arrear Amount'] || r.outstandingDue || r.d2NetOs || '').trim();
     const mobile = String(r['Mobile'] || r['Mobile Number'] || r['Mobile No'] || r.mobile || r.phoneNumber || '').trim();
@@ -2014,7 +2028,7 @@ function getDisconnectionTasksData(params) {
     const agency = String(r['Agency'] || r.agency || r.assignedAgency || '').trim();
     const notes = String(r['Notes'] || r.notes || r.workerRemarks || r.workerReport || '').trim();
     const natureOfConn = String(r['Nature of Conn'] || r.natureOfConn || '').trim();
-    const govNonGov = String(r['Gov/Non-Gov'] || r.govNonGov || 'Non-Gov').trim();
+    const govNonGov = String(r['Gov/Non-Gov'] || r.govNonGov || '').trim();
     const lastUpdated = String(r['Last Updated'] || r.lastUpdated || r.updatedAt || '').trim();
     const priority = String(r['Priority'] || r.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
     const paidAmount = String(r['Paid Amount'] || r.paidAmount || (status === 'PAID' ? outstandingDue : '')).trim();
@@ -2545,14 +2559,14 @@ function handleSubmitDisconnectionReport(body) {
     } else {
       // If row not found at all, create single complete row
       const newRecord = {
-        'off_code': targetOffCode || '5233100',
+        'off_code': targetOffCode || '',
         'MRU': targetMru || '',
         'Consumer Id': targetConsumerId,
         'Name': body['Name'] || body.consumerName || '',
         'Address': body['Address'] || body.consumerAddress || '',
-        'Base Class': body['Base Class'] || body.baseClass || 'Domestic',
-        'Class': body['Class'] || body.classType || 'Domestic',
-        'Device': body['Device'] || body.deviceType || 'I',
+        'Base Class': body['Base Class'] || body.baseClass || '',
+        'Class': body['Class'] || body.classType || '',
+        'Device': body['Device'] || body.deviceType || '',
         'O/S Duedate Range': body['O/S Duedate Range'] || body.dueDateRange || '',
         'D2 Net O/S': body['D2 Net O/S'] || body.outstandingDue || '',
         'Mobile': body['Mobile'] || body.phoneNumber || '',
@@ -2568,7 +2582,7 @@ function handleSubmitDisconnectionReport(body) {
         'Agency': agency,
         'Notes': notes,
         'Nature of Conn': body.natureOfConn || '',
-        'Gov/Non-Gov': body.govNonGov || 'Non-Gov',
+        'Gov/Non-Gov': body.govNonGov || '',
         'Last Updated': nowTimestamp,
         'Priority': priority,
         'Paid Amount': paidAmount,

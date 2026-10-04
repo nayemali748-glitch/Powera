@@ -18,7 +18,10 @@ import {
   SlidersHorizontal,
   ChevronDown,
   Layers,
-  Sparkles
+  Sparkles,
+  MoreVertical,
+  MessageSquareWarning,
+  RotateCcw
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
@@ -28,35 +31,66 @@ import {
   UserSession,
   UserAccount
 } from '../types';
-import { fetchDisconnectionTasks, fetchUsers } from '../services/api';
+import {
+  fetchDisconnectionTasks,
+  fetchUsers,
+  deleteDisconnectionTask,
+  submitDisconnectionTaskReport,
+  getCachedDisconnectionTasksSync,
+  setCachedDisconnectionTasksSync
+} from '../services/api';
 import { Language } from '../utils/translations';
+import {
+  getTaskPhase,
+  getTaskConnectionClass,
+  matchesDisconnectionStatusFilter,
+  PhaseFilterType,
+  ConnectionClassFilterType,
+  getReissueLockState,
+  cleanDisconnectionNotes,
+  cleanWorkerOrAgencyName
+} from '../utils/disconnectionClassifier';
+import { getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 import { DisconnectionDashboard } from './disconnection/DisconnectionDashboard';
 import { DisconnectionUpload } from './disconnection/DisconnectionUpload';
 import { DisconnectionReport } from './disconnection/DisconnectionReport';
 import { DisconnectionConsumerCard } from './disconnection/DisconnectionConsumerCard';
 import { DisconnectionUpdateModal } from './disconnection/DisconnectionUpdateModal';
 
+export type DisconnectionTab = 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST';
+
 interface DisconnectionTaskManagementProps {
   currentUser?: UserSession | null;
   lang?: Language;
   onBack?: () => void;
+  onTasksChange?: (count: number) => void;
+  initialTab?: DisconnectionTab;
 }
-
-type DisconnectionTab = 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST';
 
 export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementProps> = ({
   currentUser,
   lang = 'en',
-  onBack
+  onBack,
+  onTasksChange,
+  initialTab = 'VIEW_LIST'
 }) => {
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN';
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
 
-  // Navigation tab state (Defaults to VIEW_LIST so dashboard is not always open)
-  const [activeTab, setActiveTab] = useState<DisconnectionTab>('VIEW_LIST');
-  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(false);
+  // Navigation tab state
+  const [activeTab, setActiveTab] = useState<DisconnectionTab>(initialTab);
+  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(initialTab === 'DASHBOARD');
 
-  // Core Data States
-  const [tasks, setTasks] = useState<DisconnectionTask[]>([]);
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+      if (initialTab === 'DASHBOARD') {
+        setIsDashboardExpanded(true);
+      }
+    }
+  }, [initialTab]);
+
+  // Core Data States (Initialized synchronously from local cache for 0ms instant rendering)
+  const [tasks, setTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
   const [stats, setStats] = useState<DisconnectionStats>({
     totalTasks: 0,
     completedTasks: 0,
@@ -68,48 +102,59 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     myCompletionPercentage: 0
   });
   const [availableWorkers, setAvailableWorkers] = useState<Array<{ idNo: string; name: string }>>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   // View List Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [phaseFilter, setPhaseFilter] = useState<PhaseFilterType>('ALL');
+  const [classFilter, setClassFilter] = useState<ConnectionClassFilterType>('ALL');
   const [agencyFilter, setAgencyFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'SERIAL_ASC' | 'DUE_DESC' | 'DUE_ASC' | 'NAME_ASC' | 'URGENT_FIRST' | 'NEWEST'>('SERIAL_ASC');
   const [workerOnlyFilter, setWorkerOnlyFilter] = useState<boolean>(!isAdmin);
+  const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
 
   // Update Status Modal
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
-  // Initial Data Fetch
+  // Fast Non-Blocking Data Fetch & Background Sync
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
     }
     setError(null);
 
     try {
-      // 1. Fetch Disconnection Tasks & Stats
+      // Fetch Disconnection Tasks & Stats immediately
       const discResult = await fetchDisconnectionTasks({
         role: currentUser?.role,
         workerId: currentUser?.idNo,
         workerName: currentUser?.name
       });
 
-      if (discResult && discResult.tasks) {
+      if (discResult && Array.isArray(discResult.tasks)) {
         setTasks(discResult.tasks);
+        setCachedDisconnectionTasksSync(discResult.tasks);
+        if (onTasksChange) onTasksChange(discResult.tasks.length);
         if (discResult.stats) {
           setStats(discResult.stats);
         }
       }
+    } catch (err: any) {
+      console.error('Failed to load disconnection tasks:', err);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [currentUser, onTasksChange]);
 
-      // 2. Fetch Users to populate Agency/Worker dropdown
-      try {
-        const usersResult = await fetchUsers();
+  // Load users in parallel without blocking Disconnection list rendering
+  useEffect(() => {
+    fetchUsers()
+      .then(usersResult => {
         if (Array.isArray(usersResult)) {
           const mapped = usersResult
             .filter((u: any) => u.status !== 'hold' && u.status !== 'inactive')
@@ -120,59 +165,78 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             .filter(u => u.name.trim() !== '');
           setAvailableWorkers(mapped);
         }
-      } catch (userErr) {
-        console.warn('Failed to load user accounts for assignment:', userErr);
-      }
-    } catch (err: any) {
-      console.error('Failed to load disconnection tasks:', err);
-      setError(err.message || 'Failed to load disconnection tasks');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [currentUser]);
+      })
+      .catch(() => {});
+  }, []);
 
+  // Initial load + Continuous 8s Live Auto-Sync with Backend Google Sheet
   useEffect(() => {
-    loadData();
+    loadData(false);
+    const interval = setInterval(() => {
+      loadData(false);
+    }, 8000);
+    return () => clearInterval(interval);
   }, [loadData]);
 
-  // Handle task update from modal
+  // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
-    // Confetti celebration if completed or paid
-    if (updatedTask.taskStatus === 'COMPLETED' || updatedTask.taskStatus === 'DISCONNECT' || updatedTask.taskStatus === 'PAID') {
-      try {
-        confetti({
-          particleCount: 50,
-          spread: 60,
-          origin: { y: 0.7 }
-        });
-      } catch {
-        // ignore
-      }
+    try {
+      confetti({
+        particleCount: 40,
+        spread: 55,
+        origin: { y: 0.7 }
+      });
+    } catch {
+      // ignore
     }
 
     setTasks(prev => {
-      const idx = prev.findIndex(t => t.taskId === updatedTask.taskId);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = updatedTask;
-        return next;
-      }
-      return [updatedTask, ...prev];
+      const next = prev.map(t =>
+        (t.taskId === updatedTask.taskId || (t.consumerId && t.consumerId === updatedTask.consumerId))
+          ? {
+              ...t,
+              ...updatedTask,
+              taskStatus: updatedTask.taskStatus,
+              disconStatus: updatedTask.disconStatus,
+              'Discon Status': updatedTask['Discon Status'],
+              workerRemarks: updatedTask.workerRemarks,
+              workerReport: updatedTask.workerReport,
+              Notes: updatedTask.Notes,
+              notes: updatedTask.notes,
+              statusHistory: updatedTask.statusHistory
+            }
+          : t
+      );
+      setCachedDisconnectionTasksSync(next);
+      return next;
     });
-
-    // Background reload to sync all aggregated stats
-    loadData(true);
   };
 
-  // Handle upload success
+  // Handle upload success (immediately shows uploaded consumers and syncs to backend sheet)
   const handleUploadSuccess = (newTasks: DisconnectionTask[]) => {
     setTasks(prev => {
-      const existingMap = new Map(prev.map(t => [t.taskId, t]));
-      newTasks.forEach(nt => {
-        existingMap.set(nt.taskId, nt);
+      const existingMap = new Map<string, DisconnectionTask>();
+      prev.forEach(t => {
+        const key = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '').trim();
+        if (key) existingMap.set(key, t);
       });
-      return Array.from(existingMap.values());
+      newTasks.forEach((nt, idx) => {
+        const key = String(nt.consumerId || (nt as any)['Consumer Id'] || nt.taskId || `NEW-${idx}`).trim();
+        const prevItem = existingMap.get(key);
+        existingMap.set(key, {
+          ...(prevItem || {}),
+          ...nt,
+          taskId: nt.taskId || prevItem?.taskId || `TASK-DISC-${key}`,
+          serialNumber: nt.serialNumber || prevItem?.serialNumber || `SL ${String(existingMap.size + 1).padStart(3, '0')}`
+        } as DisconnectionTask);
+      });
+      const merged = Array.from(existingMap.values()).map((item, idx) => ({
+        ...item,
+        serialNumber: `SL ${String(idx + 1).padStart(3, '0')}`
+      }));
+      setCachedDisconnectionTasksSync(merged);
+      if (onTasksChange) onTasksChange(merged.length);
+      return merged;
     });
     loadData(true);
   };
@@ -188,17 +252,142 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     setActiveTab('VIEW_LIST');
   };
 
-  // Open Update Modal
+  // Delete Consumer Handler (Instant 0ms UI removal + Permanent Backend Sheet deletion)
+  const handleDeleteTask = async (task: DisconnectionTask) => {
+    const cId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
+    const tId = String(task.taskId || '').trim();
+
+    // 1. Immediately remove from UI & local cache in 0ms
+    setTasks(prev => {
+      const next = prev.filter(t => {
+        const curCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+        const curTId = String(t.taskId || '').trim();
+        if (cId && curCId === cId) return false;
+        if (tId && curTId === tId) return false;
+        return true;
+      });
+      setCachedDisconnectionTasksSync(next);
+      if (onTasksChange) onTasksChange(next.length);
+      return next;
+    });
+
+    // 2. Permanently delete from server & backend Google Sheet
+    await deleteDisconnectionTask(task);
+  };
+
+  // Open Update Modal (Enforce 1-time update lock for Workers unless Admin Re-issued)
   const handleOpenUpdateModal = (task: DisconnectionTask) => {
+    if (!isAdmin) {
+      const lockState = getReissueLockState(task);
+      if (lockState.isLockedForWorker) {
+        return;
+      }
+    }
     setSelectedTaskForUpdate(task);
     setIsUpdateModalOpen(true);
   };
 
-  // Unique Agencies from tasks for filter dropdown
+  // Worker requests Re-issue so Admin can unlock the consumer for another status update
+  const handleRequestReissue = async (task: DisconnectionTask) => {
+    const workerName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || 'Worker');
+    const timeStr = `${getNowDateDDMMYYYY()} ${getNowTime12Hour()}`;
+    const existingNotes = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes'] || '');
+    const taggedNotes = `${existingNotes} [REISSUE_REQ:${workerName}|${timeStr}]`.trim();
+
+    setTasks(prev => {
+      const next = prev.map(t =>
+        (t.taskId === task.taskId || (t.consumerId && t.consumerId === task.consumerId))
+          ? {
+              ...t,
+              workerRemarks: taggedNotes,
+              workerReport: taggedNotes,
+              notes: taggedNotes,
+              Notes: taggedNotes,
+              reissueRequested: true,
+              reissueRequestedBy: workerName,
+              reissueRequestedAt: timeStr,
+              reissueApproved: false
+            }
+          : t
+      );
+      setCachedDisconnectionTasksSync(next);
+      return next;
+    });
+
+    try {
+      await submitDisconnectionTaskReport({
+        ...task,
+        taskId: task.taskId,
+        consumerId: task.consumerId || (task as any)['Consumer Id'],
+        workerId: currentUser?.idNo || 'WORKER',
+        workerName,
+        taskStatus: task.taskStatus,
+        disconStatus: task.disconStatus || task.taskStatus,
+        workerRemarks: taggedNotes,
+        workerReport: taggedNotes,
+        notes: taggedNotes
+      });
+    } catch (err) {
+      console.warn('Re-issue request sync notice:', err);
+    }
+  };
+
+  // Admin approves Re-issue request -> unlocks consumer for Worker to update status once more
+  const handleApproveReissue = async (task: DisconnectionTask) => {
+    if (!isAdmin) return;
+    const adminName = cleanWorkerOrAgencyName(currentUser?.name || 'Admin');
+    const existingNotes = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes'] || '');
+    const approvedNotes = `${existingNotes} [REISSUE_APPROVED]`.trim();
+
+    setTasks(prev => {
+      const next = prev.map(t =>
+        (t.taskId === task.taskId || (t.consumerId && t.consumerId === task.consumerId))
+          ? {
+              ...t,
+              taskStatus: 'REISSUE' as DisconnectionTaskStatus,
+              disconStatus: 'REISSUE',
+              'Discon Status': 'REISSUE',
+              workerRemarks: approvedNotes,
+              workerReport: approvedNotes,
+              notes: approvedNotes,
+              Notes: approvedNotes,
+              reissueRequested: false,
+              reissueApproved: true
+            }
+          : t
+      );
+      setCachedDisconnectionTasksSync(next);
+      return next;
+    });
+
+    try {
+      await submitDisconnectionTaskReport({
+        ...task,
+        taskId: task.taskId,
+        consumerId: task.consumerId || (task as any)['Consumer Id'],
+        workerId: currentUser?.idNo || 'ADMIN',
+        workerName: adminName,
+        taskStatus: 'REISSUE',
+        disconStatus: 'REISSUE',
+        workerRemarks: approvedNotes,
+        workerReport: approvedNotes,
+        notes: approvedNotes
+      });
+    } catch (err) {
+      console.warn('Re-issue approval sync notice:', err);
+    }
+  };
+
+  // Pending Re-issue SMS Requests for Admin
+  const pendingReissueTasks = useMemo(() => {
+    return tasks.filter(t => getReissueLockState(t).isReissueRequested);
+  }, [tasks]);
+
+  // Unique Agencies / Workers (Name Only, No ID) from tasks for filter dropdown
   const uniqueAgencies = useMemo(() => {
     const set = new Set<string>();
     tasks.forEach(t => {
-      const ag = t.assignedAgency?.trim() || t.assignedWorkerName?.trim();
+      const ag = cleanWorkerOrAgencyName(t.assignedAgency || t.Agency || t.assignedWorkerName || '');
       if (ag) set.add(ag);
     });
     return Array.from(set).sort();
@@ -209,9 +398,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     return tasks.filter(t => {
       // Worker only restriction if toggled or worker mode
       if (workerOnlyFilter && !isAdmin) {
-        const myName = String(currentUser?.name || currentUser?.username || '').toLowerCase().trim();
+        const myName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || '').toLowerCase();
         const myId = String(currentUser?.idNo || '').toLowerCase().trim();
-        const assignedWorker = String(t.assignedWorkerName || '').toLowerCase().trim();
+        const assignedWorker = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || '').toLowerCase();
         const assignedId = String(t.assignedWorkerId || '').toLowerCase().trim();
 
         // If explicitly assigned to a specific worker, check if it belongs to this worker
@@ -219,22 +408,26 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           const isMine = (myName && assignedWorker.includes(myName)) || (myId && assignedId === myId);
           if (!isMine) return false;
         }
-        // If unassigned in CCC pool, all team workers can see and execute it
       }
 
-      // Status Filter
-      if (statusFilter !== 'ALL') {
-        if (statusFilter === 'URGENT') {
-          if (String(t.priority || '').toUpperCase() !== 'URGENT') return false;
-        } else {
-          const st = String(t.taskStatus || 'PENDING').toUpperCase();
-          if (st !== statusFilter) return false;
-        }
+      // Status Filter (Unified matcher supports PAID, DISCONNECT, COMPLETED, PENDING, DISPUTE, OFFICE TEAM, NOT FOUND, REISSUE, URGENT)
+      if (!matchesDisconnectionStatusFilter(t, statusFilter)) {
+        return false;
+      }
+
+      // Phase Filter (1PH / 3PH)
+      if (phaseFilter !== 'ALL' && getTaskPhase(t) !== phaseFilter) {
+        return false;
+      }
+
+      // Connection Class Filter (DOMESTIC / COMMERCIAL / INDUSTRIAL / STW)
+      if (classFilter !== 'ALL' && getTaskConnectionClass(t) !== classFilter) {
+        return false;
       }
 
       // Agency / Worker Filter
       if (agencyFilter !== 'ALL') {
-        const ag = t.assignedAgency?.trim() || t.assignedWorkerName?.trim() || '';
+        const ag = cleanWorkerOrAgencyName(t.assignedAgency || t.Agency || t.assignedWorkerName || '');
         if (ag !== agencyFilter) return false;
       }
 
@@ -301,9 +494,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
       return dateB - dateA;
     });
-  }, [tasks, statusFilter, agencyFilter, searchQuery, sortBy, workerOnlyFilter, isAdmin, currentUser]);
+  }, [tasks, statusFilter, phaseFilter, classFilter, agencyFilter, searchQuery, sortBy, workerOnlyFilter, isAdmin, currentUser]);
 
-  // Counts for pills
+  // Counts for pills (Status + 1PH/3PH + Domestic/Commercial/Industrial/STW)
   const counts = useMemo(() => {
     let urgent = 0;
     let disconnect = 0;
@@ -313,157 +506,324 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     let officeTeam = 0;
     let notFound = 0;
     let reissue = 0;
+    let completed = 0;
+
+    let phase1 = 0;
+    let phase3 = 0;
+    let domestic = 0;
+    let commercial = 0;
+    let industrial = 0;
+    let stw = 0;
 
     tasks.forEach(t => {
-      const st = String(t.taskStatus || 'PENDING').toUpperCase();
-      if (String(t.priority || '').toUpperCase() === 'URGENT') urgent++;
-      if (st === 'DISCONNECT' || st === 'COMPLETED') disconnect++;
-      else if (st === 'PAID') paid++;
-      else if (st === 'PENDING' || st === 'IN PROGRESS') pending++;
-      else if (st === 'DISPUTE') dispute++;
-      else if (st === 'OFFICE TEAM') officeTeam++;
-      else if (st === 'NOT FOUND') notFound++;
-      else if (st === 'REISSUE') reissue++;
+      if (matchesDisconnectionStatusFilter(t, 'URGENT')) urgent++;
+      if (matchesDisconnectionStatusFilter(t, 'DISCONNECT')) {
+        disconnect++;
+        completed++;
+      } else if (matchesDisconnectionStatusFilter(t, 'PAID')) {
+        paid++;
+        completed++;
+      } else if (matchesDisconnectionStatusFilter(t, 'DISPUTE')) {
+        dispute++;
+      } else if (matchesDisconnectionStatusFilter(t, 'OFFICE TEAM')) {
+        officeTeam++;
+      } else if (matchesDisconnectionStatusFilter(t, 'NOT FOUND')) {
+        notFound++;
+      } else if (matchesDisconnectionStatusFilter(t, 'REISSUE')) {
+        reissue++;
+      } else {
+        pending++;
+      }
+
+      const ph = getTaskPhase(t);
+      if (ph === '3PH') phase3++;
+      else phase1++;
+
+      const cls = getTaskConnectionClass(t);
+      if (cls === 'COMMERCIAL') commercial++;
+      else if (cls === 'INDUSTRIAL') industrial++;
+      else if (cls === 'STW') stw++;
+      else domestic++;
     });
 
-    return { total: tasks.length, urgent, disconnect, paid, pending, dispute, officeTeam, notFound, reissue };
+    return {
+      total: tasks.length,
+      urgent,
+      disconnect,
+      paid,
+      pending,
+      dispute,
+      officeTeam,
+      notFound,
+      reissue,
+      completed,
+      phase1,
+      phase3,
+      domestic,
+      commercial,
+      industrial,
+      stw
+    };
   }, [tasks]);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12 animate-in fade-in duration-200" id="disconnection-module-root">
-      {/* Top Banner Navigation Bar */}
-      <div className="bg-slate-900 text-white rounded-3xl p-5 sm:p-6 shadow-xl border border-slate-800">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3.5">
-            {onBack && (
-              <button
-                type="button"
-                id="disconnection-back-btn"
-                onClick={onBack}
-                className="p-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer shadow-xs active:scale-95"
-                title="Back to Main Menu"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-            )}
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                  <Zap className="w-4 h-4 fill-amber-400" />
-                </div>
-                <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-                  {lang === 'bn' ? 'বিদ্যুৎ সংযোগ বিচ্ছিন্নকরণ ও পরিচালনা' : 'Disconnection & Utility Operations'}
-                </h1>
-              </div>
-              <p className="text-xs text-slate-400 mt-1">
-                WBSEDCL Defaulter Consumer Enactment, Field Disconnection & Arrears Collection Engine
-              </p>
-            </div>
-          </div>
-
-          {/* User Badge & Live Refresh */}
-          <div className="flex items-center gap-3 self-end md:self-center">
-            <div className="text-right hidden sm:block">
-              <span className="text-xs font-black text-slate-200 block">{currentUser?.name || 'Operator'}</span>
-              <span className="text-[10px] uppercase tracking-wider text-amber-400 font-bold">
-                {isAdmin ? 'ADMINISTRATOR' : 'FIELD WORKER'}
-              </span>
-            </div>
-
+    <div className="space-y-3.5 w-full max-w-full overflow-x-hidden mx-auto pb-12 animate-in fade-in duration-150 box-border" id="disconnection-module-root">
+      {/* Compact Top Banner Bar: Disconnection Management */}
+      <div className="bg-slate-900 text-white rounded-2xl px-3 py-2.5 shadow-md border border-slate-800 flex items-center justify-between gap-2 w-full max-w-full box-border">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {onBack && (
             <button
-              id="global-refresh-btn"
-              onClick={() => loadData(true)}
-              disabled={isRefreshing}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer active:scale-95 shadow-xs"
-              title="Synchronize live backend records"
+              type="button"
+              id="disconnection-back-btn"
+              onClick={onBack}
+              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+              title="Back to Main Menu"
             >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
+              <ArrowLeft className="w-4 h-4" />
             </button>
+          )}
+          <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+            <Zap className="w-3.5 h-3.5 fill-amber-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xs sm:text-base font-black tracking-tight text-white leading-snug">
+              {lang === 'bn' ? 'ডিসকানেকশন ম্যানেজমেন্ট' : 'Disconnection Management'}
+            </h1>
           </div>
         </div>
 
-        {/* Workflow Tabs (Admin: 4 Tabs, Worker: View List + Dashboard) */}
-        <div className="flex items-center gap-2 mt-6 overflow-x-auto pb-1 border-t border-slate-800/80 pt-4">
-          {/* Tab 1: PERFORMANCE DASHBOARD */}
+        {/* Live Auto-Sync Badge & Refresh */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-black tracking-wide">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>LIVE AUTO-SYNC</span>
+          </div>
+          <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-black whitespace-nowrap">
+            {tasks.length} Records
+          </span>
           <button
-            id="tab-dashboard"
-            onClick={() => {
-              if (activeTab === 'VIEW_LIST') {
-                setIsDashboardExpanded(prev => !prev);
-              } else {
-                setActiveTab('VIEW_LIST');
-                setIsDashboardExpanded(true);
-              }
-            }}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black ring-2 ring-amber-300'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`}
+            id="global-refresh-btn"
+            onClick={() => loadData(true)}
+            disabled={isRefreshing}
+            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer active:scale-95 shadow-xs shrink-0"
+            title="Synchronize live backend records"
           >
-            <LayoutDashboard className="w-4 h-4" />
-            <span>{lang === 'bn' ? '১. পারফরম্যান্স ড্যাশবোর্ড' : '1. PERFORMANCE DASHBOARD'}</span>
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${
-              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'rotate-180' : ''
-            }`} />
-          </button>
-
-          {/* Tab 2: UPLOAD LIST (Admin Only) */}
-          {isAdmin && (
-            <button
-              id="tab-upload"
-              onClick={() => setActiveTab('UPLOAD')}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === 'UPLOAD'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`}
-            >
-              <UploadCloud className="w-4 h-4" />
-              <span>{lang === 'bn' ? '২. তালিকা আপলোড' : '2. UPLOAD LIST'}</span>
-            </button>
-          )}
-
-          {/* Tab 3: WORKER-WISE REPORT */}
-          <button
-            id="tab-report"
-            onClick={() => setActiveTab('REPORT')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'REPORT'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`}
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>{lang === 'bn' ? '৩. কর্মীভিত্তিক রিপোর্ট' : '3. WORKER-WISE REPORT'}</span>
-          </button>
-
-          {/* Tab 4: VIEW LIST (Both Admin & Worker) */}
-          <button
-            id="tab-view-list"
-            onClick={() => setActiveTab('VIEW_LIST')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'VIEW_LIST'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>{lang === 'bn' ? '৪. উপভোক্তা তালিকা' : '4. VIEW LIST'}</span>
-            <span
-              className={`ml-1 px-2 py-0.5 rounded-md text-[10px] font-black ${
-                activeTab === 'VIEW_LIST' ? 'bg-slate-950 text-amber-400' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              {tasks.length}
-            </span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
           </button>
         </div>
       </div>
 
+      {/* Compact Option Cards (Matching Admin Panel NSC / DISCONNECT / POLE CASE layout) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="disconnection-compact-options">
+        {/* 1. PERFORMANCE DASHBOARD */}
+        <button
+          id="tab-dashboard"
+          onClick={() => {
+            if (activeTab === 'VIEW_LIST') {
+              setIsDashboardExpanded(prev => !prev);
+            } else {
+              setActiveTab('VIEW_LIST');
+              setIsDashboardExpanded(true);
+            }
+          }}
+          className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+            (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+              ? 'bg-amber-600 text-white border-amber-600 shadow-md ring-2 ring-amber-200'
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50/60 hover:border-amber-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+                ? 'bg-white/20 text-white'
+                : 'bg-amber-100 text-amber-700'
+            }`}>
+              <LayoutDashboard className="w-3.5 h-3.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                {lang === 'bn' ? '১. পারফরম্যান্স ড্যাশবোর্ড' : '1. PERFORMANCE DASHBOARD'}
+              </div>
+              <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'text-amber-100' : 'text-slate-400'
+              }`}>
+                {counts.paid} Paid • {counts.disconnect} Discon
+              </div>
+            </div>
+          </div>
+          <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+            (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'rotate-180 text-white' : 'text-slate-400'
+          }`} />
+        </button>
+
+        {/* 2. UPLOAD LIST (Admin Only) */}
+        {isAdmin && (
+          <button
+            id="tab-upload"
+            onClick={() => setActiveTab('UPLOAD')}
+            className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+              activeTab === 'UPLOAD'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-200'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-50/60 hover:border-indigo-300'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                activeTab === 'UPLOAD' ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-700'
+              }`}>
+                <UploadCloud className="w-3.5 h-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                  {lang === 'bn' ? '২. তালিকা আপলোড' : '2. UPLOAD LIST'}
+                </div>
+                <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                  activeTab === 'UPLOAD' ? 'text-indigo-100' : 'text-slate-400'
+                }`}>
+                  Excel / CSV / Sheet Sync
+                </div>
+              </div>
+            </div>
+          </button>
+        )}
+
+        {/* 3. WORKER-WISE REPORT */}
+        <button
+          id="tab-report"
+          onClick={() => setActiveTab('REPORT')}
+          className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+            activeTab === 'REPORT'
+              ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-200'
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-emerald-50/60 hover:border-emerald-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+              activeTab === 'REPORT' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+            }`}>
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                {lang === 'bn' ? '৩. কর্মীভিত্তিক রিপোর্ট' : '3. WORKER-WISE REPORT'}
+              </div>
+              <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                activeTab === 'REPORT' ? 'text-emerald-100' : 'text-slate-400'
+              }`}>
+                Field Progress Summary
+              </div>
+            </div>
+          </div>
+        </button>
+
+        {/* 4. VIEW LIST */}
+        <button
+          id="tab-view-list"
+          onClick={() => setActiveTab('VIEW_LIST')}
+          className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+            activeTab === 'VIEW_LIST'
+              ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-300'
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+              activeTab === 'VIEW_LIST' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+            }`}>
+              <Users className="w-3.5 h-3.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                {lang === 'bn' ? '৪. উপভোক্তা তালিকা' : '4. VIEW LIST'}
+              </div>
+              <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                activeTab === 'VIEW_LIST' ? 'text-slate-300' : 'text-slate-400'
+              }`}>
+                All Consumers
+              </div>
+            </div>
+          </div>
+          <span
+            className={`ml-1 px-2 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
+              activeTab === 'VIEW_LIST' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+            }`}
+          >
+            {tasks.length}
+          </span>
+        </button>
+      </div>
+
+      {/* ADMIN SMS-STYLE RE-ISSUE REQUEST NOTIFICATION BANNER */}
+      {isAdmin && pendingReissueTasks.length > 0 && (
+        <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-purple-950 border-2 border-purple-400/70 rounded-2xl p-4 shadow-lg text-white space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-purple-500 text-white flex items-center justify-center shadow-sm shrink-0 animate-bounce">
+                <MessageSquareWarning className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs sm:text-sm font-black tracking-wide uppercase text-purple-200">
+                    {lang === 'bn'
+                      ? `নতুন Re-issue SMS রিকোয়েস্ট (${pendingReissueTasks.length})`
+                      : `Incoming Worker Re-issue SMS (${pendingReissueTasks.length})`}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-purple-500/30 border border-purple-400/40 text-[10px] font-black text-purple-200">
+                    SMS ALERT
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  {lang === 'bn'
+                    ? 'কর্মী পুনরায় স্ট্যাটাস আপডেট করার জন্য Re-issue অনুমোদন চাইছেন'
+                    : 'Field worker requested Re-issue permission to update consumer status again'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {pendingReissueTasks.map(reqTask => {
+              const lockInfo = getReissueLockState(reqTask);
+              return (
+                <div
+                  key={reqTask.taskId || reqTask.consumerId}
+                  className="bg-slate-900/90 border border-purple-500/40 rounded-xl p-3 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black text-amber-400">
+                        {lockInfo.requestedBy}
+                      </span>
+                      <span className="text-[10px] text-slate-400">• {lockInfo.requestedAt}</span>
+                    </div>
+                    <div className="text-xs font-bold text-white truncate">
+                      {reqTask.consumerName} (#{reqTask.consumerId})
+                    </div>
+                    <div className="text-[11px] text-purple-200 italic">
+                      {lang === 'bn'
+                        ? `"স্যার, এই উপভোক্তার স্ট্যাটাস (${reqTask.taskStatus}) পুনরায় আপডেট করার জন্য Re-issue করুন।"`
+                        : `"Please Re-issue Consumer #${reqTask.consumerId} (Current: ${reqTask.taskStatus}) so I can update status."`}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleApproveReissue(reqTask)}
+                    className="px-3.5 py-2 bg-purple-500 hover:bg-purple-400 text-white font-black rounded-xl text-xs shrink-0 cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>{lang === 'bn' ? 'Re-issue করুন' : 'Approve & Re-issue'}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Error Alert if any */}
       {error && (
-        <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-4 text-xs font-bold flex items-center justify-between shadow-xs">
+        <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-3 text-xs font-bold flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-rose-600 shrink-0" />
             <span>{error}</span>
@@ -478,18 +838,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       )}
 
       {/* Main Content Sections */}
-      {isLoading ? (
-        <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center shadow-xs">
-          <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3 animate-pulse">
-            <Zap className="w-6 h-6 fill-amber-500" />
-          </div>
-          <h3 className="text-base font-black text-slate-900">
-            {lang === 'bn' ? 'ডিসকানেকশন ডাটা লোড হচ্ছে...' : 'Loading Disconnection Module...'}
-          </h3>
-          <p className="text-xs text-slate-400 mt-1">Synchronizing live consumer records from Google Sheets...</p>
-        </div>
-      ) : (
-        <>
+      <>
           {/* SECTION 1: PERFORMANCE DASHBOARD */}
           {activeTab === 'DASHBOARD' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -523,6 +872,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 isRefreshing={isRefreshing}
                 onSelectStatusFilter={handleSelectStatusFilterFromDashboard}
                 onSelectWorkerFilter={handleSelectWorkerFilterFromDashboard}
+                onSelectPhaseFilter={ph => setPhaseFilter(ph)}
+                onSelectClassFilter={cls => setClassFilter(cls)}
+                onUpdateStatus={handleOpenUpdateModal}
+                onRequestReissue={handleRequestReissue}
+                onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                onDeleteTask={handleDeleteTask}
+                isAdmin={isAdmin}
                 lang={lang}
               />
             </div>
@@ -657,8 +1013,21 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         stats={stats}
                         onRefresh={() => loadData(true)}
                         isRefreshing={isRefreshing}
-                        onSelectStatusFilter={handleSelectStatusFilterFromDashboard}
-                        onSelectWorkerFilter={handleSelectWorkerFilterFromDashboard}
+                        onSelectStatusFilter={status => {
+                          setStatusFilter(status);
+                          setIsDashboardExpanded(false);
+                        }}
+                        onSelectWorkerFilter={worker => {
+                          setAgencyFilter(worker);
+                          setIsDashboardExpanded(false);
+                        }}
+                        onSelectPhaseFilter={ph => setPhaseFilter(ph)}
+                        onSelectClassFilter={cls => setClassFilter(cls)}
+                        onUpdateStatus={handleOpenUpdateModal}
+                        onRequestReissue={handleRequestReissue}
+                        onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                        onDeleteTask={handleDeleteTask}
+                        isAdmin={isAdmin}
                         lang={lang}
                       />
                     </div>
@@ -666,11 +1035,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 )}
               </div>
 
-              {/* Search, Status Pills & Sort Bar */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
-                {/* Search & Selectors */}
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-                  <div className="relative w-full sm:flex-1">
+              {/* Search & Three-Dot Menu Bar */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-3.5 shadow-xs w-full max-w-full box-border">
+                <div className="flex items-center gap-2 w-full">
+                  <div className="relative flex-1 min-w-0">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
@@ -681,142 +1049,350 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                           ? 'ক্রমিক নং (SL 001...), উপভোক্তার নাম, ঠিকানা বা ফোন দিয়ে খুঁজুন...'
                           : 'Search by Serial No (SL 001...), Consumer Name, Address or Phone...'
                       }
-                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                      className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
                     />
                   </div>
 
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
-                    {/* Agency Dropdown */}
-                    <select
-                      value={agencyFilter}
-                      onChange={e => setAgencyFilter(e.target.value)}
-                      className="py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  {/* Three-Dot Menu Button containing Status Pills, Agency, Sort, Phase & Class */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      id="disconnection-three-dot-filter-btn"
+                      onClick={() => setShowThreeDotMenu(prev => !prev)}
+                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-center relative ${
+                        showThreeDotMenu ||
+                        statusFilter !== 'ALL' ||
+                        agencyFilter !== 'ALL' ||
+                        sortBy !== 'SERIAL_ASC' ||
+                        phaseFilter !== 'ALL' ||
+                        classFilter !== 'ALL'
+                          ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                      }`}
+                      title="Filters & Sort Options"
                     >
-                      <option value="ALL">{lang === 'bn' ? 'সকল এজেন্সি / কর্মী' : 'All Agencies / Workers'}</option>
-                      {uniqueAgencies.map((ag, idx) => (
-                        <option key={idx} value={ag}>
-                          {ag}
-                        </option>
-                      ))}
-                    </select>
+                      <MoreVertical className="w-4 h-4" />
+                      {(statusFilter !== 'ALL' ||
+                        agencyFilter !== 'ALL' ||
+                        sortBy !== 'SERIAL_ASC' ||
+                        phaseFilter !== 'ALL' ||
+                        classFilter !== 'ALL') && (
+                        <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5" />
+                      )}
+                    </button>
 
-                    {/* Sort Dropdown */}
-                    <select
-                      value={sortBy}
-                      onChange={e => setSortBy(e.target.value as any)}
-                      className="py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-                    >
-                      <option value="SERIAL_ASC">{lang === 'bn' ? 'ক্রমিক নং (SL 001...)' : 'Serial No (SL 001...)'}</option>
-                      <option value="URGENT_FIRST">{lang === 'bn' ? 'জরুরি অগ্রাধিকার' : 'Urgent First'}</option>
-                      <option value="DUE_DESC">{lang === 'bn' ? 'বকেয়া: বেশি থেকে কম' : 'Dues: High to Low'}</option>
-                      <option value="DUE_ASC">{lang === 'bn' ? 'বকেয়া: কম থেকে বেশি' : 'Dues: Low to High'}</option>
-                      <option value="NAME_ASC">{lang === 'bn' ? 'নাম: A থেকে Z' : 'Name: A to Z'}</option>
-                      <option value="NEWEST">{lang === 'bn' ? 'সর্বশেষ আপডেট' : 'Newest'}</option>
-                    </select>
+                    {showThreeDotMenu && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40 bg-slate-900/20"
+                          onClick={() => setShowThreeDotMenu(false)}
+                        />
+                        <div className="fixed right-3 sm:right-6 top-28 sm:top-32 w-[min(92vw,340px)] max-h-[78vh] overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-4 z-50 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                            <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                              {lang === 'bn' ? 'ফিল্টার ও সর্ট অপশন' : 'Filter & Sort Options'}
+                            </span>
+                            {(statusFilter !== 'ALL' ||
+                              agencyFilter !== 'ALL' ||
+                              sortBy !== 'SERIAL_ASC' ||
+                              phaseFilter !== 'ALL' ||
+                              classFilter !== 'ALL') && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('ALL');
+                                  setAgencyFilter('ALL');
+                                  setSortBy('SERIAL_ASC');
+                                  setPhaseFilter('ALL');
+                                  setClassFilter('ALL');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                              >
+                                Reset All
+                              </button>
+                            )}
+                          </div>
+
+                          {/* 1. STATUS FILTER PILLS */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-2">
+                              {lang === 'bn' ? 'স্ট্যাটাস ফিল্টার (Status)' : 'Status Filter'}
+                            </span>
+                            <div className="grid grid-cols-2 gap-1.5 text-xs font-bold">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('ALL');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'ALL'
+                                    ? 'bg-slate-900 text-white shadow-2xs font-black'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                <span>All</span>
+                                <span>({counts.total})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('URGENT');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'URGENT'
+                                    ? 'bg-red-600 text-white shadow-2xs font-black'
+                                    : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                                }`}
+                              >
+                                <span className="flex items-center gap-1">
+                                  <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span>Urgent</span>
+                                </span>
+                                <span>({counts.urgent})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('DISCONNECT');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'DISCONNECT'
+                                    ? 'bg-rose-600 text-white shadow-2xs font-black'
+                                    : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
+                                }`}
+                              >
+                                <span>Disconnect</span>
+                                <span>({counts.disconnect})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('PAID');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'PAID'
+                                    ? 'bg-teal-600 text-white shadow-2xs font-black'
+                                    : 'bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100'
+                                }`}
+                              >
+                                <span>Paid</span>
+                                <span>({counts.paid})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('PENDING');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'PENDING'
+                                    ? 'bg-amber-500 text-slate-950 shadow-2xs font-black'
+                                    : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                                }`}
+                              >
+                                <span>Pending</span>
+                                <span>({counts.pending})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('DISPUTE');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'DISPUTE'
+                                    ? 'bg-orange-500 text-white shadow-2xs font-black'
+                                    : 'bg-orange-50 text-orange-900 border border-orange-200 hover:bg-orange-100'
+                                }`}
+                              >
+                                <span>Dispute</span>
+                                <span>({counts.dispute})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('OFFICE TEAM');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'OFFICE TEAM'
+                                    ? 'bg-indigo-600 text-white shadow-2xs font-black'
+                                    : 'bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100'
+                                }`}
+                              >
+                                <span>Office Team</span>
+                                <span>({counts.officeTeam})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('NOT FOUND');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'NOT FOUND'
+                                    ? 'bg-slate-700 text-white shadow-2xs font-black'
+                                    : 'bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200'
+                                }`}
+                              >
+                                <span>Not Found</span>
+                                <span>({counts.notFound})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStatusFilter('REISSUE');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`col-span-2 px-3 py-2 rounded-xl cursor-pointer transition-all text-left flex items-center justify-between ${
+                                  statusFilter === 'REISSUE'
+                                    ? 'bg-purple-600 text-white shadow-2xs font-black'
+                                    : 'bg-purple-50 text-purple-900 border border-purple-200 hover:bg-purple-100'
+                                }`}
+                              >
+                                <span>Reissue</span>
+                                <span>({counts.reissue})</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 2. AGENCY / WORKER DROPDOWN */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                              {lang === 'bn' ? 'এজেন্সি / কর্মী (Agency)' : 'All Agency / Worker'}
+                            </span>
+                            <select
+                              value={agencyFilter}
+                              onChange={e => {
+                                setAgencyFilter(e.target.value);
+                                setShowThreeDotMenu(false);
+                              }}
+                              className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                            >
+                              <option value="ALL">{lang === 'bn' ? 'সকল এজেন্সি / কর্মী' : 'All Agencies / Workers'}</option>
+                              {uniqueAgencies.map((ag, idx) => (
+                                <option key={idx} value={ag}>
+                                  {ag}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* 3. SERIAL NO / SORT DROPDOWN */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                              {lang === 'bn' ? 'ক্রমিক নং / সর্ট (Serial No / Sort)' : 'Serial No / Sort By'}
+                            </span>
+                            <select
+                              value={sortBy}
+                              onChange={e => {
+                                setSortBy(e.target.value as any);
+                                setShowThreeDotMenu(false);
+                              }}
+                              className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                            >
+                              <option value="SERIAL_ASC">{lang === 'bn' ? 'ক্রমিক নং (SL 001...)' : 'Serial No (SL 001...)'}</option>
+                              <option value="URGENT_FIRST">{lang === 'bn' ? 'জরুরি অগ্রাধিকার' : 'Urgent First'}</option>
+                              <option value="DUE_DESC">{lang === 'bn' ? 'বকেয়া: বেশি থেকে কম' : 'Dues: High to Low'}</option>
+                              <option value="DUE_ASC">{lang === 'bn' ? 'বকেয়া: কম থেকে বেশি' : 'Dues: Low to High'}</option>
+                              <option value="NAME_ASC">{lang === 'bn' ? 'নাম: A থেকে Z' : 'Name: A to Z'}</option>
+                              <option value="NEWEST">{lang === 'bn' ? 'সর্বশেষ আপডেট' : 'Newest'}</option>
+                            </select>
+                          </div>
+
+                          {/* 4. PHASE OPTION */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                              {lang === 'bn' ? 'ফেজ ফিল্টার (Phase)' : 'Phase Filter'}
+                            </span>
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPhaseFilter('ALL');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                  phaseFilter === 'ALL'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPhaseFilter('1PH');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                  phaseFilter === '1PH'
+                                    ? 'bg-sky-600 text-white'
+                                    : 'bg-sky-50 text-sky-800 hover:bg-sky-100'
+                                }`}
+                              >
+                                1 PH ({counts.phase1})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPhaseFilter('3PH');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                  phaseFilter === '3PH'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-purple-50 text-purple-800 hover:bg-purple-100'
+                                }`}
+                              >
+                                3 PH ({counts.phase3})
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 5. CLASS OPTION */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                              {lang === 'bn' ? 'ক্লাস ফিল্টার (Class)' : 'Class Filter'}
+                            </span>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {(['ALL', 'DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(cls => (
+                                <button
+                                  key={cls}
+                                  type="button"
+                                  onClick={() => {
+                                    setClassFilter(cls);
+                                    setShowThreeDotMenu(false);
+                                  }}
+                                  className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold text-left cursor-pointer ${
+                                    classFilter === cls
+                                      ? 'bg-slate-900 text-white'
+                                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  {cls === 'ALL' ? 'All Class' : cls}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
-
-                {/* Filter Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-bold pt-1">
-                  <button
-                    onClick={() => setStatusFilter('ALL')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'ALL'
-                        ? 'bg-slate-900 text-white shadow-2xs font-black'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    All ({counts.total})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('URGENT')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all flex items-center gap-1 whitespace-nowrap ${
-                      statusFilter === 'URGENT'
-                        ? 'bg-red-600 text-white shadow-2xs font-black'
-                        : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
-                    }`}
-                  >
-                    <Flame className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Urgent ({counts.urgent})</span>
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('DISCONNECT')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'DISCONNECT'
-                        ? 'bg-rose-600 text-white shadow-2xs font-black'
-                        : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
-                    }`}
-                  >
-                    Disconnect ({counts.disconnect})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('PAID')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'PAID'
-                        ? 'bg-teal-600 text-white shadow-2xs font-black'
-                        : 'bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100'
-                    }`}
-                  >
-                    Paid ({counts.paid})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('PENDING')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'PENDING'
-                        ? 'bg-amber-500 text-slate-950 shadow-2xs font-black'
-                        : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
-                    }`}
-                  >
-                    Pending ({counts.pending})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('DISPUTE')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'DISPUTE'
-                        ? 'bg-orange-500 text-white shadow-2xs font-black'
-                        : 'bg-orange-50 text-orange-900 border border-orange-200 hover:bg-orange-100'
-                    }`}
-                  >
-                    Dispute ({counts.dispute})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('OFFICE TEAM')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'OFFICE TEAM'
-                        ? 'bg-indigo-600 text-white shadow-2xs font-black'
-                        : 'bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100'
-                    }`}
-                  >
-                    Office Team ({counts.officeTeam})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('NOT FOUND')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'NOT FOUND'
-                        ? 'bg-slate-700 text-white shadow-2xs font-black'
-                        : 'bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200'
-                    }`}
-                  >
-                    Not Found ({counts.notFound})
-                  </button>
-
-                  <button
-                    onClick={() => setStatusFilter('REISSUE')}
-                    className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
-                      statusFilter === 'REISSUE'
-                        ? 'bg-purple-600 text-white shadow-2xs font-black'
-                        : 'bg-purple-50 text-purple-900 border border-purple-200 hover:bg-purple-100'
-                    }`}
-                  >
-                    Reissue ({counts.reissue})
-                  </button>
                 </div>
               </div>
 
@@ -834,11 +1410,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       ? 'ফিল্টার রিসেট করুন অথবা অ্যাডমিনকে নতুন তালিকা আপলোড করতে বলুন।'
                       : 'Try resetting filters, or upload a new disconnection list from the Upload tab.'}
                   </p>
-                  {(searchQuery || statusFilter !== 'ALL' || agencyFilter !== 'ALL') && (
+                  {(searchQuery || statusFilter !== 'ALL' || phaseFilter !== 'ALL' || classFilter !== 'ALL' || agencyFilter !== 'ALL') && (
                     <button
                       onClick={() => {
                         setSearchQuery('');
                         setStatusFilter('ALL');
+                        setPhaseFilter('ALL');
+                        setClassFilter('ALL');
                         setAgencyFilter('ALL');
                       }}
                       className="mt-4 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 cursor-pointer"
@@ -854,6 +1432,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       key={task.taskId || task.consumerId}
                       task={task}
                       onUpdateStatus={handleOpenUpdateModal}
+                      onRequestReissue={handleRequestReissue}
+                      onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                      isAdmin={isAdmin}
+                      onDeleteTask={handleDeleteTask}
                       lang={lang}
                     />
                   ))}
@@ -862,7 +1444,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             </div>
           )}
         </>
-      )}
 
       {/* UPDATE STATUS MODAL */}
       {selectedTaskForUpdate && (

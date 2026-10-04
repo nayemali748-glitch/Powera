@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CornerOptionKey, PowerEntry } from '../types';
 import { syncAllEntriesToGoogleSheet, getSavedSpreadsheetUrl } from '../services/googleSheets';
+import { formatDateTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 
 interface CornerOptionsModalProps {
   activeOption: CornerOptionKey;
@@ -75,7 +76,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const todayStr = new Date().toLocaleDateString('en-IN');
+    const todayStr = `${getNowDateDDMMYYYY()} ${getNowTime12Hour()}`;
     const nscCount = entries.filter(e => e.category === 'NSC').length;
     const discCount = entries.filter(e => e.category === 'DISCONNECTION').length;
     const poleCount = entries.filter(e => e.category === 'POLE CASE').length;
@@ -119,6 +120,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
           <thead>
             <tr>
               <th>ID</th>
+              <th>Date & Time</th>
               <th>Category</th>
               <th>Consumer / Site</th>
               <th>Lineman / Worker</th>
@@ -130,6 +132,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
             ${entries.map(e => `
               <tr>
                 <td style="font-family: monospace; font-weight: bold;">${e.id}</td>
+                <td style="font-family: monospace;">${formatDateTime12Hour(e.date)}</td>
                 <td><strong>${e.category}</strong></td>
                 <td>${e.consumerName || e.dtrName || e.poleNo || '-'}</td>
                 <td>${e.workerName}</td>

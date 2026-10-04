@@ -161,15 +161,17 @@ export const EditEntryModal: React.FC<EditEntryModalProps> = ({
                 <option value="Rejected">{t.rejected}</option>
               </select>
             </div>
-            <div>
-              <label className="text-[11px] font-bold text-slate-600 uppercase block">{t.feeder}</label>
-              <input
-                type="text"
-                value={formData.feederName || ''}
-                onChange={(e) => handleChange('feederName', e.target.value)}
-                className="mt-1 w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+            {!isNsc && !isDisc && (
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block">{t.feeder}</label>
+                <input
+                  type="text"
+                  value={formData.feederName || ''}
+                  onChange={(e) => handleChange('feederName', e.target.value)}
+                  className="mt-1 w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            )}
           </div>
 
           {/* Detailed Editable Fields Based on Category */}

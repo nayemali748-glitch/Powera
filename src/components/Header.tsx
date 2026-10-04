@@ -17,10 +17,13 @@ import {
   Home,
   Globe,
   BarChart3,
-  PowerOff
+  PowerOff,
+  Calendar
 } from 'lucide-react';
 import { CornerOptionKey, UserSession, ActiveTab } from '../types';
 import { Language, translations } from '../utils/translations';
+import { cleanNameOnly } from '../utils/entryNormalizer';
+import { formatDateDDMMYYYY, formatTime12Hour } from '../utils/dateTimeFormat';
 
 interface HeaderProps {
   isAdmin: boolean;
@@ -118,9 +121,6 @@ export const Header: React.FC<HeaderProps> = ({
                 Live
               </span>
             </div>
-            <p className="text-[10px] text-slate-400 hidden sm:block font-medium">
-              POWER OF CONSTRUCTION • WBSEDCL
-            </p>
           </div>
         </div>
       </div>
@@ -249,13 +249,10 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <div className="leading-tight">
                 <div className="font-bold text-slate-800 max-w-[120px] truncate">
-                  {currentUser?.name || workerName || 'Worker'}
+                  {cleanNameOnly(currentUser?.name || workerName || 'Worker')}
                 </div>
                 <div className="text-[10px] text-slate-500 flex items-center gap-1">
                   <span>{currentUser?.designation || (isAdmin ? 'Admin' : 'Lineman / Field Operator')}</span>
-                  {currentUser?.badgeNo && (
-                    <span className="text-[9px] font-mono text-slate-400">({currentUser.badgeNo})</span>
-                  )}
                 </div>
               </div>
             </div>
@@ -326,6 +323,30 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                   </button>
                 )}
+
+                {/* Work Orders & Khata Option */}
+                <button
+                  id="corner-opt-work-orders"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setActiveTab('work-orders');
+                  }}
+                  className="w-full px-4 py-3 text-left flex items-start gap-3 hover:bg-amber-50/60 transition-colors group cursor-pointer"
+                >
+                  <div className="p-2 rounded-lg mt-0.5 bg-amber-100 text-amber-700">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-slate-900 group-hover:text-amber-700">
+                        {t.workOrders || 'Work Orders & Khata'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {t.workOrderNoticeDesc || 'View & upload official Work Order and Khata photos'}
+                    </p>
+                  </div>
+                </button>
 
                 {/* Option 1: Admin Mode / Control Portal (ONLY visible if logged in as Admin) */}
                 {isAdmin && (
@@ -411,7 +432,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </div>
                   <div className="overflow-hidden">
                     <p className="text-xs font-bold text-slate-800 truncate">
-                      {currentUser?.name || workerName || 'Worker'}
+                      {cleanNameOnly(currentUser?.name || workerName || 'Worker')}
                     </p>
                     <p className="text-[10px] text-slate-500 truncate">
                       {currentUser?.designation || (isAdmin ? 'Admin Console' : 'Lineman / Field Operator')}

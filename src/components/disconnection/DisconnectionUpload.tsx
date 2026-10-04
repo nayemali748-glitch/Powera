@@ -18,6 +18,7 @@ import {
 import * as XLSX from 'xlsx';
 import { DisconnectionTask } from '../../types';
 import { extractDisconnectionTasksFromOCR, uploadDisconnectionTasks } from '../../services/api';
+import { formatDateDDMMYYYY, formatDateTime12Hour, getNowDateDDMMYYYY } from '../../utils/dateTimeFormat';
 
 interface DisconnectionUploadProps {
   existingTasks: DisconnectionTask[];
@@ -81,73 +82,80 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
     return max;
   }, [existingTasks]);
 
-  // Download Sample Excel Template
-  const handleDownloadTemplate = () => {
-    const templateData = [
-      {
-        'SL No': 'SL 001',
-        'Consumer Name': 'HESAMUDDIN',
-        'Consumer ID': '342049760',
-        'MRU Section': 'FIL33MMR',
-        'CCC / Feeder': 'SAMSI CCC / 11kV Feeder',
-        'Address': 'VILL. MOTTIGANJ,,P.O. SAMSI,DIST.MALDA,',
-        'Mobile Number': '8145773298',
-        'Outstanding Dues': '1296888',
-        'Due Date Range': '21.09.2011–21.09.2011',
-        'Class': 'I',
-        'Device': 'ST328707',
-        'Priority': 'NORMAL',
-        'Status': 'connected',
-        'Disconnection Reason': 'Outstanding Dues (Issued for Disconnection)'
-      },
-      {
-        'SL No': 'SL 002',
-        'Consumer Name': 'SECRETARY',
-        'Consumer ID': '342212718',
-        'MRU Section': 'FIL60MMR',
-        'CCC / Feeder': 'SAMSI CCC',
-        'Address': 'MD.SAYED ALI -( B. COM.D T W ),,BHAGABANPUR .PO. SAMSI,LOC-...',
-        'Mobile Number': '8145773298',
-        'Outstanding Dues': '559384.18',
-        'Due Date Range': '14.09.2015–10.08.2020',
-        'Class': 'A',
-        'Device': 'ST328710',
-        'Priority': 'NORMAL',
-        'Status': 'connected',
-        'Disconnection Reason': 'Outstanding Dues (Issued for Disconnection)'
-      },
-      {
-        'SL No': 'SL 003',
-        'Consumer Name': 'Bikash Chandra Mondal',
-        'Consumer ID': '342088192',
-        'MRU Section': 'FIL33MMR',
-        'CCC / Feeder': 'SAMSI CCC',
-        'Address': 'Vill- Gopalpur, PO- Samsi, Malda',
-        'Mobile Number': '9832011223',
-        'Outstanding Dues': '14500',
-        'Due Date Range': '15.01.2020–31.01.2026',
-        'Class': 'I',
-        'Device': 'ST328715',
-        'Priority': 'NORMAL',
-        'Status': 'connected',
-        'Disconnection Reason': 'Outstanding Dues (Issued for Disconnection)'
-      }
-    ];
+  // Exact 33 Backend Google Sheet Disconnection Headers (A:AG)
+  const BACKEND_DISCONNECTION_HEADERS_33 = [
+    'off_code',            // A
+    'MRU',                 // B
+    'Consumer Id',         // C
+    'Name',                // D
+    'Address',             // E
+    'Base Class',          // F
+    'Class',               // G
+    'Device',              // H
+    'O/S Duedate Range',   // I
+    'D2 Net O/S',          // J
+    'Mobile',              // K
+    'Number',              // L
+    'Latitude',            // M
+    'Longitude',           // N
+    'Discon Status',       // O
+    'Discon Date',         // P
+    'Image',               // Q
+    'Reading',             // R
+    'Payment Status',      // S
+    'Gis Pole',            // T
+    'Agency',              // U
+    'Notes',               // V
+    'Nature of Conn',      // W
+    'Gov/Non-Gov',         // X
+    'Last Updated',        // Y
+    'Priority',            // Z
+    'Paid Amount',         // AA
+    'Paid Date',           // AB
+    'Paid Type',           // AC
+    'Outstanding After',   // AD
+    'Next Payment Date',   // AE
+    'Payment Source',      // AF
+    'Upload Date'          // AG
+  ];
 
-    const ws = XLSX.utils.json_to_sheet(templateData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Disconnection_List');
-    XLSX.writeFile(wb, 'WBSEDCL_Disconnection_Upload_Template.xlsx');
+  // Download Sample Excel Template with EXACT 33 Backend Disconnection Sheet Headers (No demo/fake consumer rows)
+  const handleDownloadTemplate = () => {
+    try {
+      const ws = XLSX.utils.aoa_to_sheet([BACKEND_DISCONNECTION_HEADERS_33]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Disconnection');
+      XLSX.writeFile(wb, 'WBSEDCL_Disconnection_Sheet_Template.xlsx');
+    } catch (e) {
+      window.open('/api/disconnection/sample-excel', '_blank');
+    }
   };
 
-  // Normalizer for messy spreadsheet columns
+  // Download Sample CSV Template with EXACT 33 Backend Disconnection Sheet Headers (No demo/fake consumer rows)
+  const handleDownloadCsvTemplate = () => {
+    try {
+      const ws = XLSX.utils.aoa_to_sheet([BACKEND_DISCONNECTION_HEADERS_33]);
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', 'WBSEDCL_Disconnection_Sheet_Template.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      window.open('/api/disconnection/sample-csv', '_blank');
+    }
+  };
+
+  // Normalizer for spreadsheet and OCR columns with full support for 33 backend columns
   const normalizeRow = (row: any, idx: number): ParsedConsumerTask => {
     const getVal = (...keys: string[]): string => {
       for (const k of keys) {
         if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
           return String(row[k]).trim();
         }
-        // case-insensitive match
+        // case-insensitive and punctuation-free match
         const lowerK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
         for (const rowKey of Object.keys(row)) {
           const lowerRowKey = rowKey.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -172,54 +180,49 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       serialNumber = `SL ${String(maxExistingSl + idx + 1).padStart(3, '0')}`;
     }
 
-    const consumerName = getVal('Consumer Name', 'ConsumerName', 'Name', 'Customer Name', 'Consumer');
-    const consumerId = getVal('Consumer ID', 'ConsumerId', 'CID', 'Con ID', 'ID', 'Consumer_No', 'ConNo', 'Consumer No');
-    const accountNumber = getVal('Account Number', 'Account No', 'Installation No', 'Inst No', 'Acc No', 'Account');
-    const mruSection = getVal('MRU Section', 'MRU', 'Section', 'MRU_Section', 'Section Code', 'Pill', 'Feeder Code');
-    const cccFeeder = getVal('CCC / Feeder', 'CCC', 'Feeder', 'CCC Name', 'Feeder Name', 'Substation');
-    const consumerAddress = getVal('Address', 'Consumer Address', 'Premises', 'Location', 'Village');
-    
-    // Comprehensive Mobile / Phone number extraction with fuzzy matching and fallbacks
-    let phoneNumber = getVal(
-      'Mobile Number', 'Mobile No', 'Mobile No.', 'Mobile', 'Mob No', 'Mob No.', 'Mob', 'MOB_NO', 'MOB_NUM',
-      'Phone Number', 'Phone No', 'Phone No.', 'Phone', 'Ph No', 'Ph No.', 'PH_NO', 'PHONENO',
-      'Telephone', 'Tel No', 'Tel', 'Cell', 'Cell No', 'Contact Number', 'Contact No', 'Contact No.', 'Contact',
-      'Customer Mobile', 'Consumer Mobile', 'Cust Mobile', 'Caller', 'Caller No', 'MOBILE', 'PHONE',
-      'মোবাইল', 'মোবাইল নম্বর', 'ফোন', 'ফোন নম্বর', 'যোগাযোগ'
+    // 1. Consumer ID extraction and cleanup
+    let consumerId = getVal(
+      'Consumer Id', 'Consumer ID', 'consumerId', 'CID', 'Con ID', 'ID',
+      'Consumer_No', 'ConNo', 'Consumer No', 'Account Number', 'Account No'
     );
-
-    // Fuzzy header matching if not found by exact synonym
-    if (!phoneNumber) {
-      for (const rowKey of Object.keys(row)) {
-        const lowerKey = rowKey.toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (
-          lowerKey.includes('mob') ||
-          lowerKey.includes('phone') ||
-          lowerKey.includes('contact') ||
-          lowerKey.includes('cell') ||
-          lowerKey.includes('tel') ||
-          rowKey.includes('মোবাইল') ||
-          rowKey.includes('ফোন')
-        ) {
-          const val = row[rowKey];
-          if (val !== undefined && val !== null && String(val).trim() !== '') {
-            phoneNumber = String(val).trim();
-            break;
-          }
-        }
+    if (consumerId) {
+      consumerId = consumerId.replace(/\.0+$/, '').trim();
+      if (/^\d+\.?\d*e[+-]?\d+$/i.test(consumerId)) {
+        const num = Number(consumerId);
+        if (!isNaN(num)) consumerId = Math.round(num).toString();
       }
     }
 
-    // Clean up float/scientific notation from Excel (e.g. 8145773298.0 or 8.14577e+09)
+    // 2. Consumer Name
+    const consumerName = getVal(
+      'Name', 'Consumer Name', 'ConsumerName', 'Customer Name', 'Consumer', 'নাম'
+    );
+
+    // 3. Office Code & MRU Section
+    const offCode = getVal('off_code', 'offCode', 'Office Code', 'Substation', 'Area', 'CCC');
+    const mruSection = getVal('MRU', 'MRU Section', 'mru', 'Section Code', 'Pill', 'Feeder Code');
+    const cccFeeder = getVal('CCC / Feeder', 'CCC', 'Feeder', 'CCC Name', 'Feeder Name', 'Substation') || mruSection;
+
+    // 4. Address
+    const consumerAddress = getVal('Address', 'Consumer Address', 'Premises', 'Location', 'Village', 'ঠিকানা');
+
+    // 5. Phone / Mobile Number extraction & cleanup
+    let phoneNumber = getVal(
+      'Mobile', 'Mobile Number', 'Mobile No', 'Mobile No.', 'Mob No', 'Mob No.', 'Mob', 'MOB_NO',
+      'Phone Number', 'Phone No', 'Phone No.', 'Phone', 'Ph No', 'Ph No.', 'PH_NO', 'PHONENO',
+      'Telephone', 'Tel No', 'Tel', 'Cell', 'Cell No', 'Contact Number', 'Contact No',
+      'Customer Mobile', 'Consumer Mobile', 'মোবাইল', 'ফোন'
+    );
+
     if (phoneNumber) {
-      phoneNumber = phoneNumber.replace(/\.0+$/, '');
+      phoneNumber = phoneNumber.replace(/\.0+$/, '').trim();
       if (/^\d+\.?\d*e[+-]?\d+$/i.test(phoneNumber)) {
         const num = Number(phoneNumber);
         if (!isNaN(num)) phoneNumber = Math.round(num).toString();
       }
     }
 
-    // Fallback 1: Scan all cell values in the row for a 10-digit Indian phone number
+    // Fallback search across cell values for 10-digit Indian phone number
     if (!phoneNumber) {
       for (const val of Object.values(row)) {
         if (val !== undefined && val !== null) {
@@ -233,25 +236,49 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       }
     }
 
-    // Fallback 2: Check address string for embedded phone number
-    if (!phoneNumber && consumerAddress) {
-      const match = consumerAddress.match(/(?:^|\D)([6-9]\d{9})(?:\D|$)/);
-      if (match && match[1]) {
-        phoneNumber = match[1];
-      }
+    // 6. Arrear / Outstanding Dues (D2 Net O/S)
+    let outstandingDue = getVal(
+      'D2 Net O/S', 'D2 Net OS', 'Outstanding Dues', 'Outstanding Amount', 'Arrears',
+      'Due Amount', 'Arrear', 'Balance', 'Dues', 'বকেয়া'
+    );
+    if (outstandingDue) {
+      outstandingDue = outstandingDue.replace(/[₹,\s]/g, '').trim();
     }
 
-    const outstandingDue = getVal('Outstanding Dues', 'Outstanding Amount', 'Arrears', 'Due Amount', 'Arrear', 'Balance', 'Dues', 'Outstanding Dues (Issued for Disconnection)');
-    const dueDateRange = getVal('Due Date Range', 'Due Date', 'Bill Date', 'Date Range', 'Due Range');
-    const baseClass = getVal('Class', 'Base Class', 'Tariff', 'Category') || 'I';
-    const meterNumber = getVal('Device', 'Meter Number', 'Meter No', 'Meter Serial', 'Meter', 'DeviceId', 'Device No') || 'ST328707';
-    const deviceType = getVal('Device Type', 'Phase', 'Meter Type') || meterNumber;
+    // 7. Due Date Range (O/S Duedate Range)
+    const dueDateRange = getVal(
+      'O/S Duedate Range', 'O/S Due date Range', 'Due Date Range', 'Due Date', 'Bill Date', 'Date Range', 'Due Range'
+    );
+
+    // 8. Class & Base Class
+    const baseClass = getVal('Base Class', 'Class', 'Tariff', 'Category');
+    const consumerClass = getVal('Class', 'Base Class', 'Tariff Category') || baseClass;
+
+    // 9. Meter Number & Device Type
+    const meterNumber = getVal('Number', 'Device', 'Meter Number', 'Meter No', 'Meter Serial', 'Meter', 'DeviceId');
+    const deviceType = getVal('Device', 'Device Type', 'BClass/Phase', 'Phase', 'Meter Type');
+
+    // 10. Operational columns
+    const latitude = getVal('Latitude', 'latitude');
+    const longitude = getVal('Longitude', 'longitude');
+    const disconDate = getVal('Discon Date', 'Date', 'Report Date');
+    const reading = getVal('Reading', 'Meter Reading') || '';
+    const paymentStatus = getVal('Payment Status') || '';
+    const gisPole = getVal('Gis Pole', 'Pole No', 'GIS Pole');
+    const agency = getVal('Agency', 'Assigned Agency') || '';
+    const notes = getVal('Notes', 'Disconnection Reason', 'Reason', 'Remarks') || '';
+    const natureOfConn = getVal('Nature of Conn', 'Nature of Connection', 'Phase') || '';
+    const govNonGov = getVal('Gov/Non-Gov', 'Gov_Non_Gov', 'govNonGov', 'GovStatus') || '';
+
+    // Priority
     const priorityVal = getVal('Priority', 'Urgent').toUpperCase();
-    const priority = priorityVal === 'URGENT' || priorityVal === 'YES' || priorityVal === 'HIGH' ? 'URGENT' : 'NORMAL';
-    const disconnectionReason = getVal('Disconnection Reason', 'Reason', 'Remarks') || 'Outstanding Dues (Issued for Disconnection)';
-    
+    const cleanDueNum = parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) || 0;
+    const priority = priorityVal === 'URGENT' || priorityVal === 'YES' || priorityVal === 'HIGH' || cleanDueNum > 10000
+      ? 'URGENT'
+      : 'NORMAL';
+
     // Status parsing
-    const rawStatus = getVal('Status', 'Task Status', 'Connection Status').toUpperCase();
+    const rawStatus = getVal('Discon Status', 'Status', 'Task Status', 'Connection Status').toUpperCase();
     let taskStatus: any = 'PENDING';
     if (rawStatus.includes('DISCONNECT') && !rawStatus.includes('ALREADY')) {
       taskStatus = 'DISCONNECT';
@@ -267,12 +294,10 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       taskStatus = 'NOT FOUND';
     } else if (rawStatus.includes('REISSUE')) {
       taskStatus = 'REISSUE';
-    } else if (rawStatus.includes('CONNECTED')) {
+    } else {
       taskStatus = 'PENDING';
     }
 
-    const offCode = getVal('off_code', 'offCode', 'Substation', 'Area', 'Office Code') || '5233100';
-    const govNonGov = getVal('Gov/Non-Gov', 'govNonGov', 'GovStatus') || 'Non-Gov';
     const tempId = `TEMP-ROW-${idx + 1}`;
     const taskId = getVal('Task ID', 'TaskId') || `TASK-DISC-${consumerId || (Date.now() + '-' + (idx + 1))}`;
 
@@ -282,7 +307,7 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       serialNumber,
       consumerName,
       consumerId,
-      accountNumber,
+      accountNumber: consumerId,
       mruSection,
       cccFeeder,
       consumerAddress,
@@ -290,25 +315,48 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       outstandingDue,
       dueDateRange,
       baseClass,
+      classType: consumerClass,
       deviceType,
       meterNumber,
       priority,
-      disconnectionReason,
+      disconnectionReason: notes || (outstandingDue ? `Outstanding Bill (D2 Net O/S: ₹${outstandingDue})` : 'Disconnection Notice'),
       taskStatus,
-      off_code: offCode,
-      MRU: mruSection,
+
+      // Complete 33 Backend Disconnection Sheet Headers (A:AG)
+      'off_code': offCode,
+      'MRU': mruSection,
       'Consumer Id': consumerId,
-      Name: consumerName,
-      Address: consumerAddress,
-      'BClass/Phase': deviceType,
-      Class: baseClass,
-      'Gov/Non-Gov': govNonGov,
-      Meter: meterNumber,
-      'O/S Due date Range': dueDateRange,
+      'Name': consumerName,
+      'Address': consumerAddress,
+      'Base Class': baseClass,
+      'Class': consumerClass,
+      'Device': deviceType,
+      'O/S Duedate Range': dueDateRange,
       'D2 Net O/S': outstandingDue,
+      'Mobile': phoneNumber,
+      'Number': meterNumber,
+      'Latitude': latitude,
+      'Longitude': longitude,
       'Discon Status': taskStatus,
-      'Discon Date': '',
-      'Mobile Number': phoneNumber,
+      'Discon Date': disconDate,
+      'Image': '',
+      'Reading': reading,
+      'Payment Status': paymentStatus,
+      'Gis Pole': gisPole,
+      'Agency': agency,
+      'Notes': notes,
+      'Nature of Conn': natureOfConn,
+      'Gov/Non-Gov': govNonGov,
+      'Last Updated': formatDateTime12Hour(new Date()),
+      'Priority': priority,
+      'Paid Amount': getVal('Paid Amount'),
+      'Paid Date': formatDateDDMMYYYY(getVal('Paid Date')),
+      'Paid Type': getVal('Paid Type'),
+      'Outstanding After': getVal('Outstanding After') || outstandingDue,
+      'Next Payment Date': formatDateDDMMYYYY(getVal('Next Payment Date')),
+      'Payment Source': getVal('Payment Source'),
+      'Upload Date': formatDateDDMMYYYY(getVal('Upload Date')) || getNowDateDDMMYYYY(),
+
       createdAt: new Date().toISOString()
     };
   };
@@ -463,13 +511,18 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
         setSaveResult({
           success: true,
           count: res.count || validToUpload.length,
-          insertedCount: res.insertedCount,
-          updatedCount: res.updatedCount,
-          message: res.message || `Successfully saved ${validToUpload.length} disconnection records to database.`
+          insertedCount: res.insertedCount ?? validToUpload.length,
+          updatedCount: res.updatedCount ?? 0,
+          message: res.message || `Successfully uploaded ${validToUpload.length} disconnection records and synced to Backend Disconnection Sheet.`
         });
-        if (res.tasks && Array.isArray(res.tasks)) {
-          onUploadSuccess(res.tasks);
-        }
+        const uploadedList = (res.tasks && Array.isArray(res.tasks) && res.tasks.length > 0)
+          ? res.tasks
+          : (validToUpload.map((r, i) => ({
+              ...r,
+              taskId: `TASK-DISC-${r.consumerId || i + 1}`,
+              serialNumber: `SL ${String(i + 1).padStart(3, '0')}`
+            })) as any[]);
+        onUploadSuccess(uploadedList);
       } else {
         throw new Error(res?.message || 'Server failed to save disconnection list');
       }
@@ -515,15 +568,32 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
           </p>
         </div>
 
-        <button
-          id="download-sample-template-btn"
-          onClick={handleDownloadTemplate}
-          className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 cursor-pointer shadow-2xs"
-          title="Download sample Excel template with standard columns"
-        >
-          <Download className="w-3.5 h-3.5 text-emerald-600" />
-          <span>{lang === 'bn' ? 'নমুনা এক্সেল ডাউনলোড' : 'Download Sample Excel'}</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            id="download-sample-template-btn"
+            type="button"
+            onClick={handleDownloadTemplate}
+            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border border-emerald-300 rounded-xl text-xs font-black flex items-center gap-2 transition-all active:scale-95 cursor-pointer shadow-2xs"
+            title="Download Sample Excel matching exact 33 Backend Google Sheet columns"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{lang === 'bn' ? 'নমুনা এক্সেল ডাউনলোড (.xlsx)' : 'Download Sample Excel'}</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold uppercase tracking-wider">
+              33 Columns
+            </span>
+          </button>
+
+          <button
+            id="download-sample-csv-btn"
+            type="button"
+            onClick={handleDownloadCsvTemplate}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer shadow-2xs"
+            title="Download Sample CSV matching exact 33 Backend Google Sheet columns"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-600" />
+            <span>{lang === 'bn' ? 'নমুনা CSV' : 'Sample CSV'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Upload Box */}
@@ -788,16 +858,28 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
                       <td className="py-2.5 px-3 font-mono font-black text-amber-900 bg-amber-50 text-xs whitespace-nowrap">
                         {r.serialNumber || ('SL ' + String(idx + 1).padStart(3, '0'))}
                       </td>
-                      <td className="py-2.5 px-3 font-bold text-slate-900">{r.consumerName || '—'}</td>
+                      <td className="py-2.5 px-3 font-bold text-slate-900">
+                        <div>{r.consumerName || '—'}</div>
+                        <div className="text-[10px] text-slate-500 font-mono font-normal">
+                          {r.consumerId ? `ID: ${r.consumerId}` : ''}
+                          {r.meterNumber ? ` • Meter: ${r.meterNumber}` : ''}
+                        </div>
+                      </td>
                       <td className="py-2.5 px-3 text-slate-600 text-[11px]">
                         <div className="line-clamp-1">{r.consumerAddress || '—'}</div>
                         {r.phoneNumber && <div className="text-amber-600 font-bold">{r.phoneNumber}</div>}
                       </td>
                       <td className="py-2.5 px-3 font-bold text-rose-600">
                         {r.outstandingDue ? `₹${r.outstandingDue}` : '—'}
+                        {r.dueDateRange && (
+                          <div className="text-[10px] text-slate-400 font-normal">{r.dueDateRange}</div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-slate-600 text-[11px]">
-                        {r.mruSection || r.cccFeeder || '—'}
+                        <span className="font-semibold text-slate-800">{r.mruSection || '—'}</span>
+                        {r.off_code && (
+                          <div className="text-[10px] text-slate-400">Off: {r.off_code}</div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3">
                         {r.priority === 'URGENT' ? (

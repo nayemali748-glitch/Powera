@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import {
-  TrendingUp,
   Users,
   CheckCircle2,
   Clock,
@@ -10,15 +9,24 @@ import {
   Building2,
   Zap,
   Flame,
-  FileSpreadsheet,
   Award,
   ChevronRight,
-  Filter,
   CreditCard,
-  PhoneCall,
-  Search
+  Search,
+  ExternalLink,
+  X,
+  Layers
 } from 'lucide-react';
 import { DisconnectionTask, DisconnectionStats } from '../../types';
+import {
+  getTaskPhase,
+  getTaskConnectionClass,
+  matchesDisconnectionStatusFilter,
+  PhaseFilterType,
+  ConnectionClassFilterType,
+  cleanWorkerOrAgencyName
+} from '../../utils/disconnectionClassifier';
+import { DisconnectionConsumerCard } from './DisconnectionConsumerCard';
 
 interface DisconnectionDashboardProps {
   tasks: DisconnectionTask[];
@@ -27,6 +35,13 @@ interface DisconnectionDashboardProps {
   isRefreshing?: boolean;
   onSelectStatusFilter?: (status: string) => void;
   onSelectWorkerFilter?: (worker: string) => void;
+  onSelectPhaseFilter?: (phase: PhaseFilterType) => void;
+  onSelectClassFilter?: (cls: ConnectionClassFilterType) => void;
+  onUpdateStatus?: (task: DisconnectionTask) => void;
+  onRequestReissue?: (task: DisconnectionTask) => Promise<void> | void;
+  onApproveReissue?: (task: DisconnectionTask) => Promise<void> | void;
+  onDeleteTask?: (task: DisconnectionTask) => Promise<void> | void;
+  isAdmin?: boolean;
   lang?: 'en' | 'bn';
 }
 
@@ -37,13 +52,24 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
   isRefreshing = false,
   onSelectStatusFilter,
   onSelectWorkerFilter,
+  onSelectPhaseFilter,
+  onSelectClassFilter,
+  onUpdateStatus,
+  onRequestReissue,
+  onApproveReissue,
+  onDeleteTask,
+  isAdmin = false,
   lang = 'en'
 }) => {
   const [workerSearch, setWorkerSearch] = useState('');
+  const [activeDeckStatus, setActiveDeckStatus] = useState<string | null>('PAID');
+  const [activeDeckPhase, setActiveDeckPhase] = useState<PhaseFilterType>('ALL');
+  const [activeDeckClass, setActiveDeckClass] = useState<ConnectionClassFilterType>('ALL');
+  const [deckSearch, setDeckSearch] = useState('');
 
-  // Dynamically compute live backend stats if tasks change
+  // Dynamically compute live backend stats directly from tasks so counts are always 100% accurate
   const computedStats = useMemo(() => {
-    let total = tasks.length;
+    const total = tasks.length;
     let completed = 0;
     let disconnected = 0;
     let pending = 0;
@@ -53,6 +79,13 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
     let officeTeam = 0;
     let reissue = 0;
     let urgent = 0;
+
+    let phase1Count = 0;
+    let phase3Count = 0;
+    let domesticCount = 0;
+    let commercialCount = 0;
+    let industrialCount = 0;
+    let stwCount = 0;
 
     let totalOutstanding = 0;
     let totalCollected = 0;
@@ -66,41 +99,50 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
     }>();
 
     tasks.forEach(t => {
-      const st = String(t.taskStatus || 'PENDING').toUpperCase();
-      const pAmt = parseFloat(String(t.paidAmount || '0').replace(/[^0-9.-]/g, '')) || 0;
-      const oAmt = parseFloat(String(t.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
+      const pAmt = parseFloat(String(t.paidAmount || (t as any)['Paid Amount'] || '0').replace(/[^0-9.-]/g, '')) || 0;
+      const oAmt = parseFloat(String(t.outstandingDue || (t as any)['D2 Net O/S'] || '0').replace(/[^0-9.-]/g, '')) || 0;
 
       totalOutstanding += oAmt;
-      totalCollected += pAmt;
+      if (matchesDisconnectionStatusFilter(t, 'PAID')) {
+        totalCollected += (pAmt > 0 ? pAmt : oAmt);
+      } else {
+        totalCollected += pAmt;
+      }
 
-      if (st === 'DISCONNECT') {
+      if (matchesDisconnectionStatusFilter(t, 'DISCONNECT')) {
         disconnected++;
         completed++;
-      } else if (st === 'COMPLETED') {
-        completed++;
-      } else if (st === 'PENDING') {
-        pending++;
-      } else if (st === 'PAID') {
+      } else if (matchesDisconnectionStatusFilter(t, 'PAID')) {
         paid++;
         completed++;
-      } else if (st === 'NOT FOUND') {
+      } else if (matchesDisconnectionStatusFilter(t, 'NOT FOUND')) {
         notFound++;
-      } else if (st === 'DISPUTE') {
+      } else if (matchesDisconnectionStatusFilter(t, 'DISPUTE')) {
         dispute++;
-      } else if (st === 'OFFICE TEAM') {
+      } else if (matchesDisconnectionStatusFilter(t, 'OFFICE TEAM')) {
         officeTeam++;
-      } else if (st === 'REISSUE') {
+      } else if (matchesDisconnectionStatusFilter(t, 'REISSUE')) {
         reissue++;
-      } else if (st === 'IN PROGRESS') {
+      } else {
         pending++;
       }
 
-      if (String(t.priority || '').toUpperCase() === 'URGENT') {
+      if (matchesDisconnectionStatusFilter(t, 'URGENT')) {
         urgent++;
       }
 
-      // Group workers
-      const wName = t.assignedWorkerName || t.assignedAgency || t.submittedBy || 'Unassigned';
+      const ph = getTaskPhase(t);
+      if (ph === '3PH') phase3Count++;
+      else phase1Count++;
+
+      const cls = getTaskConnectionClass(t);
+      if (cls === 'COMMERCIAL') commercialCount++;
+      else if (cls === 'INDUSTRIAL') industrialCount++;
+      else if (cls === 'STW') stwCount++;
+      else domesticCount++;
+
+      // Group workers (Name only, no ID)
+      const wName = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '') || 'Unassigned';
       if (!workerMap.has(wName)) {
         workerMap.set(wName, {
           workerName: wName,
@@ -112,11 +154,12 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       }
       const w = workerMap.get(wName)!;
       w.assigned++;
-      if (st === 'DISCONNECT' || st === 'COMPLETED' || st === 'PAID') {
+      if (matchesDisconnectionStatusFilter(t, 'COMPLETED')) {
         w.completed++;
-      } else if (st === 'PENDING' || st === 'IN PROGRESS') {
+      } else if (matchesDisconnectionStatusFilter(t, 'PENDING')) {
         w.pending++;
       }
+      const st = String(t.taskStatus || t.disconStatus || 'PENDING').toUpperCase();
       if (t.workerReport || t.workerRemarks || t.reportDate || (st !== 'PENDING' && st !== 'IN PROGRESS')) {
         w.reportsSubmitted++;
       }
@@ -130,20 +173,26 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
     const completionPct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     return {
-      total: stats.totalTasks || total,
-      completed: stats.completedTasks || completed,
-      disconnected: stats.disconnectedTasks !== undefined ? stats.disconnectedTasks : disconnected,
-      pending: stats.pendingTasks || pending,
-      paid: stats.paidTasks !== undefined ? stats.paidTasks : paid,
-      notFound: stats.notFoundTasks !== undefined ? stats.notFoundTasks : notFound,
-      dispute: stats.disputeTasks !== undefined ? stats.disputeTasks : dispute,
-      officeTeam: stats.officeTeamTasks !== undefined ? stats.officeTeamTasks : officeTeam,
-      reissue: stats.reissueTasks !== undefined ? stats.reissueTasks : reissue,
-      urgent: stats.urgentTasks !== undefined ? stats.urgentTasks : urgent,
-      completionPct: stats.completionPercentage || completionPct,
+      total,
+      completed,
+      disconnected,
+      pending,
+      paid,
+      notFound,
+      dispute,
+      officeTeam,
+      reissue,
+      urgent,
+      phase1Count,
+      phase3Count,
+      domesticCount,
+      commercialCount,
+      industrialCount,
+      stwCount,
+      completionPct,
       totalOutstanding,
       totalCollected,
-      workerList: (stats.workerPerformance && stats.workerPerformance.length > 0) ? stats.workerPerformance : workerList
+      workerList: workerList.length > 0 ? workerList : (stats.workerPerformance || [])
     };
   }, [tasks, stats]);
 
@@ -156,13 +205,36 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
   const statCards = [
     {
       id: 'total',
-      label: lang === 'bn' ? 'মোট উপভোক্তা' : 'Total Consumers',
+      label: lang === 'bn' ? 'মোট উপভোক্তা (Total)' : 'Total Consumers',
       count: computedStats.total,
       filterStatus: 'ALL',
       bg: 'bg-slate-900 text-white border-slate-800',
+      activeRing: 'ring-4 ring-amber-400',
       iconBg: 'bg-slate-800 text-amber-400',
       icon: Users,
-      desc: lang === 'bn' ? 'লাইভ ব্যাকএন্ড মোট রেকর্ড' : 'Live backend consumer records'
+      desc: lang === 'bn' ? 'সম্পূর্ণ ডিসকানেকশন তালিকা' : 'All disconnection consumers'
+    },
+    {
+      id: 'paid',
+      label: lang === 'bn' ? 'পরিশোধিত (Paid)' : 'Paid',
+      count: computedStats.paid,
+      filterStatus: 'PAID',
+      bg: 'bg-teal-50 text-teal-950 border-teal-300',
+      activeRing: 'ring-4 ring-teal-500 bg-teal-100/90',
+      iconBg: 'bg-teal-600 text-white',
+      icon: CreditCard,
+      desc: `₹${computedStats.totalCollected.toLocaleString('en-IN')} ${lang === 'bn' ? 'আদায়' : 'collected'}`
+    },
+    {
+      id: 'disconnected',
+      label: lang === 'bn' ? 'বিচ্ছিন্ন (Disconnected)' : 'Disconnected',
+      count: computedStats.disconnected,
+      filterStatus: 'DISCONNECT',
+      bg: 'bg-rose-50 text-rose-950 border-rose-300',
+      activeRing: 'ring-4 ring-rose-500 bg-rose-100/90',
+      iconBg: 'bg-rose-600 text-white',
+      icon: Zap,
+      desc: lang === 'bn' ? 'সংযোগ বিচ্ছিন্ন সম্পন্ন' : 'Power cut executed'
     },
     {
       id: 'completed',
@@ -170,49 +242,21 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       count: computedStats.completed,
       filterStatus: 'COMPLETED',
       bg: 'bg-emerald-50 text-emerald-950 border-emerald-200',
+      activeRing: 'ring-4 ring-emerald-500 bg-emerald-100/90',
       iconBg: 'bg-emerald-600 text-white',
       icon: CheckCircle2,
       desc: `${computedStats.completionPct}% ${lang === 'bn' ? 'সম্পন্নতার হার' : 'overall rate'}`
     },
     {
       id: 'pending',
-      label: lang === 'bn' ? 'অমীমাংসিত (Pending)' : 'Pending',
+      label: lang === 'bn' ? 'অমীমাংসিত (Connected)' : 'Connected / Pending',
       count: computedStats.pending,
       filterStatus: 'PENDING',
       bg: 'bg-amber-50 text-amber-950 border-amber-200',
+      activeRing: 'ring-4 ring-amber-500 bg-amber-100/90',
       iconBg: 'bg-amber-500 text-slate-950',
       icon: Clock,
       desc: lang === 'bn' ? 'মাঠে কার্যকর করার অপেক্ষায়' : 'Awaiting field execution'
-    },
-    {
-      id: 'disconnected',
-      label: lang === 'bn' ? 'বিচ্ছিন্ন (Disconnected)' : 'Disconnected',
-      count: computedStats.disconnected,
-      filterStatus: 'DISCONNECT',
-      bg: 'bg-rose-50 text-rose-950 border-rose-200',
-      iconBg: 'bg-rose-600 text-white',
-      icon: Zap,
-      desc: lang === 'bn' ? 'সংযোগ বিচ্ছিন্ন সম্পন্ন' : 'Power cut executed'
-    },
-    {
-      id: 'paid',
-      label: lang === 'bn' ? 'পরিশোধিত (Paid)' : 'Paid',
-      count: computedStats.paid,
-      filterStatus: 'PAID',
-      bg: 'bg-teal-50 text-teal-950 border-teal-200',
-      iconBg: 'bg-teal-600 text-white',
-      icon: CreditCard,
-      desc: `₹${computedStats.totalCollected.toLocaleString('en-IN')} ${lang === 'bn' ? 'আদায়' : 'collected'}`
-    },
-    {
-      id: 'notFound',
-      label: lang === 'bn' ? 'অনুপস্থিত (Not Found)' : 'Not Found',
-      count: computedStats.notFound,
-      filterStatus: 'NOT FOUND',
-      bg: 'bg-slate-100 text-slate-900 border-slate-300',
-      iconBg: 'bg-slate-700 text-white',
-      icon: HelpCircle,
-      desc: lang === 'bn' ? 'ঠিকানা/মিটার পাওয়া যায়নি' : 'Locked / unlocatable premises'
     },
     {
       id: 'dispute',
@@ -220,6 +264,7 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       count: computedStats.dispute,
       filterStatus: 'DISPUTE',
       bg: 'bg-orange-50 text-orange-950 border-orange-200',
+      activeRing: 'ring-4 ring-orange-500 bg-orange-100/90',
       iconBg: 'bg-orange-500 text-white',
       icon: AlertTriangle,
       desc: lang === 'bn' ? 'বিল বা রিডিং সংক্রান্ত আপত্তি' : 'Bill or reading disputed'
@@ -230,9 +275,21 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       count: computedStats.officeTeam,
       filterStatus: 'OFFICE TEAM',
       bg: 'bg-indigo-50 text-indigo-950 border-indigo-200',
+      activeRing: 'ring-4 ring-indigo-500 bg-indigo-100/90',
       iconBg: 'bg-indigo-600 text-white',
       icon: Building2,
-      desc: lang === 'bn' ? 'বিশেষ আধিকারিক দল প্রয়োজন' : 'Special squad / police escort'
+      desc: lang === 'bn' ? 'বিশেষ আধিকারিক দল প্রয়োজন' : 'Special squad required'
+    },
+    {
+      id: 'notFound',
+      label: lang === 'bn' ? 'অনুপস্থিত (Not Found)' : 'Not Found',
+      count: computedStats.notFound,
+      filterStatus: 'NOT FOUND',
+      bg: 'bg-slate-100 text-slate-900 border-slate-300',
+      activeRing: 'ring-4 ring-slate-500 bg-slate-200/90',
+      iconBg: 'bg-slate-700 text-white',
+      icon: HelpCircle,
+      desc: lang === 'bn' ? 'ঠিকানা/মিটার পাওয়া যায়নি' : 'Locked / unlocatable premises'
     },
     {
       id: 'reissue',
@@ -240,6 +297,7 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       count: computedStats.reissue,
       filterStatus: 'REISSUE',
       bg: 'bg-purple-50 text-purple-950 border-purple-200',
+      activeRing: 'ring-4 ring-purple-500 bg-purple-100/90',
       iconBg: 'bg-purple-600 text-white',
       icon: RefreshCw,
       desc: lang === 'bn' ? 'পুনর্বার তদন্ত প্রয়োজন' : 'Re-verification requested'
@@ -249,31 +307,54 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       label: lang === 'bn' ? 'জরুরি (Urgent)' : 'Urgent',
       count: computedStats.urgent,
       filterStatus: 'URGENT',
-      bg: 'bg-red-50 text-red-950 border-red-300 ring-1 ring-red-300',
+      bg: 'bg-red-50 text-red-950 border-red-300',
+      activeRing: 'ring-4 ring-red-500 bg-red-100/90',
       iconBg: 'bg-red-600 text-white',
       icon: Flame,
       desc: lang === 'bn' ? 'উচ্চ অগ্রাধিকার উপভোক্তা' : 'High-priority defaulters'
     }
   ];
 
+  // Filtered consumer list for the active Performance Deck selection
+  const activeDeckConsumers = useMemo(() => {
+    if (!activeDeckStatus) return [];
+    return tasks.filter(task => {
+      if (!matchesDisconnectionStatusFilter(task, activeDeckStatus)) return false;
+      if (activeDeckPhase !== 'ALL' && getTaskPhase(task) !== activeDeckPhase) return false;
+      if (activeDeckClass !== 'ALL' && getTaskConnectionClass(task) !== activeDeckClass) return false;
+      if (deckSearch.trim()) {
+        const q = deckSearch.toLowerCase().trim();
+        const cId = String(task.consumerId || '').toLowerCase();
+        const cNm = String(task.consumerName || '').toLowerCase();
+        const ph = String(task.phoneNumber || '').toLowerCase();
+        const addr = String(task.consumerAddress || '').toLowerCase();
+        const mru = String(task.mru || task.mruSection || '').toLowerCase();
+        return cId.includes(q) || cNm.includes(q) || ph.includes(q) || addr.includes(q) || mru.includes(q);
+      }
+      return true;
+    });
+  }, [tasks, activeDeckStatus, activeDeckPhase, activeDeckClass, deckSearch]);
+
+  const activeCardObj = statCards.find(c => c.filterStatus === activeDeckStatus);
+
   return (
     <div className="space-y-6" id="disconnection-dashboard">
       {/* Top Header Banner */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
             <h2 className="text-lg font-black text-slate-900 tracking-tight">
-              {lang === 'bn' ? 'লাইভ ডিসকানেকশন ড্যাশবোর্ড' : 'Live Disconnection Performance Dashboard'}
+              {lang === 'bn' ? 'অ্যাক্টিভ পারফরম্যান্স ডেক বোর্ড (Performance Deck Board)' : 'Active Disconnection Performance Deck Board'}
             </h2>
-            <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200">
-              Live Google Sheets Sync
+            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
+              {lang === 'bn' ? `মোট তালিকা: ${computedStats.total}` : `Total List: ${computedStats.total}`}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             {lang === 'bn' 
-              ? 'বিদ্যুৎ সংযোগ বিচ্ছিন্নকরণ ও বকেয়া আদায়ের রিয়েল-টাইম কার্যকারিতা পরিসংখ্যান' 
-              : 'Real-time utility disconnection statistics, defaulter execution, and agency performance.'}
+              ? 'Paid, Disconnected বা যেকোনো কার্ডে ক্লিক করলে নিচে সরাসরি সেই উপভোক্তাদের সম্পূর্ণ ডেটা দেখা যাবে' 
+              : 'Click on Paid, Disconnected, or any metric card below to immediately view those consumers and their details.'}
           </p>
         </div>
 
@@ -291,17 +372,23 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
         </div>
       </div>
 
-      {/* Progress & Dues Summary Banner */}
+      {/* Progress & Dues Summary Banner (Interactive!) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Completion Rate */}
-        <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-5 border border-slate-700 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        {/* Completion Rate -> Click to view COMPLETED */}
+        <button
+          type="button"
+          onClick={() => setActiveDeckStatus('COMPLETED')}
+          className={`text-left bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-5 border border-slate-700 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md active:scale-[0.99] ${
+            activeDeckStatus === 'COMPLETED' ? 'ring-4 ring-amber-400' : ''
+          }`}
+        >
+          <div className="flex items-center justify-between w-full">
             <span className="text-xs font-bold tracking-wider text-slate-400 uppercase">
-              {lang === 'bn' ? 'মোট সম্পন্নতার হার' : 'Completion Rate'}
+              {lang === 'bn' ? 'মোট সম্পন্নতার হার (Completed)' : 'Completion Rate (Click to View)'}
             </span>
             <Award className="w-5 h-5 text-amber-400" />
           </div>
-          <div className="my-3">
+          <div className="my-3 w-full">
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-black text-amber-400">{computedStats.completionPct}%</span>
               <span className="text-xs text-slate-300">
@@ -315,16 +402,23 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
               ></div>
             </div>
           </div>
-          <p className="text-[11px] text-slate-400">
-            {lang === 'bn' ? 'ডিসকানেক্ট ও পরিশোধিত সহ মোট সফল নিষ্পত্তির অনুপাত' : 'Includes disconnected executions and verified consumer settlements'}
+          <p className="text-[11px] text-slate-300 flex items-center justify-between w-full">
+            <span>{lang === 'bn' ? `বিচ্ছিন্ন: ${computedStats.disconnected} • পরিশোধিত: ${computedStats.paid}` : `Disconnected: ${computedStats.disconnected} • Paid: ${computedStats.paid}`}</span>
+            <ChevronRight className="w-3.5 h-3.5 text-amber-400" />
           </p>
-        </div>
+        </button>
 
-        {/* Total Arrears Outstanding */}
-        <div className="bg-rose-50 border border-rose-200 text-rose-950 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        {/* Total Arrears Outstanding -> Click to view ALL */}
+        <button
+          type="button"
+          onClick={() => setActiveDeckStatus('ALL')}
+          className={`text-left bg-rose-50 border border-rose-200 text-rose-950 rounded-2xl p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md active:scale-[0.99] ${
+            activeDeckStatus === 'ALL' ? 'ring-4 ring-rose-500' : ''
+          }`}
+        >
+          <div className="flex items-center justify-between w-full">
             <span className="text-xs font-bold tracking-wider text-rose-700 uppercase">
-              {lang === 'bn' ? 'মোট বকেয়া পরিমাণ' : 'Total Outstanding Arrears'}
+              {lang === 'bn' ? 'মোট বকেয়া পরিমাণ (Total List)' : 'Total Outstanding Arrears'}
             </span>
             <CreditCard className="w-5 h-5 text-rose-600" />
           </div>
@@ -332,58 +426,72 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
             <div className="text-2xl font-black text-rose-700">
               ₹{computedStats.totalOutstanding.toLocaleString('en-IN')}
             </div>
-            <p className="text-xs text-rose-800 font-medium mt-1">
-              {computedStats.total} {lang === 'bn' ? 'উপভোক্তার মোট বকেয়া দাবি' : 'consumers defaulter list'}
+            <p className="text-xs text-rose-800 font-bold mt-1">
+              {computedStats.total} {lang === 'bn' ? 'জন উপভোক্তার মোট ডিসকানেকশন লিস্ট' : 'total consumers in disconnection list'}
             </p>
           </div>
-          <span className="text-[11px] text-rose-600">
-            {lang === 'bn' ? 'ডেলিগেট তালিকাভুক্ত সক্রিয় বকেয়া' : 'Target revenue recovery in field'}
+          <span className="text-[11px] text-rose-700 font-bold flex items-center justify-between w-full">
+            <span>{lang === 'bn' ? 'সব উপভোক্তা দেখতে ক্লিক করুন' : 'Click to view all consumers'}</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </span>
-        </div>
+        </button>
 
-        {/* Total Arrears Collected */}
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-950 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        {/* Total Arrears Collected -> Click to view PAID */}
+        <button
+          type="button"
+          onClick={() => setActiveDeckStatus('PAID')}
+          className={`text-left bg-emerald-50 border border-emerald-200 text-emerald-950 rounded-2xl p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md active:scale-[0.99] ${
+            activeDeckStatus === 'PAID' ? 'ring-4 ring-emerald-500' : ''
+          }`}
+        >
+          <div className="flex items-center justify-between w-full">
             <span className="text-xs font-bold tracking-wider text-emerald-700 uppercase">
-              {lang === 'bn' ? 'মাঠে মোট আদায়' : 'Recovered in Field (Paid)'}
+              {lang === 'bn' ? 'পরিশোধিত উপভোক্তা (Paid Consumers)' : 'Recovered in Field (Paid Consumers)'}
             </span>
             <CheckCircle2 className="w-5 h-5 text-emerald-600" />
           </div>
           <div className="my-3">
             <div className="text-2xl font-black text-emerald-700">
-              ₹{computedStats.totalCollected.toLocaleString('en-IN')}
+              {computedStats.paid} {lang === 'bn' ? 'জন Paid' : 'Paid'} (₹{computedStats.totalCollected.toLocaleString('en-IN')})
             </div>
-            <p className="text-xs text-emerald-800 font-medium mt-1">
-              {computedStats.paid} {lang === 'bn' ? 'উপভোক্তা তাৎক্ষণিক পরিশোধ করেছেন' : 'consumers paid on-spot'}
+            <p className="text-xs text-emerald-800 font-bold mt-1">
+              {computedStats.paid} {lang === 'bn' ? 'জন উপভোক্তা বিল পরিশোধ করেছেন' : 'consumers have paid their dues'}
             </p>
           </div>
-          <span className="text-[11px] text-emerald-600">
-            {lang === 'bn' ? 'ডিসকানেকশন এড়াতে জমা দেওয়া অর্থ' : 'Live recorded payment references'}
+          <span className="text-[11px] text-emerald-700 font-bold flex items-center justify-between w-full">
+            <span>{lang === 'bn' ? 'Paid উপভোক্তাদের ডেটা দেখতে ক্লিক করুন' : 'Click to view Paid consumers data'}</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </span>
-        </div>
+        </button>
       </div>
 
-      {/* 10 Core Metric Cards */}
+      {/* 10 Core Interactive Metric Cards */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-500">
-            {lang === 'bn' ? '১০টি প্রধান স্ট্যাটাস মেট্রিক (ফিল্টার করতে ক্লিক করুন)' : '10 Live Status Metrics (Click to Filter View List)'}
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+            {lang === 'bn' ? 'স্ট্যাটাস অনুযায়ী উপভোক্তাদের তালিকা দেখুন (কার্ডে ক্লিক করুন)' : 'Interactive Status Deck (Click Any Card to View Consumer Data)'}
           </h3>
-          <span className="text-[11px] text-slate-400 font-medium">
-            {lang === 'bn' ? 'লাইভ ব্যাকএন্ড ডাটা' : 'Synchronized with backend'}
+          <span className="text-[11px] text-emerald-700 font-bold bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+            {lang === 'bn' ? 'সক্রিয় ডেক বোর্ড (Active)' : 'Deck Board Active'}
           </span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
           {statCards.map(card => {
             const Icon = card.icon;
+            const isSelected = activeDeckStatus === card.filterStatus;
             return (
               <button
                 key={card.id}
                 id={`stat-card-${card.id}`}
-                onClick={() => onSelectStatusFilter && onSelectStatusFilter(card.filterStatus)}
-                className={`text-left p-3.5 rounded-2xl border ${card.bg} shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer flex flex-col justify-between group`}
-                title={`Filter by ${card.label}`}
+                type="button"
+                onClick={() => {
+                  setActiveDeckStatus(card.filterStatus);
+                }}
+                className={`text-left p-3.5 rounded-2xl border ${card.bg} ${
+                  isSelected ? card.activeRing : ''
+                } shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer flex flex-col justify-between group`}
+                title={`Show ${card.label} consumer data`}
               >
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <span className="text-[11px] font-bold tracking-tight line-clamp-1">
@@ -399,15 +507,107 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
                   <p className="text-[10px] opacity-75 mt-0.5 line-clamp-1">{card.desc}</p>
                 </div>
 
-                <div className="mt-2 pt-2 border-t border-current/10 flex items-center justify-between text-[10px] font-bold opacity-80 group-hover:opacity-100">
-                  <span>{lang === 'bn' ? 'তালিকা দেখুন' : 'View List'}</span>
-                  <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                <div className="mt-2 pt-2 border-t border-current/10 flex items-center justify-between text-[10px] font-bold opacity-90 group-hover:opacity-100">
+                  <span>{isSelected ? (lang === 'bn' ? 'নিচে দেখানো হচ্ছে' : 'Showing Below') : (lang === 'bn' ? 'ডেটা দেখুন' : 'Show Data')}</span>
+                  <ChevronRight className={`w-3 h-3 transition-transform ${isSelected ? 'rotate-90' : 'group-hover:translate-x-0.5'}`} />
                 </div>
               </button>
             );
           })}
         </div>
       </div>
+
+      {/* ACTIVE CONSUMER DATA PANEL ON PERFORMANCE DECK BOARD */}
+      {activeDeckStatus && (
+        <div className="bg-white border-2 border-slate-900 rounded-2xl p-4 sm:p-5 shadow-md space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="px-3 py-1 rounded-full bg-slate-900 text-amber-400 text-xs font-black uppercase tracking-wider">
+                {activeCardObj?.label || activeDeckStatus}
+              </span>
+              <span className="text-sm font-black text-slate-900">
+                {activeDeckConsumers.length} {lang === 'bn' ? 'জন উপভোক্তার তথ্য' : 'Consumers Found'}
+              </span>
+              {activeDeckPhase !== 'ALL' && (
+                <span className="px-2.5 py-0.5 rounded-full bg-sky-100 text-sky-800 text-xs font-bold">
+                  {activeDeckPhase === '3PH' ? '3 PH' : '1 PH'}
+                </span>
+              )}
+              {activeDeckClass !== 'ALL' && (
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
+                  {activeDeckClass}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative flex-1 sm:flex-none">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={deckSearch}
+                  onChange={e => setDeckSearch(e.target.value)}
+                  placeholder={lang === 'bn' ? 'নাম বা আইডি খুঁজুন...' : 'Search consumer...'}
+                  className="w-full sm:w-52 pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                />
+              </div>
+
+              {onSelectStatusFilter && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeDeckPhase !== 'ALL' && onSelectPhaseFilter) onSelectPhaseFilter(activeDeckPhase);
+                    if (activeDeckClass !== 'ALL' && onSelectClassFilter) onSelectClassFilter(activeDeckClass);
+                    onSelectStatusFilter(activeDeckStatus);
+                  }}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? 'সম্পূর্ণ তালিকায় যান' : 'Open in Consumer List'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setActiveDeckStatus(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 cursor-pointer"
+                title="Close panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {activeDeckConsumers.length === 0 ? (
+            <div className="py-10 text-center text-slate-500 text-sm font-semibold">
+              {lang === 'bn'
+                ? 'এই স্ট্যাটাস বা ফিল্টারে কোনো উপভোক্তা পাওয়া যায়নি।'
+                : 'No consumers match this status filter.'}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[680px] overflow-y-auto pr-1">
+              {activeDeckConsumers.slice(0, 60).map((task, idx) => (
+                <DisconnectionConsumerCard
+                  key={`${task.taskId || task.consumerId || idx}-${idx}`}
+                  task={task}
+                  onUpdateStatus={t => {
+                    if (onUpdateStatus) {
+                      onUpdateStatus(t);
+                    } else if (onSelectStatusFilter) {
+                      onSelectStatusFilter(activeDeckStatus);
+                    }
+                  }}
+                  onRequestReissue={onRequestReissue}
+                  onApproveReissue={onApproveReissue}
+                  isAdmin={isAdmin}
+                  onDeleteTask={onDeleteTask}
+                  lang={lang}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Worker Performance Section */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs" id="worker-performance-table">

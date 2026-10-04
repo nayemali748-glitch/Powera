@@ -26,6 +26,7 @@ import { CategoryType, WorkOrderNotice, UserSession, SyncMode } from '../types';
 import { fetchWorkOrders, uploadWorkOrder, deleteWorkOrder, toggleWorkOrderVisibility } from '../services/api';
 import { Language } from '../utils/translations';
 import { compressImageFile } from '../utils/imageCompressor';
+import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 
 // Helper to resolve Google Drive / image URLs cleanly for both workers and admins
 export function resolveWorkOrderImageUrl(notice?: Partial<WorkOrderNotice> | null): string {
@@ -36,6 +37,9 @@ export function resolveWorkOrderImageUrl(notice?: Partial<WorkOrderNotice> | nul
   }
   if (!url && notice.description && (notice.description.startsWith('http') || notice.description.startsWith('data:'))) {
     url = notice.description;
+  }
+  if (!url && notice.id) {
+    return `/api/work-orders/${encodeURIComponent(notice.id)}/file`;
   }
   if (url && url.includes('drive.google.com') && !url.includes('thumbnail')) {
     const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
@@ -211,7 +215,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     try {
       setIsUploading(true);
       const savedNotice = await uploadWorkOrder({
-        category: (uploadCategory === 'ALL' ? 'NSC' : uploadCategory) as CategoryType,
+        category: (uploadCategory || 'ALL') as CategoryType,
         title: uploadTitle.trim() || 'WBSEDCL Work Order / Khata Notice',
         photoUrl: photoPreview,
         fileData: photoPreview,
@@ -231,8 +235,11 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
       setUploadDescription('');
       setUploadIsHidden(false);
       
-      // Reload notices list
-      await loadNotices();
+      // Optimistically prepend to state and reload notices list
+      if (savedNotice) {
+        setNotices(prev => [savedNotice, ...prev.filter(n => n.id !== savedNotice.id)]);
+      }
+      await loadNotices(true);
       
       // Auto select the newly uploaded notice for current NSC entry
       if (savedNotice && onSelectNotice) {
@@ -376,7 +383,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={loadNotices}
+            onClick={() => loadNotices(false)}
             className="p-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 shadow-xs text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
             title="Refresh Notices"
           >
@@ -501,14 +508,14 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                       ) : null}
                     </div>
                     {/* UPLOAD DATE & TIME BADGE */}
-                    <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-600 flex-wrap">
+                    <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-600 flex-wrap font-mono">
                       <span className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded border border-amber-200 text-amber-900">
                         <Calendar className="w-3 h-3 text-amber-600" />
-                        <span>{notice.uploadDate}</span>
+                        <span>{formatDateDDMMYYYY(notice.uploadDate || notice.createdAt)}</span>
                       </span>
                       <span className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded border border-blue-200 text-blue-900">
                         <Clock className="w-3 h-3 text-blue-600" />
-                        <span>{notice.uploadTime}</span>
+                        <span>{formatTime12Hour(notice.uploadTime || notice.createdAt)}</span>
                       </span>
                     </div>
                   </div>
@@ -565,6 +572,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                       const target = e.currentTarget;
                       if (notice.fileId && !target.src.includes('/api/drive-proxy/')) {
                         target.src = `/api/drive-proxy/${notice.fileId}`;
+                      } else if (notice.id && !target.src.includes('/api/work-orders/')) {
+                        target.src = `/api/work-orders/${encodeURIComponent(notice.id)}/file`;
                       }
                     }}
                   />
@@ -586,7 +595,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
 
                   {/* Date & Time Watermark on Bottom Right of Image */}
                   <div className="absolute bottom-2 right-2 bg-slate-950/80 backdrop-blur-xs text-white text-[9px] font-mono font-bold px-2 py-0.5 rounded border border-white/20">
-                    {notice.uploadDate} {notice.uploadTime}
+                    {formatDateDDMMYYYY(notice.uploadDate || notice.createdAt)} {formatTime12Hour(notice.uploadTime || notice.createdAt)}
                   </div>
                 </div>
 
@@ -663,11 +672,11 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                 <div className="flex items-center gap-3 text-xs text-slate-300 mt-1 font-mono flex-wrap">
                   <span className="flex items-center gap-1 text-emerald-400 font-bold">
                     <Calendar className="w-3.5 h-3.5" />
-                    <span>Upload Date: {previewNotice.uploadDate}</span>
+                    <span>Upload Date: {formatDateDDMMYYYY(previewNotice.uploadDate || previewNotice.createdAt)}</span>
                   </span>
                   <span className="flex items-center gap-1 text-sky-400 font-bold">
                     <Clock className="w-3.5 h-3.5" />
-                    <span>Time: {previewNotice.uploadTime}</span>
+                    <span>Time: {formatTime12Hour(previewNotice.uploadTime || previewNotice.createdAt)}</span>
                   </span>
                   <span className="text-slate-400 hidden sm:inline">
                     By: {previewNotice.adminName}
@@ -777,6 +786,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   const target = e.currentTarget;
                   if (previewNotice.fileId && !target.src.includes('/api/drive-proxy/')) {
                     target.src = `/api/drive-proxy/${previewNotice.fileId}`;
+                  } else if (previewNotice.id && !target.src.includes('/api/work-orders/')) {
+                    target.src = `/api/work-orders/${encodeURIComponent(previewNotice.id)}/file`;
                   }
                 }}
               />
@@ -916,7 +927,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   />
                   <div className="mt-1.5 text-center bg-slate-900/90 py-1 rounded border border-slate-800">
                     <span className="text-[10px] text-emerald-400 font-bold font-mono">
-                      ✓ Ready: {new Date().toLocaleDateString('en-GB')} {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                      ✓ Ready: {getNowDateDDMMYYYY()} {getNowTime12Hour()}
                     </span>
                   </div>
                 </div>
@@ -963,8 +974,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
               {/* Current Date & Time Banner */}
               <div className="p-2.5 bg-amber-50/90 rounded-xl border border-amber-200 text-amber-950 text-xs flex items-center gap-2">
                 <Clock className="w-4 h-4 text-amber-700 shrink-0" />
-                <span className="font-medium">
-                  <strong>{lang === 'bn' ? 'রেকর্ডকৃত আপলোড সময়:' : 'Recorded Time:'}</strong> {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} - {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                <span className="font-medium font-mono">
+                  <strong className="font-sans">{lang === 'bn' ? 'রেকর্ডকৃত আপলোড সময়:' : 'Recorded Time:'}</strong> {getNowDateDDMMYYYY()} - {getNowTime12Hour()}
                 </span>
               </div>
             </div>

@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { DisconnectionTask } from '../../types';
+import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY } from '../../utils/dateTimeFormat';
+import { cleanWorkerOrAgencyName, cleanDisconnectionNotes } from '../../utils/disconnectionClassifier';
 
 interface DisconnectionReportProps {
   tasks: DisconnectionTask[];
@@ -40,12 +42,12 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
   const [dateFilter, setDateFilter] = useState<string>('');
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string; meta?: string } | null>(null);
 
-  // Extract all unique workers from tasks
+  // Extract all unique workers from tasks (Name only)
   const workers = useMemo(() => {
     const set = new Set<string>();
     tasks.forEach(t => {
-      const w = t.assignedWorkerName || t.assignedAgency || t.submittedBy;
-      if (w && w.trim()) set.add(w.trim());
+      const w = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '');
+      if (w) set.add(w);
     });
     return Array.from(set).sort();
   }, [tasks]);
@@ -60,7 +62,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
 
       // Filter Worker
       if (selectedWorker !== 'ALL') {
-        const w = t.assignedWorkerName || t.assignedAgency || t.submittedBy || '';
+        const w = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '');
         if (w !== selectedWorker) return false;
       }
 
@@ -71,8 +73,10 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
 
       // Date Filter
       if (dateFilter) {
-        const dateStr = t.reportDate || t.updatedAt || t.createdAt || '';
-        if (!dateStr.includes(dateFilter)) return false;
+        const filterDMY = formatDateDDMMYYYY(dateFilter);
+        const dateStr = t.reportDate || t.disconDate || t.updatedAt || t.createdAt || '';
+        const rowDMY = formatDateDDMMYYYY(dateStr);
+        if (!dateStr.includes(dateFilter) && rowDMY !== filterDMY) return false;
       }
 
       // Search Query
@@ -155,29 +159,26 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
 
     const exportRows = reportedTasks.map((t, idx) => ({
       'Serial No': t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`,
-      'Worker / Agency': t.assignedWorkerName || t.assignedAgency || t.submittedBy || 'Unassigned',
-      'Worker ID': t.assignedWorkerId || '',
+      'Worker / Agency': cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || 'Unassigned'),
       'Consumer Name': t.consumerName || '',
-      'MRU Section': t.mruSection || '',
-      'CCC / Feeder': t.cccFeeder || '',
+      'Consumer ID': t.consumerId || '',
       'Consumer Address': t.consumerAddress || '',
       'Contact Mobile': t.phoneNumber || '',
       'Status': t.taskStatus || 'COMPLETED',
-      'Report / Observation': t.workerReport || t.workerRemarks || '',
-      'Remarks': t.workerRemarks || '',
+      'Report / Observation': cleanDisconnectionNotes(t.workerReport || t.workerRemarks || ''),
       'Paid Amount': t.paidAmount || '',
-      'Payment Date': t.paymentDate || '',
+      'Payment Date': formatDateDDMMYYYY(t.paymentDate),
       'Payment Reference': t.paymentReference || '',
       'Meter Reading': t.meterReading || '',
       'Photo Evidence URL': t.photoUrl || '',
-      'Updated Date': t.reportDate || t.updatedAt?.split('T')[0] || '',
-      'Updated Time': t.reportTime || (t.updatedAt ? new Date(t.updatedAt).toLocaleTimeString() : '')
+      'Updated Date': formatDateDDMMYYYY(t.reportDate || t.disconDate || t.updatedAt),
+      'Updated Time': formatTime12Hour(t.reportTime || t.updatedAt)
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Disconnection_Reports');
-    const dateStr = new Date().toISOString().split('T')[0];
+    const dateStr = getNowDateDDMMYYYY();
     XLSX.writeFile(wb, `WBSEDCL_Disconnection_Reports_${dateStr}.xlsx`);
   };
 
@@ -336,9 +337,12 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
                 {reportedTasks.map((t, idx) => {
                   const badge = getStatusBadge(t.taskStatus || 'COMPLETED');
                   const BadgeIcon = badge.icon;
-                  const workerName = t.assignedWorkerName || t.assignedAgency || t.submittedBy || 'Field Worker';
-                  const dateDisplay = t.reportDate || t.updatedAt?.split('T')[0] || t.createdAt?.split('T')[0] || '—';
+                  const workerName = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '') || 'Field Worker';
+                  const rawDate = t.reportDate || t.disconDate || t.updatedAt || t.createdAt;
+                  const dateDisplay = rawDate ? formatDateDDMMYYYY(rawDate) : '—';
+                  const timeDisplay = formatTime12Hour(t.reportTime || t.updatedAt || t.createdAt);
                   const serialText = t.serialNumber || ('SL ' + String(idx + 1).padStart(3, '0'));
+                  const cleanObs = cleanDisconnectionNotes(t.workerReport || t.workerRemarks || '');
 
                   return (
                     <tr key={t.taskId || idx} className="hover:bg-slate-50/80 transition-colors">
@@ -355,13 +359,10 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
                           </div>
                           <div>
                             <div className="font-bold text-slate-900">{workerName}</div>
-                            {t.assignedWorkerId && (
-                              <span className="text-[10px] text-slate-400 font-mono">ID: {t.assignedWorkerId}</span>
-                            )}
-                            <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                            <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1 font-mono">
                               <Calendar className="w-3 h-3 text-slate-400" />
                               <span>{dateDisplay}</span>
-                              {t.reportTime && <span>• {t.reportTime}</span>}
+                              {timeDisplay && <span className="text-blue-600 font-bold">• {timeDisplay}</span>}
                             </div>
                           </div>
                         </div>
@@ -390,13 +391,8 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
 
                       <td className="py-3 px-3 max-w-xs">
                         <div className="text-slate-800 font-medium text-xs">
-                          {t.workerReport || t.workerRemarks || '—'}
+                          {cleanObs || '—'}
                         </div>
-                        {t.workerRemarks && t.workerReport && t.workerRemarks !== t.workerReport && (
-                          <div className="text-[10px] text-slate-400 italic mt-0.5">
-                            Note: {t.workerRemarks}
-                          </div>
-                        )}
                       </td>
 
                       <td className="py-3 px-3">

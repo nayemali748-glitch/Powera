@@ -1,9 +1,25 @@
 import { PowerEntry } from '../types';
 
 /**
+ * Cleans Worker or Agency name so ONLY the name is displayed (strips IDs, bracketed codes, phone numbers, etc.)
+ */
+export function cleanNameOnly(rawName?: string): string {
+  if (!rawName) return '';
+  let s = String(rawName).trim();
+  // Remove bracketed IDs like (ID: 1234), (LM-101), (WRK-01), [ID: ...], etc.
+  s = s.replace(/\s*\((?:ID|WRK|LM|USR|ADM|EMP|AGENCY|CODE|NO|#)?[^)]*\)/gi, '');
+  s = s.replace(/\s*\[[^\]]*\]/g, '');
+  // Remove trailing "- ID: ..." or "| ID: ..."
+  s = s.replace(/\s*[-|•]\s*(?:ID|WRK|LM|USR|Badge)?\s*[:#-]?\s*[A-Za-z0-9_-]+$/gi, '');
+  // If string starts with "ID:" or similar prefix, strip it
+  s = s.replace(/^(?:ID|Worker ID|Agency ID)\s*[:#-]?\s*/gi, '');
+  return s.trim();
+}
+
+/**
  * Universal Entry Normalizer for POWER Utility Management.
- * Detects legacy/shifted Google Sheet column orders and normalizes
- * them into standard, strictly typed PowerEntry objects.
+ * Detects legacy/shifted Google Sheet column orders and 33-column Disconnection sheet headers,
+ * normalizing them into standard, strictly typed PowerEntry objects.
  */
 export function normalizeEntry(entry: any): PowerEntry {
   if (!entry || typeof entry !== 'object') {
@@ -12,25 +28,44 @@ export function normalizeEntry(entry: any): PowerEntry {
 
   const raw: any = { ...entry };
 
-  // Map Google Sheet display headers and alternative keys to camelCase properties if missing
-  raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || '';
-  raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || '';
-  raw.category = raw.category || raw['Category'] || 'NSC';
-  raw.status = raw.status || raw['Status'] || 'Completed';
-  raw.date = raw.date || raw['Date'] || raw.createdAt || '';
-  raw.createdAt = raw.createdAt || raw['Created At'] || raw.date || '';
-  raw.updatedAt = raw.updatedAt || raw['Updated At'] || '';
+  // Normalize Category (handle 'Disconnection' -> 'DISCONNECTION')
+  const rawCat = String(raw.category || raw['Category'] || 'NSC').trim();
+  const rawCatUpper = rawCat.toUpperCase();
+  if (rawCatUpper === 'DISCONNECTION' || rawCatUpper === 'DISCONNECT') {
+    raw.category = 'DISCONNECTION';
+  } else {
+    raw.category = rawCat;
+  }
 
-  raw.workerId = raw.workerId || raw['Worker ID'] || raw['Lineman ID'] || '';
-  raw.workerName = raw.workerName || raw['Worker Name'] || raw['Lineman Name'] || raw['NSC Worker Name'] || '';
+  const isDisc = raw.category === 'DISCONNECTION';
+  const isNscOrDisc = isDisc || raw.category === 'NSC';
+
+  // Map Google Sheet display headers and alternative keys to camelCase properties if missing
+  raw.consumerId = raw.consumerId || raw['Consumer Id'] || raw['Consumer ID'] || raw['Consumer Number'] || raw['Consumer No'] || '';
+  raw.consumerName = raw.consumerName || raw['Name'] || raw['Consumer Name'] || raw['Customer Name'] || '';
+  raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || (isDisc ? String(raw.consumerId || raw.taskId || '') : '');
+  raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || (isDisc ? String(raw.consumerId || raw.taskId || '') : '');
+
+  if (isDisc) {
+    raw.status = raw['Discon Status'] || raw.disconStatus || raw.taskStatus || raw.status || raw['Status'] || 'PENDING';
+  } else {
+    raw.status = raw.status || raw['Status'] || 'Completed';
+  }
+
+  raw.date = raw.date || raw['Date'] || raw['Discon Date'] || raw['Upload Date'] || raw.createdAt || '';
+  raw.createdAt = raw.createdAt || raw['Created At'] || raw['Upload Date'] || raw.date || '';
+  raw.updatedAt = raw.updatedAt || raw['Updated At'] || raw['Last Updated'] || '';
+
+  raw.workerId = '';
+  raw.workerName = cleanNameOnly(raw.workerName || raw['Worker Name'] || raw['Lineman Name'] || raw['NSC Worker Name'] || raw['Agency'] || raw.agency || '');
   raw.role = raw.role || raw['Role'] || '';
-  raw.submittedBy = raw.submittedBy || raw['Submitted By'] || raw.workerName || '';
+  raw.submittedBy = cleanNameOnly(raw.submittedBy || raw['Submitted By'] || raw.workerName || '');
   raw.workerPhone = raw.workerPhone || raw['Worker Phone'] || '';
 
-  raw.agencyName = raw.agencyName || raw['Agency Name'] || '';
-  raw.cccName = raw.cccName || raw['CCC Name'] || '';
-  raw.substation = raw.substation || raw['Substation'] || '';
-  raw.feederName = raw.feederName || raw['Feeder Name'] || '';
+  raw.agencyName = cleanNameOnly(raw.agencyName || raw['Agency Name'] || raw['Agency'] || raw.agency || '');
+  raw.cccName = raw.cccName || raw['CCC Name'] || raw['MRU'] || raw.mru || '';
+  raw.substation = isNscOrDisc ? '' : (raw.substation || raw['Substation'] || '');
+  raw.feederName = isNscOrDisc ? '' : (raw.feederName || raw['Feeder Name'] || '');
 
   raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
   raw.workOrderDate = raw.workOrderDate || raw['Work Order Date'] || '';
@@ -40,29 +75,31 @@ export function normalizeEntry(entry: any): PowerEntry {
   raw.workOrderPhoto = raw.workOrderPhoto || raw['Work Order Photo'] || '';
 
   raw.applicationNo = raw.applicationNo || raw['Application No'] || raw['Application Number'] || '';
-  raw.consumerId = raw.consumerId || raw['Consumer ID'] || raw['Consumer Number'] || raw['Consumer No'] || '';
-  raw.consumerName = raw.consumerName || raw['Consumer Name'] || raw['Customer Name'] || '';
   raw.fatherName = raw.fatherName || raw['Father Name'] || raw['Father / Husband Name'] || '';
-  raw.mobile = raw.mobile || raw['Mobile No'] || raw['Mobile'] || '';
-  raw.address = raw.address || raw['Address'] || '';
+  raw.mobile = raw.mobile || raw['Mobile Number'] || raw['Mobile No'] || raw['Mobile'] || raw.phoneNumber || '';
+  raw.address = raw.address || raw['Address'] || raw.consumerAddress || '';
 
   raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
-  raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || '';
-  raw.tariffCategory = raw.tariffCategory || raw['Tariff Category'] || '';
+  raw.phase = raw.phase || raw['Device'] || raw['BClass/Phase'] || raw['Supply Phase'] || raw['Phase'] || raw.deviceType || '';
+  raw.tariffCategory = raw.tariffCategory || raw['Base Class'] || raw['Class'] || raw['Tariff Category'] || raw.baseClass || '';
   raw.serviceCableLength = raw.serviceCableLength || raw['Service Cable Length'] || '';
-  raw.poleNo = raw.poleNo || raw['Pole No'] || '';
+  raw.poleNo = raw.poleNo || raw['Pole No'] || raw['Gis Pole'] || raw.gisPole || '';
   raw.earthResistance = raw.earthResistance || raw['Earth Resistance'] || '';
 
-  raw.meterNo = raw.meterNo || raw['Meter No'] || raw['Meter Number'] || '';
+  raw.meterNo = raw.meterNo || raw['Number'] || raw['Meter'] || raw['Meter No'] || raw['Meter Number'] || raw.meterNumber || '';
   raw.meterMake = raw.meterMake || raw['Meter Make'] || '';
-  raw.initialReading = raw.initialReading || raw['Initial Reading'] || '';
+  raw.initialReading = raw.initialReading || raw['Initial Reading'] || raw['Reading'] || raw.reading || '';
   raw.sealNo = raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
   raw.meterInstallDate = raw.meterInstallDate || raw['Meter Install Date'] || '';
   raw.inspectionAgencyName = raw.inspectionAgencyName || raw['Inspection Agency Name'] || '';
 
+  raw.arrearAmount = raw.arrearAmount || raw['D2 Net O/S'] || raw['Arrear Amount'] || raw.outstandingDue || '';
+  raw.dueDateRange = raw.dueDateRange || raw['O/S Duedate Range'] || raw['O/S Due date Range'] || '';
+  raw.govStatus = raw.govStatus || raw['Gov/Non-Gov'] || '';
+
   raw.locationGps = raw.locationGps || raw['GPS Location'] || raw['Location GPS'] || '';
-  raw.photoUrl = raw.photoUrl || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
-  raw.notes = raw.notes || raw['Notes'] || '';
+  raw.photoUrl = raw.photoUrl || raw['Image'] || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
+  raw.notes = raw.notes || raw['Notes'] || raw.workerRemarks || '';
 
   const cName = String(raw.consumerName || '').trim();
   const cId = String(raw.consumerId || '').trim();
@@ -74,20 +111,14 @@ export function normalizeEntry(entry: any): PowerEntry {
   const notesVal = String(raw.notes || '').trim();
   const updatedVal = String(raw.updatedAt || '').trim();
 
-  // Signature of shifted Google Sheet row:
-  // When an older GAS version appended [id, cat, status, date, createdAt, workerName, workerPhone, substation, feederName, consumerId, consumerName, fatherName, applicationNo, meterNo, sealNo, initialReading, address, workOrderNo, locationGps, notes, updatedAt]
-  // against sheet headers [id, cat, status, date, createdAt, workerName, substation, feederName, consumerId, consumerName, meterNo, sealNo, initialReading, finalReading, address, workOrderNo, locationGps, photoUrl, notes, updatedAt]:
   const isShifted =
-    // Pattern 1: consumerName has 'CON...' or numeric ID, and meterNo has a name with spaces or Bengali/letters
-    (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
-    // Pattern 2: initialReading starts with 'APP' or looks like an application number
-    (initR && /^APP/i.test(initR)) ||
-    // Pattern 3: substation contains a phone number (10 digits)
-    (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
-    // Pattern 4: consumerId contains feeder identifiers
-    (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
-    // Pattern 5: feederName looks like a substation name
-    (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11') || fName.toLowerCase().includes('132/33')));
+    !isDisc && (
+      (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
+      (initR && /^APP/i.test(initR)) ||
+      (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
+      (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
+      (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11') || fName.toLowerCase().includes('132/33')))
+    );
 
   let normalized: PowerEntry;
 
@@ -166,7 +197,8 @@ export function normalizeEntry(entry: any): PowerEntry {
 
 /**
  * Strict Deduplication Guard:
- * Ensures that 1 worker submission = exactly 1 entry shown to Admin & Worker.
+ * Ensures that 1 worker submission / consumer record = exactly 1 entry shown to Admin & Worker,
+ * and filters out any deleted records.
  */
 export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
   if (!Array.isArray(entries)) return [];
@@ -177,6 +209,13 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
   for (const raw of entries) {
     if (!raw) continue;
     const item = normalizeEntry(raw);
+
+    // Filter out any deleted records
+    const stUpper = String(item.status || (item as any).disconStatus || (item as any)['Discon Status'] || '').trim().toUpperCase();
+    const notesStr = String(item.notes || (item as any)['Notes'] || '').trim();
+    if (stUpper === 'DELETED' || notesStr.includes('[DELETED_BY_ADMIN]')) {
+      continue;
+    }
 
     // Skip empty ghost rows (records where no real form data was provided)
     const hasMeaningfulData = Boolean(
@@ -203,12 +242,16 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
     const appNo = String(item.applicationNo || '').trim().toLowerCase();
 
     let primaryKey = '';
-    if (subId && subId.startsWith('SUB-')) {
+    if (catVal === 'DISCONNECTION' && consVal) {
+      primaryKey = `DISC:${consVal}`;
+    } else if (subId && subId.startsWith('SUB-')) {
       primaryKey = `SUB:${subId}`;
     } else if (idVal && idVal.startsWith('PWR-')) {
       primaryKey = `ID:${idVal}`;
     } else if (consVal && meterVal) {
       primaryKey = `DATA:${catVal}:${consVal}:${meterVal}`;
+    } else if (consVal) {
+      primaryKey = `CONS:${catVal}:${consVal}`;
     } else if (appNo) {
       primaryKey = `APP:${catVal}:${appNo}`;
     } else {

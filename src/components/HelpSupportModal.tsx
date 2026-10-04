@@ -22,6 +22,7 @@ import {
 import { UserSession, ChatMessage } from '../types';
 import { fetchChatMessages, sendChatMessage, clearChatMessages } from '../services/api';
 import { Language, translations } from '../utils/translations';
+import { formatDateDDMMYYYY, formatTime12Hour, formatDateTime12Hour } from '../utils/dateTimeFormat';
 
 interface HelpSupportModalProps {
   isOpen: boolean;
@@ -115,7 +116,7 @@ export const HelpSupportModal: React.FC<HelpSupportModalProps> = ({
     e.preventDefault();
     const subject = encodeURIComponent(emailSubject || `[WBSEDCL POWER App Support] - User: ${currentUser?.name || ''} (ID: ${currentUser?.idNo || ''})`);
     const body = encodeURIComponent(
-      `${emailBody}\n\n-------------------------\nUser Details:\nName: ${currentUser?.name || ''}\nUser ID: ${currentUser?.idNo || ''}\nRole: ${currentUser?.role || ''}\nPhone: ${currentUser?.phone || ''}\nTime: ${new Date().toLocaleString()}`
+      `${emailBody}\n\n-------------------------\nUser Details:\nName: ${currentUser?.name || ''}\nUser ID: ${currentUser?.idNo || ''}\nRole: ${currentUser?.role || ''}\nPhone: ${currentUser?.phone || ''}\nTime: ${formatDateTime12Hour(new Date())}`
     );
     window.location.href = `mailto:${supportEmail}?subject=${subject}&body=${body}`;
   };
@@ -282,8 +283,8 @@ export const HelpSupportModal: React.FC<HelpSupportModalProps> = ({
                         </span>
                       )}
                       <span>•</span>
-                      <span>
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      <span className="font-mono">
+                        {formatDateDDMMYYYY(msg.timestamp)} {formatTime12Hour(msg.timestamp)}
                       </span>
                     </div>
 

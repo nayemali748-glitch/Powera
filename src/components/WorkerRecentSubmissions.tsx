@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { PowerEntry, UserSession } from '../types';
 import { Language, translations } from '../utils/translations';
+import { formatDateDDMMYYYY, formatTime12Hour } from '../utils/dateTimeFormat';
+import { cleanNameOnly } from '../utils/entryNormalizer';
 
 interface WorkerRecentSubmissionsProps {
   entries: PowerEntry[];
@@ -71,7 +73,7 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                  {currentUser.name}
+                  {cleanNameOnly(currentUser.name)}
                 </h3>
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                   currentUser.role === 'admin' 
@@ -83,8 +85,6 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
               </div>
               <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
                 <span>{currentUser.designation || 'WBSEDCL Field Operator'}</span>
-                {currentUser.phone && <span>• {currentUser.phone}</span>}
-                {currentUser.badgeNo && <span className="font-mono">({currentUser.badgeNo})</span>}
               </p>
             </div>
           </div>
@@ -203,14 +203,20 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
                     {item.consumerName || item.dtrName || item.poleNo || 'WBSEDCL Field Operation'}
                   </h3>
                   <p className="text-xs text-slate-500 line-clamp-1">
-                    {item.address || item.feederName || item.issueType || item.notes || 'No extra remarks'}
+                    {item.address || (!isNsc && !isDisc ? item.feederName : '') || item.issueType || item.notes || 'No extra remarks'}
                   </p>
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-500 mt-1">
+                    <Clock className="w-3 h-3 text-amber-600" />
+                    <span>{formatDateDDMMYYYY(item.date)}</span>
+                    <span>•</span>
+                    <span className="text-blue-600">{formatTime12Hour(item.date)}</span>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-200">
                   <div className="flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{item.workerName}</span>
+                    <span>{cleanNameOnly(item.workerName)}</span>
                     <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded font-bold ml-1 flex items-center gap-1">
                       <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
                       এডমিনে সিঙ্কড

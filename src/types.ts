@@ -306,6 +306,10 @@ export interface DisconnectionTask {
   latitude?: string;
   longitude?: string;
   statusHistory?: any[] | string;
+  reissueRequested?: boolean;
+  reissueRequestedBy?: string;
+  reissueRequestedAt?: string;
+  reissueApproved?: boolean;
 }
 
 export interface WorkerPerformanceStat {
