@@ -119,14 +119,14 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [classFilter, setClassFilter] = useState<ConnectionClassFilterType>('ALL');
   const [agencyFilter, setAgencyFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'SERIAL_ASC' | 'DUE_DESC' | 'DUE_ASC' | 'NAME_ASC' | 'URGENT_FIRST' | 'NEWEST'>('SERIAL_ASC');
-  const [workerOnlyFilter, setWorkerOnlyFilter] = useState<boolean>(!isAdmin);
+  const [workerOnlyFilter, setWorkerOnlyFilter] = useState<boolean>(false);
   const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
 
   // Update Status Modal
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
-  // Fast Non-Blocking Data Fetch & Background Sync (Preserves stable card order so consumer list never jumps)
+  // Fast Non-Blocking Data Fetch & Background Sync (Preserves canonical Consumer ID order & serial numbers across Admin and Worker)
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
@@ -137,61 +137,27 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       const discResult = await fetchDisconnectionTasks({
         role: currentUser?.role,
         workerId: currentUser?.idNo,
-        workerName: currentUser?.name
+        workerName: currentUser?.name,
+        refresh: showRefreshingSpinner
       });
 
       if (discResult && Array.isArray(discResult.tasks)) {
-        const cleanIncoming = discResult.tasks.filter(isValidDisconnectionTaskOrRow);
+        const cleanIncoming = discResult.tasks
+          .filter(isValidDisconnectionTaskOrRow)
+          .map((item, idx) => ({
+            ...item,
+            serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+          }));
+
         setTasks(prev => {
-          const cleanPrev = prev.filter(isValidDisconnectionTaskOrRow);
-          const incomingList = cleanIncoming;
-          if (cleanPrev.length === 0) {
-            setCachedDisconnectionTasksSync(incomingList);
-            return incomingList;
-          }
-
-          // Preserve existing visual order for already-rendered consumers so cards never jump around
-          const incomingMap = new Map<string, DisconnectionTask>();
-          incomingList.forEach(item => {
-            const key = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '').trim().toLowerCase();
-            if (key) incomingMap.set(key, item);
-          });
-
-          const nextOrdered: DisconnectionTask[] = [];
-          const visitedKeys = new Set<string>();
-
-          for (const oldItem of cleanPrev) {
-            const key = String(oldItem.consumerId || (oldItem as any)['Consumer Id'] || oldItem.taskId || '').trim().toLowerCase();
-            if (key && incomingMap.has(key)) {
-              const updated = incomingMap.get(key)!;
-              visitedKeys.add(key);
-              nextOrdered.push({
-                ...updated,
-                serialNumber: oldItem.serialNumber || updated.serialNumber
-              });
-            }
-          }
-
-          // Append any newly added consumers at the end
-          for (const newItem of incomingList) {
-            const key = String(newItem.consumerId || (newItem as any)['Consumer Id'] || newItem.taskId || '').trim().toLowerCase();
-            if (key && !visitedKeys.has(key)) {
-              visitedKeys.add(key);
-              nextOrdered.push({
-                ...newItem,
-                serialNumber: `SL ${String(nextOrdered.length + 1).padStart(3, '0')}`
-              });
-            }
-          }
-
-          // Only trigger a React state update if data actually changed
           const hasChanged =
-            nextOrdered.length !== prev.length ||
-            nextOrdered.some((item, idx) => {
+            cleanIncoming.length !== prev.length ||
+            cleanIncoming.some((item, idx) => {
               const p = prev[idx];
               if (!p) return true;
               return (
                 item.consumerId !== p.consumerId ||
+                item.serialNumber !== p.serialNumber ||
                 item.taskStatus !== p.taskStatus ||
                 item.disconStatus !== p.disconStatus ||
                 item.workerRemarks !== p.workerRemarks ||
@@ -208,11 +174,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             return prev;
           }
 
-          setCachedDisconnectionTasksSync(nextOrdered);
-          return nextOrdered;
+          setCachedDisconnectionTasksSync(cleanIncoming);
+          return cleanIncoming;
         });
 
-        if (onTasksChange) onTasksChange(discResult.tasks.length);
+        if (onTasksChange) onTasksChange(cleanIncoming.length);
         if (discResult.stats) {
           setStats(discResult.stats);
         }

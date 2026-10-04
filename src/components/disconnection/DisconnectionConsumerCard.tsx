@@ -273,6 +273,11 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
       <div className="flex items-start justify-between gap-2.5 min-w-0">
         <div className="space-y-1.5 min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap min-w-0">
+            {task.serialNumber && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-extrabold tracking-wider shrink-0">
+                {task.serialNumber}
+              </span>
+            )}
             <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight uppercase break-words">
               {task.consumerName || (task as any)['Name'] || (task as any)['Consumer Name'] || ''}
             </h3>
@@ -284,12 +289,24 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             )}
           </div>
 
-          {/* 2. Consumer ID row + Live indicator */}
+          {/* 2. Consumer ID row + MRU/Class + Live indicator */}
           <div className="flex items-center gap-2 text-xs sm:text-sm flex-wrap">
             <div className="flex items-center gap-1 font-bold">
               <span className="text-slate-500">ID:</span>
               <span className="text-slate-800 tracking-wide">{displayId}</span>
             </div>
+
+            {(task.mru || (task as any)['MRU'] || task.mruSection) && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-semibold text-[11px]">
+                MRU: {task.mru || (task as any)['MRU'] || task.mruSection}
+              </span>
+            )}
+
+            {(task.baseClass || (task as any)['Base Class'] || (task as any)['Class']) && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[11px]">
+                {task.baseClass || (task as any)['Base Class'] || (task as any)['Class']}
+              </span>
+            )}
 
             {/* Live indicator with lightning bolt */}
             <span className="inline-flex items-center gap-1 text-blue-500 font-semibold text-xs">

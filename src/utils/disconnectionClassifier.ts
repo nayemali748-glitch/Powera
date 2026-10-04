@@ -288,16 +288,15 @@ export function cleanWorkerOrAgencyName(rawName?: string): string {
 export function cleanDisconnectionNotes(rawNotes?: string): string {
   if (!rawNotes) return '';
   return String(rawNotes)
+    .replace(/\[DELETED_BY_ADMIN\]/gi, '')
     .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
     .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
     .trim();
 }
 
 /**
- * Evaluates whether a Disconnection task is locked for further status updates by a Worker,
- * or if a Re-issue Request is pending / approved by Admin.
- * Rule: Workers can only update status ONCE. To update again, they must request a Re-issue,
- * which appears as an SMS-like alert in the Admin Panel for Admin to re-issue.
+ * Evaluates whether a Disconnection task has a Re-issue Request pending / approved by Admin.
+ * Workers, Supervisors, and Admins can update status and remarks on any consumer record.
  */
 export function getReissueLockState(task: DisconnectionTask): {
   isUpdatedOnce: boolean;
@@ -326,7 +325,6 @@ export function getReissueLockState(task: DisconnectionTask): {
     rawStatus === 'REISSUE'
   );
 
-  // A task has been updated once if its status is no longer PENDING / CONNECTED / empty
   const isInitialPending =
     rawStatus === '' ||
     rawStatus === 'PENDING' ||
@@ -334,9 +332,7 @@ export function getReissueLockState(task: DisconnectionTask): {
     rawStatus === 'IN PROGRESS';
 
   const isUpdatedOnce = !isInitialPending;
-
-  // Locked for worker if already updated once AND not currently approved/reissued by Admin
-  const isLockedForWorker = isUpdatedOnce && !isReissueApproved;
+  const isLockedForWorker = false;
 
   const requestedBy = cleanWorkerOrAgencyName(
     task.reissueRequestedBy ||

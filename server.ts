@@ -1588,8 +1588,7 @@ function saveEntriesOverlayToDisk() {
 function isRecordDeleted(item: any): boolean {
   if (!item || typeof item !== 'object') return false;
   const st = String(item.status || item.disconStatus || item['Discon Status'] || item.taskStatus || '').trim().toUpperCase();
-  const notes = String(item.notes || item['Notes'] || item.workerRemarks || '').trim();
-  if (st === 'DELETED' || notes.includes('[DELETED_BY_ADMIN]')) return true;
+  if (st === 'DELETED' || st === '[DELETED_BY_ADMIN]') return true;
 
   const candidates = [
     item.id,
@@ -1668,19 +1667,30 @@ function executeSheetDeleteInBackground(cleanId: string, cleanConsumerId: string
     try {
       const res = await callGoogleAppsScript('deleteEntry', payload, 'POST', 25000);
       if (isDiscCategory && (!res || res.deleted !== true)) {
+        const targetId = cleanConsumerId || cleanId;
         try {
-          await callGoogleAppsScript('deleteDisconnectionTask', payload, 'POST', 20000);
-        } catch {}
-        try {
-          await callGoogleAppsScript('submitDisconnectionReport', {
-            consumerId: cleanConsumerId,
-            'Consumer Id': cleanConsumerId,
-            taskId: payload.taskId,
+          await callGoogleAppsScript('updateEntry', {
+            id: targetId,
+            submissionId: targetId,
+            consumerId: targetId,
+            'Consumer Id': targetId,
+            category: 'Disconnection',
+            status: 'DELETED',
             disconStatus: 'DELETED',
             'Discon Status': 'DELETED',
             notes: '[DELETED_BY_ADMIN]',
-            'Notes': '[DELETED_BY_ADMIN]'
-          }, 'POST', 20000);
+            'Notes': '[DELETED_BY_ADMIN]',
+            data: {
+              id: targetId,
+              consumerId: targetId,
+              'Consumer Id': targetId,
+              status: 'DELETED',
+              disconStatus: 'DELETED',
+              'Discon Status': 'DELETED',
+              notes: '[DELETED_BY_ADMIN]',
+              'Notes': '[DELETED_BY_ADMIN]'
+            }
+          }, 'POST', 25000);
         } catch {}
       }
       gasCache.clear();
@@ -1867,39 +1877,27 @@ function handleFastUpdateEntry(cleanId: string, bodyData: any): any {
   enqueueGasWrite(async () => {
     try {
       const upRes = await callGoogleAppsScript('updateEntry', { ...payload, data: payload }, 'POST', 35000);
-      if (!upRes || upRes.success === false) {
-        if (isDisc) {
-          await callGoogleAppsScript('createEntry', { ...payload, data: payload }, 'POST', 35000);
+      const isNotFound = upRes && upRes.success === false && String(upRes.error || '').toLowerCase().includes('not found');
+      if (isNotFound && isDisc) {
+        await callGoogleAppsScript('createEntry', { ...payload, data: payload }, 'POST', 35000);
+      }
+      if ((upRes && upRes.success !== false) || isNotFound) {
+        const ov = localEntriesOverlayMap.get(key);
+        if (ov) {
+          ov._syncedToSheet = true;
+          saveEntriesOverlayToDisk();
         }
-      }
-      const ov = localEntriesOverlayMap.get(key);
-      if (ov) {
-        ov._syncedToSheet = true;
-        saveEntriesOverlayToDisk();
-      }
-      if (isDisc && bareKey) {
-        const dOv = localDisconnectionOverlayMap.get(bareKey);
-        if (dOv) {
-          dOv._syncedToSheet = true;
-          saveDiscOverlayToDisk();
-        }
-      }
-      gasCache.clear();
-    } catch (err) {
-      if (isDisc) {
-        try {
-          await callGoogleAppsScript('createEntry', { ...payload, data: payload }, 'POST', 35000);
+        if (isDisc && bareKey) {
           const dOv = localDisconnectionOverlayMap.get(bareKey);
           if (dOv) {
             dOv._syncedToSheet = true;
             saveDiscOverlayToDisk();
           }
-        } catch (err2) {
-          console.warn('[Background Disconnection UpdateEntry Fallback] Notice:', err2);
         }
-      } else {
-        console.warn('[Background UpdateEntry] Notice:', err);
       }
+      gasCache.clear();
+    } catch (err) {
+      console.warn('[Background UpdateEntry] Notice:', err);
     }
   });
 
@@ -3059,7 +3057,9 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const paymentStatus = String(entry['Payment Status'] || entry.paymentStatus || (status === 'PAID' ? 'PAID' : '')).trim();
   const gisPole = String(entry['Gis Pole'] || entry.gisPole || entry.poleNo || '').trim();
   const agency = String(entry['Agency'] || entry.agency || entry.assignedAgency || entry['Agency Name'] || '').trim();
-  const notes = String(entry['Notes'] || entry.notes || entry.workerRemarks || entry.workerReport || '').trim();
+  const notes = String(entry['Notes'] || entry.notes || entry.workerRemarks || entry.workerReport || '')
+    .replace(/\[DELETED_BY_ADMIN\]/gi, '')
+    .trim();
   const natureOfConn = String(entry['Nature of Conn'] || entry.natureOfConn || '').trim();
   const govNonGov = String(entry['Gov/Non-Gov'] || entry.govNonGov || entry.govStatus || '').trim();
   const lastUpdated = String(entry['Last Updated'] || entry.lastUpdated || entry.updatedAt || new Date().toISOString()).trim();
@@ -3202,10 +3202,7 @@ function isValidDisconnectionConsumerRow(e: any): boolean {
   const rawStatus = String(
     e['Discon Status'] || e.disconStatus || e.taskStatus || e.status || e['Status'] || ''
   ).trim().toUpperCase();
-  const rawNotes = String(
-    e['Notes'] || e.notes || e.workerRemarks || e.workerReport || e['Remarks'] || ''
-  ).trim();
-  if (rawStatus === 'DELETED' || rawStatus === '[DELETED_BY_ADMIN]' || rawNotes.includes('[DELETED_BY_ADMIN]')) {
+  if (rawStatus === 'DELETED' || rawStatus === '[DELETED_BY_ADMIN]') {
     return false;
   }
 
@@ -3295,8 +3292,9 @@ function clearDisconnectionStateCache() {
 
 function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
   const mergedMap = new Map<string, any>();
+  const now = Date.now();
 
-  // 1. Always iterate sheetTasks FIRST so the Map insertion order strictly matches the Google Sheet order
+  // 1. Always iterate sheetTasks FIRST so Google Sheets 'Disconnection' tab is the Single Source of Truth
   for (const t of sheetTasks) {
     if (isRecordDeleted(t) || !isValidDisconnectionConsumerRow(t)) continue;
     const key = String(t.consumerId || t['Consumer Id'] || t.taskId || '').trim().toLowerCase();
@@ -3304,13 +3302,8 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
     const ov = localDisconnectionOverlayMap.get(key);
     if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
-      const hasOverlayRemarkOrStatus = Boolean(
-        ov._hasUserRemarkUpdate ||
-        (ov.workerRemarks && String(ov.workerRemarks).trim() !== '') ||
-        (ov.notes && String(ov.notes).trim() !== '') ||
-        (ov.taskStatus && String(ov.taskStatus).toUpperCase() !== 'PENDING')
-      );
-      if (hasOverlayRemarkOrStatus || !ov._syncedToSheet) {
+      const isPendingSync = !ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000);
+      if (isPendingSync) {
         mergedMap.set(key, {
           ...t,
           ...ov,
@@ -3322,18 +3315,21 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
           'D2 Net O/S': ov['D2 Net O/S'] || ov.outstandingDue || t['D2 Net O/S'] || t.outstandingDue || '',
         });
       } else {
-        mergedMap.set(key, { ...ov, ...t });
+        mergedMap.set(key, t);
       }
     } else {
       mergedMap.set(key, t);
     }
   }
 
-  // 2. Append any newly uploaded overlay items that are not yet present in sheetTasks
+  // 2. Only include overlay items not yet in sheetTasks if they were just uploaded/created within the last 3 minutes and are still syncing
   for (const [key, ov] of localDisconnectionOverlayMap.entries()) {
     if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
     if (!mergedMap.has(key)) {
-      mergedMap.set(key, ov);
+      const isRecentlyUploaded = !ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000);
+      if (isRecentlyUploaded) {
+        mergedMap.set(key, ov);
+      }
     }
   }
 
@@ -3359,17 +3355,31 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
   const cId = String(full33.consumerId || full33['Consumer Id'] || '').trim();
   if (!cId) return false;
 
+  // Send a single space for Notes if empty so GAS updateEntry clears any legacy cell text (like [DELETED_BY_ADMIN])
+  const gasPayload = {
+    ...full33,
+    'Notes': full33['Notes'] || ' ',
+    notes: full33.notes || ' '
+  };
+
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
-      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...full33, data: full33 },
+      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
       'POST',
       35000
     );
-    if (upRes && upRes.success) {
+    if (upRes && upRes.success === true) {
       return true;
     }
-  } catch {}
+    const errText = String(upRes?.error || upRes?.message || '').toLowerCase();
+    if (!errText.includes('not found')) {
+      return false;
+    }
+  } catch (err) {
+    console.warn(`[Disconnection Sheet Sync] updateEntry transient notice for ${cId}:`, err);
+    return false;
+  }
 
   try {
     const crRes = await callGoogleAppsScript(
@@ -3382,7 +3392,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
       return true;
     }
   } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] Retry pending for Consumer ${cId}:`, err);
+    console.warn(`[Disconnection Sheet Sync] createEntry retry pending for Consumer ${cId}:`, err);
   }
   return false;
 }
@@ -3395,64 +3405,69 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
 
   const rawEntries = entriesRes && (Array.isArray(entriesRes.entries) ? entriesRes.entries : (Array.isArray(entriesRes) ? entriesRes : []));
 
-  // Automatically purge any bogus/demo Disconnection rows found in the Google Sheet
-  for (const rawRow of rawEntries) {
-    const cat = String(rawRow?.category || rawRow?.Category || '').toUpperCase().trim();
-    const isDiscCat = cat === 'DISCONNECTION' || cat === 'DISCONNECT';
-    if (isDiscCat && !isRecordDeleted(rawRow) && !isValidDisconnectionConsumerRow(rawRow)) {
-      const badId = String(rawRow.id || rawRow.submissionId || rawRow['Consumer Id'] || rawRow.consumerId || '').trim();
-      if (badId && !purgedBogusSheetRowIds.has(badId)) {
-        purgedBogusSheetRowIds.add(badId);
-        enqueueGasWrite(async () => {
-          try {
-            await callGoogleAppsScript('deleteEntry', { id: badId, submissionId: badId, category: 'Disconnection', confirmCritical: true }, 'POST', 20000);
-          } catch {}
-        });
-      }
+  // 1. Group by canonical FIRST row per Consumer ID in the sheet (matching GAS updateEntry rows.find behavior)
+  const canonicalByConsumerMap = new Map<string, any>();
+  for (const e of rawEntries) {
+    const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim().toLowerCase();
+    if (!cId) continue;
+    if (!canonicalByConsumerMap.has(cId)) {
+      canonicalByConsumerMap.set(cId, e);
     }
   }
 
-  const discEntries = rawEntries.filter((e: any) => {
-    if (isRecordDeleted(e)) return false;
-    if (!isValidDisconnectionConsumerRow(e)) return false;
-    const cat = String(e.category || '').toUpperCase().trim();
-    const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
-    const hasCoreDisc = Boolean(
-      (e['Consumer Id'] || e.consumerId) && (
-        e['D2 Net O/S'] || e.d2NetOs || e['O/S Duedate Range'] || e.disconStatus || e['Discon Status'] || e.off_code || e.mru || e['MRU'] || e['Name'] || e.consumerName
-      )
-    );
-    return isDiscCat || hasCoreDisc;
-  });
-
-  const seenConsumers = new Set<string>();
-  const deduplicatedEntries: any[] = [];
-  for (const e of discEntries) {
-    const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim().toLowerCase();
-    if (cId) {
-      if (seenConsumers.has(cId)) continue;
-      seenConsumers.add(cId);
-    }
-    deduplicatedEntries.push(e);
+  // 2. Filter to active, valid Disconnection consumer rows
+  const activeEntries: any[] = [];
+  for (const [cId, e] of canonicalByConsumerMap.entries()) {
+    const st = String(e.status || e.disconStatus || e['Discon Status'] || e.taskStatus || '').trim().toUpperCase();
+    if (st === 'DELETED' || st === '[DELETED_BY_ADMIN]') continue;
+    if (deletedTombstoneSet.has(cId) || deletedTombstoneSet.has(`task-disc-${cId}`)) continue;
+    if (!isValidDisconnectionConsumerRow(e)) continue;
+    activeEntries.push(e);
   }
 
   let idx = 1;
-  const sheetTasks = deduplicatedEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
+  const sheetTasks = activeEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
 
-  // If any overlay item is already present in sheetTasks with matching status & notes, mark it synced
+  // Reconcile local overlay with Google Sheet Source of Truth
   const sheetConsumerIds = new Set(sheetTasks.map((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase()));
-  for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
-    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
-    if (!ov._syncedToSheet || !sheetConsumerIds.has(k)) {
-      enqueueGasWrite(async () => {
-        const ok = await syncSingleDisconnectionRowToSheet(ov);
-        if (ok) {
-          ov._syncedToSheet = true;
-          saveDiscOverlayToDisk();
-        }
-      });
+  let overlayChanged = false;
+  const now = Date.now();
+  for (const [k, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
+    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) {
+      localDisconnectionOverlayMap.delete(k);
+      overlayChanged = true;
+      continue;
+    }
+    if (sheetConsumerIds.has(k)) {
+      if (!ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000)) {
+        enqueueGasWrite(async () => {
+          const ok = await syncSingleDisconnectionRowToSheet(ov);
+          if (ok) {
+            ov._syncedToSheet = true;
+            saveDiscOverlayToDisk();
+          }
+        });
+      } else if (ov._syncedToSheet) {
+        localDisconnectionOverlayMap.delete(k);
+        overlayChanged = true;
+      }
+    } else {
+      // Not in Google Sheet: only sync if it was freshly uploaded within the last 3 minutes; otherwise prune stale overlay
+      if (!ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000)) {
+        enqueueGasWrite(async () => {
+          const ok = await syncSingleDisconnectionRowToSheet(ov);
+          if (ok) {
+            ov._syncedToSheet = true;
+            saveDiscOverlayToDisk();
+          }
+        });
+      } else {
+        localDisconnectionOverlayMap.delete(k);
+        overlayChanged = true;
+      }
     }
   }
+  if (overlayChanged) saveDiscOverlayToDisk();
 
   const merged = mergeSheetDisconnectionTasksWithOverlay(sheetTasks);
   cachedDisconnectionState = { tasks: merged, timestamp: Date.now() };
@@ -3491,34 +3506,26 @@ setInterval(() => {
 app.get('/api/disconnection-tasks', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const query = req.query;
-  const role = String(query.role || '').toLowerCase();
   const workerId = String(query.workerId || '').toLowerCase().trim();
   const workerName = String(query.workerName || '').toLowerCase().trim();
   const forceRefresh = query.refresh === 'true' || query.force === 'true';
 
   const applyFilterAndStats = (allTasks: any[]) => {
     const cleanList = mergeSheetDisconnectionTasksWithOverlay(allTasks);
-    let filtered = cleanList;
-    if (role === 'worker' && (workerId || workerName)) {
-      filtered = cleanList.filter(t => {
-        const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
-        const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-        return (!aId && !aNm) || (workerId && aId === workerId) || (workerName && aNm === workerName);
-      });
-    }
-    const stats = computeLocalStats(filtered, workerId, workerName);
-    return { success: true, tasks: filtered, stats };
+    const stats = computeLocalStats(cleanList, workerId, workerName);
+    return { success: true, tasks: cleanList, stats };
   };
 
-  if (cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0) {
+  if (!forceRefresh && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
     const age = Date.now() - cachedDisconnectionState.timestamp;
-    if (forceRefresh || age > 45000) {
+    if (age > 45000) {
       refreshDisconnectionFromSheetInBackground();
     }
     return res.json(applyFilterAndStats(cachedDisconnectionState.tasks));
   }
 
   try {
+    gasCache.clear();
     const tasks = await fetchDisconnectionTasksFromGoogleSheet();
     return res.json(applyFilterAndStats(tasks));
   } catch (err: any) {
@@ -3542,7 +3549,9 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
   const mobile = String(t['Mobile'] || t['Mobile Number'] || t.phoneNumber || t.mobile || '').trim();
   const numberVal = String(t['Number'] || t.number || t['Meter'] || t.meterNumber || t.meterNo || '').trim();
   const status = String(t['Discon Status'] || t.taskStatus || t.disconStatus || t.status || 'PENDING').trim().toUpperCase();
-  const notes = String(t['Notes'] || t.notes || t.workerRemarks || t.workerReport || '').trim();
+  const notes = String(t['Notes'] || t.notes || t.workerRemarks || t.workerReport || '')
+    .replace(/\[DELETED_BY_ADMIN\]/gi, '')
+    .trim();
   const disconDate = String(t['Discon Date'] || t.disconDate || t.reportDate || '').trim();
   const reading = String(t['Reading'] || t.reading || t.meterReading || '').trim();
   const image = String(t['Image'] || t.image || t.photoUrl || '').trim();

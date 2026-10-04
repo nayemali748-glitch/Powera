@@ -1730,7 +1730,6 @@ export function isValidDisconnectionTaskOrRow(r: any): boolean {
   if (
     rawSt === 'DELETED' ||
     rawSt === '[DELETED_BY_ADMIN]' ||
-    rawNotes.includes('[DELETED_BY_ADMIN]') ||
     r._deleted === true
   ) {
     return false;
@@ -1828,9 +1827,16 @@ export function cleanDisconnectionTask(t: any): DisconnectionTask {
     const m = text.match(/(?:^|\D)([6-9]\d{9})(?:\D|$)/);
     if (m && m[1]) phone = m[1];
   }
+  const cleanRemarks = String(t.workerRemarks || t.workerReport || t.notes || t['Notes'] || '')
+    .replace(/\[DELETED_BY_ADMIN\]/gi, '')
+    .trim();
   return {
     ...t,
-    phoneNumber: phone || t.phoneNumber || ''
+    phoneNumber: phone || t.phoneNumber || '',
+    workerRemarks: cleanRemarks,
+    workerReport: cleanRemarks,
+    notes: cleanRemarks,
+    Notes: cleanRemarks
   };
 }
 
@@ -1841,6 +1847,7 @@ export async function fetchDisconnectionTasks(params: {
   search?: string;
   status?: string;
   includeArchived?: boolean;
+  refresh?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
   // Step 1: Call Backend API (/api/disconnection-tasks) with fast server-side memory cache (<10ms)
   try {
@@ -1851,6 +1858,7 @@ export async function fetchDisconnectionTasks(params: {
     if (params.search) query.set('search', params.search);
     if (params.status) query.set('status', params.status);
     if (params.includeArchived) query.set('includeArchived', 'true');
+    if (params.refresh) query.set('refresh', 'true');
 
     const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, {
       headers: { 'Accept': 'application/json' }
@@ -1877,8 +1885,16 @@ export async function fetchDisconnectionTasks(params: {
   try {
     const rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'Disconnection' }, 'GET');
     const rawEntries = rawRes && (Array.isArray(rawRes.entries) ? rawRes.entries : (Array.isArray(rawRes) ? rawRes : []));
-    if (rawEntries && rawEntries.length > 0) {
-      const discEntries = rawEntries.filter((e: any) => {
+    if (rawEntries && Array.isArray(rawEntries)) {
+      const canonicalByConsumer = new Map<string, any>();
+      for (const e of rawEntries) {
+        const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim().toLowerCase();
+        if (!cId) continue;
+        if (!canonicalByConsumer.has(cId)) {
+          canonicalByConsumer.set(cId, e);
+        }
+      }
+      const discEntries = Array.from(canonicalByConsumer.values()).filter((e: any) => {
         if (!isValidDisconnectionTaskOrRow(e)) return false;
         const cat = String(e.category || e.Category || e._sheet || '').toUpperCase().trim();
         const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
@@ -1886,12 +1902,12 @@ export async function fetchDisconnectionTasks(params: {
         return isDiscCat || isCoreDisc;
       });
 
-      if (discEntries.length > 0) {
-        const sortedDiscEntries = [...discEntries].sort((a, b) => {
-          const idA = String(a['Consumer Id'] || a['Consumer ID'] || a.consumerId || a.accountNumber || '').trim();
-          const idB = String(b['Consumer Id'] || b['Consumer ID'] || b.consumerId || b.accountNumber || '').trim();
-          return idA.localeCompare(idB, undefined, { numeric: true });
-        });
+      const sortedDiscEntries = [...discEntries].sort((a, b) => {
+        const idA = String(a['Consumer Id'] || a['Consumer ID'] || a.consumerId || a.accountNumber || '').trim();
+        const idB = String(b['Consumer Id'] || b['Consumer ID'] || b.consumerId || b.accountNumber || '').trim();
+        return idA.localeCompare(idB, undefined, { numeric: true });
+      });
+      if (true) {
         const mappedTasks: DisconnectionTask[] = sortedDiscEntries.map((e, idx) => {
           const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
           const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
@@ -1967,16 +1983,6 @@ export async function fetchDisconnectionTasks(params: {
         });
 
         let filtered = mappedTasks;
-        const role = String(params.role || '').toLowerCase();
-        const workerId = String(params.workerId || '').toLowerCase().trim();
-        const workerName = String(params.workerName || '').toLowerCase().trim();
-        if (role === 'worker' && (workerId || workerName)) {
-          filtered = filtered.filter(t => {
-            const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
-            const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-            return (!aId && !aNm) || (workerId && aId === workerId) || (workerName && aNm === workerName);
-          });
-        }
         if (params.status && params.status !== 'ALL') {
           const filterSt = params.status.toUpperCase().trim();
           filtered = filtered.filter(t => String(t.taskStatus).toUpperCase() === filterSt);

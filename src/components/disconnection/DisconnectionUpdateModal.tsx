@@ -177,6 +177,13 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   })();
 
   // 6 Exact Status options matching IMG_6112.png
+  const isAdminOrSupervisor =
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'superadmin' ||
+    currentUser?.role === 'supervisor' ||
+    currentUser?.idNo === 'ADMIN' ||
+    currentUser?.idNo === '8695716192';
+
   const statusButtons: {
     status: DisconnectionTaskStatus;
     label: string;
@@ -194,28 +201,20 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       selectedText: 'text-rose-700'
     },
     {
-      status: 'DISPUTE',
-      label: 'DISPUTE',
-      icon: AlertCircle,
-      selectedBorder: 'border-2 border-amber-500',
-      selectedBg: 'bg-amber-50/50',
-      selectedText: 'text-amber-700'
-    },
-    {
-      status: 'OFFICE TEAM',
-      label: 'OFFICE TEAM',
-      icon: Clock,
-      selectedBorder: 'border-2 border-indigo-500',
-      selectedBg: 'bg-indigo-50/50',
-      selectedText: 'text-indigo-700'
-    },
-    {
       status: 'PAID',
       label: 'PAID',
       icon: Check,
       selectedBorder: 'border-2 border-emerald-500',
       selectedBg: 'bg-emerald-50/50',
       selectedText: 'text-emerald-700'
+    },
+    {
+      status: 'PENDING',
+      label: 'PENDING',
+      icon: Clock,
+      selectedBorder: 'border-2 border-amber-500',
+      selectedBg: 'bg-amber-50/50',
+      selectedText: 'text-amber-700'
     },
     {
       status: 'NOT FOUND',
@@ -226,13 +225,33 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       selectedText: 'text-slate-800'
     },
     {
-      status: 'REISSUE',
-      label: 'REISSUE',
-      icon: RefreshCw,
-      selectedBorder: 'border-2 border-purple-500',
-      selectedBg: 'bg-purple-50/50',
-      selectedText: 'text-purple-700'
-    }
+      status: 'DISPUTE',
+      label: 'DISPUTE',
+      icon: AlertCircle,
+      selectedBorder: 'border-2 border-orange-500',
+      selectedBg: 'bg-orange-50/50',
+      selectedText: 'text-orange-700'
+    },
+    {
+      status: 'OFFICE TEAM',
+      label: 'OFFICE TEAM',
+      icon: Clock,
+      selectedBorder: 'border-2 border-indigo-500',
+      selectedBg: 'bg-indigo-50/50',
+      selectedText: 'text-indigo-700'
+    },
+    ...(isAdminOrSupervisor
+      ? [
+          {
+            status: 'REISSUE' as DisconnectionTaskStatus,
+            label: 'REISSUE',
+            icon: RefreshCw,
+            selectedBorder: 'border-2 border-purple-500',
+            selectedBg: 'bg-purple-50/50',
+            selectedText: 'text-purple-700'
+          }
+        ]
+      : [])
   ];
 
   // Quick tap observation options
@@ -527,7 +546,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             <div className="grid grid-cols-2 gap-y-3.5 gap-x-4">
               <div>
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  CONSUMER ID
+                  CONSUMER ID {task.serialNumber ? `(${task.serialNumber})` : ''}
                 </span>
                 <span className="text-sm sm:text-base font-bold text-slate-900 block font-mono">
                   {task.consumerId || (task as any)['Consumer Id'] || 'N/A'}
@@ -554,7 +573,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
               <div>
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  DEVICE TYPE
+                  METER / DEVICE
                 </span>
                 <span className="text-sm sm:text-base font-bold text-slate-900 block">
                   {displayDevice}
@@ -796,56 +815,59 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
               </div>
             )}
 
-            {/* ASSIGN AGENCY */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                ASSIGN AGENCY
-              </span>
-              <div className="relative">
-                <select
-                  value={assignedAgency}
-                  onChange={e => setAssignedAgency(e.target.value)}
-                  className="w-full py-3 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                >
-                  <option value="">Select Worker / Agency</option>
-                  {availableWorkers.map((w, idx) => {
-                    const cleanW = cleanWorkerOrAgencyName(w.name);
-                    return (
-                      <option key={`${cleanW}-${idx}`} value={cleanW}>
-                        {cleanW}
-                      </option>
-                    );
-                  })}
-                  {task.assignedAgency && !availableWorkers.some(w => cleanWorkerOrAgencyName(w.name) === cleanWorkerOrAgencyName(task.assignedAgency)) && (
-                    <option value={cleanWorkerOrAgencyName(task.assignedAgency)}>{cleanWorkerOrAgencyName(task.assignedAgency)}</option>
-                  )}
-                </select>
-                <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <ChevronDown className="w-4 h-4" />
+            {/* ASSIGN AGENCY & PRIORITY (Admin / Supervisor Only) */}
+            {isAdminOrSupervisor && (
+              <>
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                    ASSIGN AGENCY
+                  </span>
+                  <div className="relative">
+                    <select
+                      value={assignedAgency}
+                      onChange={e => setAssignedAgency(e.target.value)}
+                      className="w-full py-3 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="">Select Worker / Agency</option>
+                      {availableWorkers.map((w, idx) => {
+                        const cleanW = cleanWorkerOrAgencyName(w.name);
+                        return (
+                          <option key={`${cleanW}-${idx}`} value={cleanW}>
+                            {cleanW}
+                          </option>
+                        );
+                      })}
+                      {task.assignedAgency && !availableWorkers.some(w => cleanWorkerOrAgencyName(w.name) === cleanWorkerOrAgencyName(task.assignedAgency)) && (
+                        <option value={cleanWorkerOrAgencyName(task.assignedAgency)}>{cleanWorkerOrAgencyName(task.assignedAgency)}</option>
+                      )}
+                    </select>
+                    <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                      <ChevronDown className="w-4 h-4" />
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* PRIORITY */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                PRIORITY
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsUrgent(!isUrgent)}
-                className={`w-full py-3 px-4 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                  isUrgent
-                    ? 'border-red-500 bg-red-50 text-red-700 shadow-xs'
-                    : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-800'
-                }`}
-              >
-                {isUrgent && <Flame className="w-4 h-4 text-red-500 animate-bounce" />}
-                <span>{isUrgent ? 'MARKED AS URGENT' : 'Mark as URGENT'}</span>
-              </button>
-            </div>
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                    PRIORITY
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsUrgent(!isUrgent)}
+                    className={`w-full py-3 px-4 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      isUrgent
+                        ? 'border-red-500 bg-red-50 text-red-700 shadow-xs'
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-800'
+                    }`}
+                  >
+                    {isUrgent && <Flame className="w-4 h-4 text-red-500 animate-bounce" />}
+                    <span>{isUrgent ? 'MARKED AS URGENT' : 'Mark as URGENT'}</span>
+                  </button>
+                </div>
 
-            <hr className="border-slate-100" />
+                <hr className="border-slate-100" />
+              </>
+            )}
 
             {/* EVIDENCE (AUTO-WATERMARKED) */}
             <div>
