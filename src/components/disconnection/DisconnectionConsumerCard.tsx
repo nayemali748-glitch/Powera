@@ -16,6 +16,7 @@ import {
 import { DisconnectionTask } from '../../types';
 import {
   getTaskPhase,
+  getTaskConnectionClass,
   getReissueLockState,
   cleanDisconnectionNotes,
   cleanWorkerOrAgencyName
@@ -124,8 +125,56 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   // Display Consumer ID or Serial Number or Fallback
   const displayId = task.consumerId || task.accountNumber || task.serialNumber || 'N/A';
 
-  // Device / Meter
-  const displayDevice = task.meterNumber || task.deviceType || (task as any)['device'] || (task as any)['Number'] || (task as any)['Device'] || phaseType;
+  // Device: Domestic -> D, Commercial -> C, Industrial -> I, STW -> A | 1 ph -> 1 ph, 3ph -> 3ph
+  const connClass = getTaskConnectionClass(task);
+  const classCode =
+    connClass === 'COMMERCIAL'
+      ? 'C'
+      : connClass === 'INDUSTRIAL'
+      ? 'I'
+      : connClass === 'STW'
+      ? 'A'
+      : 'D';
+  const phaseLabel = phaseType === '3PH' ? '3ph' : '1 ph';
+  const displayDevice = `${classCode} - ${phaseLabel}`;
+
+  // Meter number (shown on the right side directly above the Dustbin delete icon)
+  const displayMeter = (() => {
+    const candidates = [
+      task.meterNumber,
+      (task as any)['Number'],
+      (task as any)['Meter'],
+      (task as any).meterNo,
+      task.deviceType,
+      (task as any).device,
+      (task as any)['Device'],
+      task.meterReading,
+      (task as any)['Reading']
+    ];
+    for (const val of candidates) {
+      if (val !== undefined && val !== null) {
+        const str = String(val).trim();
+        if (
+          str &&
+          str.toUpperCase() !== 'I' &&
+          str.toUpperCase() !== 'III' &&
+          str.toUpperCase() !== '1PH' &&
+          str.toUpperCase() !== '3PH' &&
+          str.toUpperCase() !== '1 PHASE' &&
+          str.toUpperCase() !== '3 PHASE' &&
+          str.toUpperCase() !== 'D -1 PHASE' &&
+          str.toUpperCase() !== 'D -3 PHASE' &&
+          str.toLowerCase() !== 'null' &&
+          str.toLowerCase() !== 'undefined' &&
+          str.toLowerCase() !== 'n/a' &&
+          str !== '-'
+        ) {
+          return str;
+        }
+      }
+    }
+    return 'N/A';
+  })();
 
   // Reliable phone number extractor
   const displayPhone = (() => {
@@ -326,15 +375,17 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
         )}
       </div>
 
-      {/* 5. Device / Meter Row */}
-      {displayDevice && (
-        <div className="flex items-center justify-between text-xs sm:text-sm text-slate-700 pt-2 border-t border-slate-100">
-          <div>
-            <span className="text-slate-500">Device / Meter: </span>
-            <span className="font-semibold text-slate-800">{displayDevice}</span>
-          </div>
+      {/* 5. Device (Left) & Meter (Right, directly above Dustbin delete button) */}
+      <div className="flex items-center justify-between gap-2 text-xs sm:text-sm text-slate-700 pt-2 border-t border-slate-100">
+        <div>
+          <span className="text-slate-500">Device: </span>
+          <span className="font-semibold text-slate-800">{displayDevice}</span>
         </div>
-      )}
+        <div className="text-right">
+          <span className="text-slate-500">Meter: </span>
+          <span className="font-semibold text-slate-800">{displayMeter}</span>
+        </div>
+      </div>
 
       {/* Observation or Site Evidence (if recorded by worker) */}
       {(cleanRemarks || task.photoUrl || task.meterReading) && (

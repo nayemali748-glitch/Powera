@@ -92,15 +92,6 @@ export default function App() {
     return null;
   });
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('entry');
-  const [selectedCategory, setSelectedCategory] = useState<CategoryType>('NSC');
-  const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
-  const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
-  const [entries, setEntries] = useState<PowerEntry[]>([]);
-  const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>([]);
-  const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const lastDataHashRef = useRef<string>('');
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     const saved = localStorage.getItem('power_user_session');
     if (saved) {
@@ -112,6 +103,28 @@ export default function App() {
     }
     return false;
   });
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    const saved = localStorage.getItem('power_user_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const isAdm =
+          parsed?.role !== 'worker' &&
+          (parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration');
+        return isAdm ? 'admin' : 'entry';
+      } catch (e) {}
+    }
+    return 'entry';
+  });
+  const [selectedCategory, setSelectedCategory] = useState<CategoryType>('NSC');
+  const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
+  const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
+  const [entries, setEntries] = useState<PowerEntry[]>([]);
+  const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const lastDataHashRef = useRef<string>('');
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
   });

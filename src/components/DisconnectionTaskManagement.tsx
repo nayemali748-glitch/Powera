@@ -120,7 +120,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
-  // Fast Non-Blocking Data Fetch & Background Sync
+  // Fast Non-Blocking Data Fetch & Background Sync (Preserves stable card order so consumer list never jumps)
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
@@ -128,7 +128,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     setError(null);
 
     try {
-      // Fetch Disconnection Tasks & Stats immediately
       const discResult = await fetchDisconnectionTasks({
         role: currentUser?.role,
         workerId: currentUser?.idNo,
@@ -136,8 +135,75 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       });
 
       if (discResult && Array.isArray(discResult.tasks)) {
-        setTasks(discResult.tasks);
-        setCachedDisconnectionTasksSync(discResult.tasks);
+        setTasks(prev => {
+          const incomingList = discResult.tasks;
+          if (prev.length === 0) {
+            setCachedDisconnectionTasksSync(incomingList);
+            return incomingList;
+          }
+
+          // Preserve existing visual order for already-rendered consumers so cards never jump around
+          const incomingMap = new Map<string, DisconnectionTask>();
+          incomingList.forEach(item => {
+            const key = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '').trim().toLowerCase();
+            if (key) incomingMap.set(key, item);
+          });
+
+          const nextOrdered: DisconnectionTask[] = [];
+          const visitedKeys = new Set<string>();
+
+          for (const oldItem of prev) {
+            const key = String(oldItem.consumerId || (oldItem as any)['Consumer Id'] || oldItem.taskId || '').trim().toLowerCase();
+            if (key && incomingMap.has(key)) {
+              const updated = incomingMap.get(key)!;
+              visitedKeys.add(key);
+              nextOrdered.push({
+                ...updated,
+                serialNumber: oldItem.serialNumber || updated.serialNumber
+              });
+            }
+          }
+
+          // Append any newly added consumers at the end
+          for (const newItem of incomingList) {
+            const key = String(newItem.consumerId || (newItem as any)['Consumer Id'] || newItem.taskId || '').trim().toLowerCase();
+            if (key && !visitedKeys.has(key)) {
+              visitedKeys.add(key);
+              nextOrdered.push({
+                ...newItem,
+                serialNumber: `SL ${String(nextOrdered.length + 1).padStart(3, '0')}`
+              });
+            }
+          }
+
+          // Only trigger a React state update if data actually changed
+          const hasChanged =
+            nextOrdered.length !== prev.length ||
+            nextOrdered.some((item, idx) => {
+              const p = prev[idx];
+              if (!p) return true;
+              return (
+                item.consumerId !== p.consumerId ||
+                item.taskStatus !== p.taskStatus ||
+                item.disconStatus !== p.disconStatus ||
+                item.workerRemarks !== p.workerRemarks ||
+                item.notes !== p.notes ||
+                item.assignedAgency !== p.assignedAgency ||
+                item.assignedWorkerName !== p.assignedWorkerName ||
+                item.outstandingDue !== p.outstandingDue ||
+                item.meterNumber !== p.meterNumber ||
+                item.deviceType !== p.deviceType
+              );
+            });
+
+          if (!hasChanged) {
+            return prev;
+          }
+
+          setCachedDisconnectionTasksSync(nextOrdered);
+          return nextOrdered;
+        });
+
         if (onTasksChange) onTasksChange(discResult.tasks.length);
         if (discResult.stats) {
           setStats(discResult.stats);
@@ -149,7 +215,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [currentUser, onTasksChange]);
+  }, [currentUser?.role, currentUser?.idNo, currentUser?.name, onTasksChange]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {

@@ -685,86 +685,18 @@ export async function fetchStats(): Promise<StatsResponse> {
 // Single source of truth: Google Sheets Users sheet via Google Apps Script
 // ============================================================================
 
-const SEED_BACKEND_USERS: UserAccount[] = [
-  {
-    id: 'adm_8695716192',
-    idNo: '8695716192',
-    password: '2004',
-    name: 'NAYEM (Admin Controller)',
-    phone: '8695716192',
-    role: 'admin',
-    status: 'active',
-    designation: 'CONTROLLER',
-    badgeNo: 'ADM-8695',
-    createdAt: '2026-10-04T04:41:23.440Z',
-    updatedAt: '2026-10-04T04:45:31.385Z'
-  },
-  {
-    id: 'worker_default_0000',
-    idNo: 'admin',
-    password: '6293',
-    name: 'Field Worker (WBSEDCL)',
-    phone: '1234567890',
-    role: 'admin',
-    status: 'active',
-    designation: 'লাইনম্যান / Field Worker (WBSEDCL)',
-    badgeNo: 'WRK-0000',
-    createdAt: '2026-10-04T04:45:31.792Z',
-    updatedAt: '2026-10-04T04:45:32.201Z'
-  },
-  {
-    id: 'USR-1791059998167-1ks5x8',
-    idNo: 'ADM001',
-    password: '1234',
-    name: 'Nn nn',
-    phone: '',
-    role: 'admin',
-    status: 'active',
-    designation: 'Labour',
-    badgeNo: 'ADM001',
-    createdAt: '2026-10-04T04:45:31.498Z',
-    updatedAt: '2026-10-04T04:45:32.098Z'
-  },
-  {
-    id: 'USR-1788884093846-ary2u9',
-    idNo: 'LM001',
-    password: '2580',
-    name: 'MD NEJAMUDDIN',
-    phone: '9382282094',
-    role: 'worker',
-    status: 'active',
-    designation: 'Worker (WBSEDCL)',
-    badgeNo: 'LM001',
-    createdAt: '2026-10-04T04:41:23.305Z',
-    updatedAt: '2026-10-04T04:45:32.056Z'
-  },
-  {
-    id: 'USR-1789238067456-4l60bn',
-    idNo: 'LM002',
-    password: '1234',
-    name: 'NAYEM',
-    phone: '7318808806',
-    role: 'worker',
-    status: 'active',
-    designation: 'Contractor',
-    badgeNo: 'LM002',
-    createdAt: '2026-10-04T04:45:31.280Z',
-    updatedAt: '2026-10-04T04:45:31.749Z'
-  },
-  {
-    id: 'USR-1790069496551-2s83of',
-    idNo: 'LM2004',
-    password: '6293',
-    name: 'Nayem Ali',
-    phone: '8116933636',
-    role: 'worker',
-    status: 'active',
-    designation: 'লাইনম্যান / Worker (WBSEDCL)',
-    badgeNo: 'LM2004',
-    createdAt: '2026-10-04T04:45:31.440Z',
-    updatedAt: '2026-10-04T04:45:32.047Z'
+async function sha256HexClient(text: string): Promise<string> {
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+      const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
+    } catch {}
   }
-];
+  return '';
+}
 
 function buildClientUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; createdAt?: string }): string {
   const baseDate = String(u.createdAt || '').split('||')[0] || new Date().toISOString().slice(0, 10);
@@ -794,7 +726,18 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
   }
 
   const rawId = String(merged.id || merged['ID'] || '').trim();
-  const rawIdNo = String(merged.idNo || merged['User ID'] || merged.workerId || merged.consumerId || '').trim();
+  const rawIdNo = String(
+    merged.idNo ||
+    merged.loginId ||
+    merged.userId ||
+    merged['User ID'] ||
+    merged['User Id'] ||
+    merged['user_id'] ||
+    merged['ID No'] ||
+    merged.workerId ||
+    merged.consumerId ||
+    ''
+  ).trim();
   const rawPhone = String(merged.phone || merged['Phone'] || merged.mobile || merged.workerPhone || '').trim();
   const finalIdNo = rawIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
   if (!finalIdNo) return null;
@@ -804,6 +747,7 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     rawRole === 'admin' ||
     rawRole === 'controller' ||
     rawRole === 'administrator' ||
+    rawRole === 'superadmin' ||
     finalIdNo === '8695716192' ||
     finalIdNo.toLowerCase() === 'admin' ||
     rawId === 'adm_8695716192' ||
@@ -814,14 +758,18 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
       ? merged.password
       : (merged['Password'] !== undefined && merged['Password'] !== null ? merged['Password'] : '')
   ).trim();
+  const finalHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
   const finalDesig = String(merged.designation || merged['Designation'] || (isAdm ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')).trim();
   const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
 
-  return {
+  const result: UserAccount & { passwordHash?: string; loginId?: string; userId?: string } = {
     id: rawId || `usr_${finalIdNo}`,
     idNo: finalIdNo,
+    loginId: finalIdNo,
+    userId: finalIdNo,
     uid: merged.uid,
     password: finalPass,
+    passwordHash: finalHash,
     name: String(merged.name || merged['Full Name'] || merged['Name'] || merged.consumerName || finalIdNo || 'কর্মী').trim(),
     phone: rawPhone,
     role: (isAdm ? 'admin' : 'worker') as 'admin' | 'worker',
@@ -832,6 +780,7 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     updatedAt: String(merged.updatedAt || ''),
     lastLogin: String(merged.lastLogin || '')
   };
+  return result;
 }
 
 function extractClientList(res: any): any[] {
@@ -903,13 +852,13 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
 
     // 2. Direct Google Apps Script failover using ONLY the existing Users sheet
     const userMap = new Map<string, UserAccount>();
-    const seedAndCache = [...SEED_BACKEND_USERS, ...readCache<UserAccount[]>(USERS_CACHE_KEY, [])];
+    const cachedUsers = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
     const localLookup = new Map<string, UserAccount>();
-    for (const su of seedAndCache) {
-      const normSu = sanitizeClientUserRecord(su);
-      if (normSu) {
-        if (normSu.id) localLookup.set(normSu.id, normSu);
-        if (normSu.idNo) localLookup.set(normSu.idNo.toLowerCase(), normSu);
+    for (const cu of cachedUsers) {
+      const normCu = sanitizeClientUserRecord(cu);
+      if (normCu) {
+        if (normCu.id) localLookup.set(normCu.id, normCu);
+        if (normCu.idNo) localLookup.set(normCu.idNo.toLowerCase(), normCu);
       }
     }
 
@@ -921,7 +870,7 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       if (!rowId) continue;
 
       const normSummary = sanitizeClientUserRecord(rowSummary);
-      if (normSummary && normSummary.idNo && normSummary.password !== '') {
+      if (normSummary && normSummary.idNo && (normSummary.password !== '' || (normSummary as any).passwordHash)) {
         userMap.set(rowId, normSummary);
         continue;
       }
@@ -952,12 +901,10 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       return finalUsers;
     }
 
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    return cached.length > 0 ? cached : SEED_BACKEND_USERS;
+    return cachedUsers;
   } catch (err: any) {
     console.warn('fetchUsers using cache fallback due to error:', err);
-    const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-    return cached.length > 0 ? cached : SEED_BACKEND_USERS;
+    return readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   }
 }
 
@@ -1066,7 +1013,7 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
   }
 
   // 2. Direct GAS failover via updateEntry on category Users ONLY
-  const cachedList = readCache<UserAccount[]>(USERS_CACHE_KEY, SEED_BACKEND_USERS);
+  const cachedList = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   const existingUser = cachedList.find(u => u.id === cleanId || u.idNo === cleanId);
   const targetRowId = existingUser?.id || cleanId;
   const mergedBase = { ...(existingUser || {}), ...safeUpdates, id: targetRowId };
@@ -1169,6 +1116,38 @@ export async function verifyUserSession(phoneOrId: string): Promise<{ valid: boo
   }
 }
 
+async function checkClientPasswordMatch(matchedUser: any, cleanPass: string): Promise<boolean> {
+  if (!matchedUser || !cleanPass) return false;
+  const storedPass = normalizePassword(String(matchedUser.password || (matchedUser as any)['Password'] || ''));
+  const storedHash = String((matchedUser as any).passwordHash || (matchedUser as any)['Password Hash'] || '').trim().toLowerCase();
+
+  // 1. Plain Text password match
+  if (storedPass && (storedPass === cleanPass || storedPass.toLowerCase() === cleanPass.toLowerCase())) {
+    return true;
+  }
+
+  // 2. Password Hash match (SHA-256)
+  const hashHex = await sha256HexClient(cleanPass);
+  const hashLowerHex = await sha256HexClient(cleanPass.toLowerCase());
+  if (
+    storedPass &&
+    /^[a-f0-9]{64}$/i.test(storedPass) &&
+    hashHex &&
+    (storedPass.toLowerCase() === hashHex || storedPass.toLowerCase() === hashLowerHex)
+  ) {
+    return true;
+  }
+  if (
+    storedHash &&
+    ((hashHex && (storedHash === hashHex || storedHash === hashLowerHex)) ||
+      storedHash === cleanPass.toLowerCase())
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function loginUser(loginId: string, password: string): Promise<UserSession> {
   const cleanId = normalizeUniversalText(loginId).trim();
   const cleanPass = normalizePassword(password);
@@ -1176,9 +1155,16 @@ export async function loginUser(loginId: string, password: string): Promise<User
     throw new Error('ইউজার আইডি / মোবাইল নম্বর এবং পাসওয়ার্ড প্রয়োজন (User ID / Phone & Password required)');
   }
 
-  let resData: any = null;
+  // Clear any stale login session or cached admin flags before authenticating
+  try {
+    localStorage.removeItem('power_user_session');
+    localStorage.removeItem('power_is_admin');
+  } catch {}
 
-  // 1. Try Express API proxy route (/api/auth/login)
+  let resData: any = null;
+  let serverAuthError: string | null = null;
+
+  // 1. Try Express API proxy route (/api/auth/login) which authenticates directly against Google Sheets Users sheet
   if (typeof window !== 'undefined') {
     try {
       const resp = await fetch('/api/auth/login', {
@@ -1187,7 +1173,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ loginId: cleanId, idNo: cleanId, password: cleanPass })
+        body: JSON.stringify({ loginId: cleanId, idNo: cleanId, userId: cleanId, password: cleanPass })
       });
 
       const ct = resp.headers.get('content-type') || '';
@@ -1203,32 +1189,30 @@ export async function loginUser(loginId: string, password: string): Promise<User
         if (data && typeof data === 'object') {
           if (resp.ok && data.success && data.session) {
             resData = data;
-          } else if (resp.status === 403 && data.error) {
-            const errMsg = typeof data.error === 'string' ? data.error : (data.error?.message || 'Account is ON HOLD');
-            throw new Error(errMsg);
+          } else if ((resp.status === 401 || resp.status === 403 || resp.status === 400) && data.error) {
+            serverAuthError = typeof data.error === 'string' ? data.error : (data.error?.message || 'Invalid credentials');
           }
         }
       }
-    } catch (fetchErr: any) {
-      if (fetchErr?.message && (fetchErr.message.includes('hold') || fetchErr.message.includes('ON HOLD') || fetchErr.message.includes('স্থগিত'))) {
-        throw fetchErr;
-      }
-    }
+    } catch {}
   }
 
-  // 2. Direct Google Sheets Users Sheet Verification (Works on ALL phones, Vercel, and static deployments)
+  // If the server explicitly rejected the credentials (401/403), throw that exact error immediately
+  if (!resData && serverAuthError) {
+    throw new Error(serverAuthError);
+  }
+
+  // 2. Direct Google Sheets Users Sheet Verification (Used when running on static/Vercel frontend without /api/auth/login)
   if (!resData) {
     const users = await fetchUsers(true);
     const lowerId = cleanId.toLowerCase();
     const cleanIdAlnum = lowerId.replace(/[^a-z0-9]/g, '');
     const cleanDigits = cleanId.replace(/\D/g, '');
     const cleanPhone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : '';
-    const isPrimaryAdminId = lowerId === '8695716192' || cleanPhone10 === '8695716192' || lowerId === 'admin' || lowerId === 'adm_8695716192';
-    const universalPins = ['2004', '6293', '1234', '2580', '123456', 'admin', 'nayem', 'admin123'];
 
     let matchedUser = users.find((u: UserAccount) => {
       if (!u) return false;
-      const uIdNo = normalizeUniversalText(u.idNo || '').trim().toLowerCase();
+      const uIdNo = normalizeUniversalText(u.idNo || (u as any).loginId || (u as any).userId || '').trim().toLowerCase();
       const uIdNoAlnum = uIdNo.replace(/[^a-z0-9]/g, '');
       const uInternalId = normalizeUniversalText(u.id || '').trim().toLowerCase();
       const uBadge = normalizeUniversalText(u.badgeNo || '').trim().toLowerCase();
@@ -1245,72 +1229,52 @@ export async function loginUser(loginId: string, password: string): Promise<User
       return false;
     });
 
-    if (matchedUser) {
-      let storedPass = normalizePassword(String(matchedUser.password || ''));
-      let passValid =
-        (storedPass && (storedPass === cleanPass || storedPass.toLowerCase() === cleanPass.toLowerCase())) ||
-        (isPrimaryAdminId && universalPins.includes(cleanPass.toLowerCase()));
-
-      // If password was manually edited in Google Sheets Users tab Password column, hydrate live row
-      if (!passValid && matchedUser.id) {
-        const liveRow = await hydrateClientSingleUserRow(matchedUser.id, matchedUser.status || 'active', matchedUser.role || 'worker');
-        if (liveRow) {
-          matchedUser = liveRow;
-          storedPass = normalizePassword(String(matchedUser.password || ''));
-          passValid =
-            (storedPass && (storedPass === cleanPass || storedPass.toLowerCase() === cleanPass.toLowerCase())) ||
-            (isPrimaryAdminId && universalPins.includes(cleanPass.toLowerCase()));
-        }
-      }
-
-      if (String(matchedUser.status || 'active').toLowerCase() === 'hold') {
-        throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।');
-      }
-
-      if (!passValid) {
-        throw new Error('ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড বা পিন দিন (Invalid password/PIN)');
-      }
-
-      const idNoStr = String(matchedUser.idNo || cleanId).trim();
-      const isRoleAdmin =
-        matchedUser.role === 'admin' ||
-        idNoStr === '8695716192' ||
-        idNoStr.toLowerCase() === 'admin' ||
-        matchedUser.id === 'adm_8695716192' ||
-        /^adm[-_0-9]/i.test(idNoStr);
-
-      resData = {
-        success: true,
-        session: {
-          id: String(matchedUser.id || `usr_${idNoStr}`),
-          idNo: idNoStr,
-          name: String(matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : 'কর্মী')),
-          phone: String(matchedUser.phone || ''),
-          role: (isRoleAdmin ? 'admin' : 'worker') as 'admin' | 'worker',
-          status: 'active' as const,
-          designation: String(matchedUser.designation || (isRoleAdmin ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')),
-          badgeNo: String(matchedUser.badgeNo || idNoStr),
-          token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-          loggedInAt: new Date().toISOString()
-        }
-      };
-    } else if (isPrimaryAdminId && universalPins.includes(cleanPass.toLowerCase())) {
-      resData = {
-        success: true,
-        session: {
-          id: 'adm_8695716192',
-          idNo: '8695716192',
-          name: 'NAYEM (Admin Controller)',
-          phone: '8695716192',
-          role: 'admin' as const,
-          status: 'active' as const,
-          designation: 'Sub-Divisional Controller',
-          badgeNo: 'ADM-8695',
-          token: `SES-${Date.now()}-ADMIN`,
-          loggedInAt: new Date().toISOString()
-        }
-      };
+    if (!matchedUser) {
+      throw new Error('ভুল ইউজার আইডি! সঠিক ইউজার আইডি বা মোবাইল নম্বর দিন। (Invalid User ID)');
     }
+
+    let passValid = await checkClientPasswordMatch(matchedUser, cleanPass);
+
+    // If password was manually edited in Google Sheets Users tab Password column, hydrate live row
+    if (!passValid && matchedUser.id) {
+      const liveRow = await hydrateClientSingleUserRow(matchedUser.id, matchedUser.status || 'active', matchedUser.role || 'worker');
+      if (liveRow) {
+        matchedUser = liveRow;
+        passValid = await checkClientPasswordMatch(matchedUser, cleanPass);
+      }
+    }
+
+    if (String(matchedUser.status || 'active').toLowerCase() === 'hold') {
+      throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।');
+    }
+
+    if (!passValid) {
+      throw new Error('ভুল পাসওয়ার্ড! সঠিক পাসওয়ার্ড বা পিন দিন (Invalid Password)');
+    }
+
+    const idNoStr = String(matchedUser.idNo || cleanId).trim();
+    const isRoleAdmin =
+      matchedUser.role === 'admin' ||
+      idNoStr === '8695716192' ||
+      idNoStr.toLowerCase() === 'admin' ||
+      matchedUser.id === 'adm_8695716192' ||
+      /^adm[-_0-9]/i.test(idNoStr);
+
+    resData = {
+      success: true,
+      session: {
+        id: String(matchedUser.id || `usr_${idNoStr}`),
+        idNo: idNoStr,
+        name: String(matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : 'কর্মী')),
+        phone: String(matchedUser.phone || ''),
+        role: (isRoleAdmin ? 'admin' : 'worker') as 'admin' | 'worker',
+        status: 'active' as const,
+        designation: String(matchedUser.designation || (isRoleAdmin ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')),
+        badgeNo: String(matchedUser.badgeNo || idNoStr),
+        token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        loggedInAt: new Date().toISOString()
+      }
+    };
   }
 
   if (!resData || !resData.session) {
@@ -1850,7 +1814,12 @@ export async function fetchDisconnectionTasks(params: {
       });
 
       if (discEntries.length > 0) {
-        const mappedTasks: DisconnectionTask[] = discEntries.map((e, idx) => {
+        const sortedDiscEntries = [...discEntries].sort((a, b) => {
+          const idA = String(a['Consumer Id'] || a['Consumer ID'] || a.consumerId || a.accountNumber || '').trim();
+          const idB = String(b['Consumer Id'] || b['Consumer ID'] || b.consumerId || b.accountNumber || '').trim();
+          return idA.localeCompare(idB, undefined, { numeric: true });
+        });
+        const mappedTasks: DisconnectionTask[] = sortedDiscEntries.map((e, idx) => {
           const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
           const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
           const name = String(e['Name'] || e.consumerName || e.name || '').trim();
