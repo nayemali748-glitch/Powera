@@ -1,5 +1,5 @@
 // POWER Field Operations Service Worker for PWA Support
-const CACHE_NAME = 'power-field-app-v1';
+const CACHE_NAME = 'power-field-app-v5';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -9,11 +9,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
+        cacheNames.map((cacheName) => caches.delete(cacheName))
       );
     })
   );
@@ -21,12 +17,16 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Let network handle requests, fallback if needed
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  if (
+    event.request.method !== 'GET' ||
+    event.request.url.includes('/api/') ||
+    event.request.url.includes('script.google.com') ||
+    event.request.url.includes('googleusercontent.com')
+  ) {
     return;
   }
   event.respondWith(
-    fetch(event.request).catch(() => {
+    fetch(event.request, { cache: 'no-store' }).catch(() => {
       return caches.match(event.request);
     })
   );

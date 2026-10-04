@@ -163,13 +163,13 @@ export async function callGasApi<T = any>(
       queryParams['_t'] = Date.now().toString();
       fetchUrl = `${fetchUrl}${sep}${new URLSearchParams(queryParams).toString()}`;
       options.method = 'GET';
-      options.headers = { 'Accept': 'application/json' };
+      // IMPORTANT: Do NOT set custom headers on GET requests to script.google.com
+      // so mobile browsers treat it as a simple request with zero CORS preflight!
     } else {
       options.method = 'POST';
-      // Plain text content-type prevents browser CORS preflight blocks across Google redirects
+      // Plain text content-type with NO other custom headers prevents browser CORS preflight blocks across Google redirects
       options.headers = {
-        'Content-Type': 'text/plain;charset=utf-8',
-        'Accept': 'application/json'
+        'Content-Type': 'text/plain;charset=utf-8'
       };
       options.body = JSON.stringify({ action, ...payload });
     }
@@ -186,8 +186,7 @@ export async function callGasApi<T = any>(
       if (loc) {
         finalRes = await fetch(loc, { 
           method: 'GET', 
-          signal: directController.signal, 
-          headers: { 'Accept': 'application/json' } 
+          signal: directController.signal
         });
       }
     }
@@ -698,22 +697,26 @@ async function sha256HexClient(text: string): Promise<string> {
   return '';
 }
 
-function buildClientUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; createdAt?: string }): string {
+function buildClientUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; role?: string; status?: string; createdAt?: string }): string {
   const baseDate = String(u.createdAt || '').split('||')[0] || new Date().toISOString().slice(0, 10);
   const idNo = String(u.idNo || '').trim();
   const password = String(u.password || '').trim();
   const phone = String(u.phone || '').trim();
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
-  return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}`;
+  const role = String(u.role || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker';
+  const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
+  return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
 
 function sanitizeClientUserRecord(u: any): UserAccount | null {
   if (!u || typeof u !== 'object') return null;
   let merged: any = { ...u };
 
-  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo)
+  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo||role||status)
   const createdRaw = String(u.createdAt || u['Created At'] || '').trim();
+  let tagRole = '';
+  let tagStatus = '';
   if (createdRaw.includes('||')) {
     const parts = createdRaw.split('||');
     if (parts.length >= 3) {
@@ -722,6 +725,8 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
       if (!merged.phone && parts[3]) merged.phone = parts[3];
       if (!merged.designation && parts[4]) merged.designation = parts[4];
       if (!merged.badgeNo && parts[5]) merged.badgeNo = parts[5];
+      if (parts[6]) tagRole = parts[6].trim().toLowerCase();
+      if (parts[7]) tagStatus = parts[7].trim().toLowerCase();
     }
   }
 
@@ -742,7 +747,7 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
   const finalIdNo = rawIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
   if (!finalIdNo) return null;
 
-  const rawRole = String(merged.role || merged['Role'] || 'worker').trim().toLowerCase();
+  const rawRole = String(tagRole || merged.role || merged['Role'] || 'worker').trim().toLowerCase();
   const isAdm =
     rawRole === 'admin' ||
     rawRole === 'controller' ||
@@ -761,6 +766,8 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
   const finalHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
   const finalDesig = String(merged.designation || merged['Designation'] || (isAdm ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')).trim();
   const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
+  const rawSt = String(tagStatus || merged.status || merged['Status'] || 'active').trim().toLowerCase();
+  const finalSt = (rawSt === 'hold' ? 'hold' : 'active') as 'active' | 'hold';
 
   const result: UserAccount & { passwordHash?: string; loginId?: string; userId?: string } = {
     id: rawId || `usr_${finalIdNo}`,
@@ -773,10 +780,10 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     name: String(merged.name || merged['Full Name'] || merged['Name'] || merged.consumerName || finalIdNo || 'কর্মী').trim(),
     phone: rawPhone,
     role: (isAdm ? 'admin' : 'worker') as 'admin' | 'worker',
-    status: (String(merged.status || merged['Status'] || 'active').toLowerCase() === 'hold' ? 'hold' : 'active') as 'active' | 'hold',
+    status: finalSt,
     designation: finalDesig,
     badgeNo: finalBadge,
-    createdAt: createdRaw || buildClientUserSyncTag({ idNo: finalIdNo, password: finalPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge }),
+    createdAt: createdRaw || buildClientUserSyncTag({ idNo: finalIdNo, password: finalPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: isAdm ? 'admin' : 'worker', status: finalSt }),
     updatedAt: String(merged.updatedAt || ''),
     lastLogin: String(merged.lastLogin || '')
   };
@@ -796,15 +803,13 @@ function extractClientList(res: any): any[] {
   return [];
 }
 
-async function hydrateClientSingleUserRow(rowId: string, st = 'active', rl = 'worker'): Promise<UserAccount | null> {
+async function hydrateClientSingleUserRow(rowId: string): Promise<UserAccount | null> {
   if (!rowId) return null;
   try {
     const detailRes = await callGasApi<any>('updateEntry', {
       id: rowId,
       category: 'Users',
-      status: st,
-      role: rl,
-      data: { status: st, Status: st, role: rl, Role: rl }
+      data: {}
     }, 'POST');
     const fullEntry = detailRes?.entry || detailRes?.data?.entry;
     if (fullEntry && typeof fullEntry === 'object') {
@@ -812,20 +817,42 @@ async function hydrateClientSingleUserRow(rowId: string, st = 'active', rl = 'wo
       if (hydrated && hydrated.idNo) {
         const tag = buildClientUserSyncTag(hydrated);
         hydrated.createdAt = tag;
-        if (!String(fullEntry.createdAt || '').includes('||')) {
-          callGasApi('updateEntry', {
-            id: rowId,
-            category: 'Users',
+        await callGasApi('updateEntry', {
+          id: rowId,
+          category: 'Users',
+          status: hydrated.status,
+          role: hydrated.role,
+          createdAt: tag,
+          'Created At': tag,
+          data: {
+            status: hydrated.status,
+            Status: hydrated.status,
+            role: hydrated.role,
+            Role: hydrated.role,
             createdAt: tag,
-            'Created At': tag,
-            data: { createdAt: tag, 'Created At': tag }
-          }, 'POST').catch(() => {});
-        }
+            'Created At': tag
+          }
+        }, 'POST').catch(() => {});
         return hydrated;
       }
     }
   } catch {}
   return null;
+}
+
+async function fetchDirectUsersSheetSimpleGet(): Promise<any[]> {
+  try {
+    const sep = GOOGLE_SCRIPT_WEB_APP_URL.includes('?') ? '&' : '?';
+    const url = `${GOOGLE_SCRIPT_WEB_APP_URL}${sep}action=entries&category=Users&_t=${Date.now()}`;
+    // Zero custom headers -> Simple GET request in all browsers with NO CORS preflight
+    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    const text = (await res.text()).trim();
+    if (!text.startsWith('<')) {
+      const parsed = JSON.parse(text);
+      return extractClientList(parsed);
+    }
+  } catch {}
+  return [];
 }
 
 export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
@@ -850,7 +877,7 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       } catch {}
     }
 
-    // 2. Direct Google Apps Script failover using ONLY the existing Users sheet
+    // 2. Direct Google Apps Script Simple GET to the existing Users sheet (Zero CORS preflight)
     const userMap = new Map<string, UserAccount>();
     const cachedUsers = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
     const localLookup = new Map<string, UserAccount>();
@@ -862,8 +889,11 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       }
     }
 
-    const usersSheetRes = await callGasApi<any>('entries', { category: 'Users' }, 'GET').catch(() => null);
-    const sheetRows = extractClientList(usersSheetRes);
+    let sheetRows = await fetchDirectUsersSheetSimpleGet();
+    if (sheetRows.length === 0) {
+      const usersSheetRes = await callGasApi<any>('entries', { category: 'Users' }, 'GET').catch(() => null);
+      sheetRows = extractClientList(usersSheetRes);
+    }
 
     for (const rowSummary of sheetRows) {
       const rowId = String(rowSummary?.id || '').trim();
@@ -876,9 +906,7 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       }
 
       // Hydrate any un-tagged row from the Users sheet
-      const st = (String(rowSummary.status || 'active').toLowerCase() === 'hold') ? 'hold' : 'active';
-      const rl = (String(rowSummary.role || 'worker').toLowerCase() === 'admin') ? 'admin' : 'worker';
-      const hydrated = await hydrateClientSingleUserRow(rowId, st, rl);
+      const hydrated = await hydrateClientSingleUserRow(rowId);
       if (hydrated && hydrated.idNo) {
         userMap.set(rowId, hydrated);
         continue;
@@ -888,8 +916,6 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
       if (localFallback) {
         userMap.set(rowId, {
           ...localFallback,
-          status: st,
-          role: rl,
           name: rowSummary.consumerName || rowSummary.name || localFallback.name
         });
       }
@@ -924,7 +950,9 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
     password: cleanPassword,
     phone: cleanPhone,
     designation: cleanDesig,
-    badgeNo: cleanBadge
+    badgeNo: cleanBadge,
+    role: userData.role || 'worker',
+    status: userData.status || 'active'
   });
 
   const payload = {
@@ -1023,6 +1051,8 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
     phone: mergedBase.phone || existingUser?.phone || '',
     designation: mergedBase.designation || existingUser?.designation || '',
     badgeNo: mergedBase.badgeNo || existingUser?.badgeNo || mergedBase.idNo || cleanId,
+    role: mergedBase.role || existingUser?.role || 'worker',
+    status: mergedBase.status || existingUser?.status || 'active',
     createdAt: existingUser?.createdAt
   });
   const mergedPayload = {
@@ -1237,7 +1267,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
     // If password was manually edited in Google Sheets Users tab Password column, hydrate live row
     if (!passValid && matchedUser.id) {
-      const liveRow = await hydrateClientSingleUserRow(matchedUser.id, matchedUser.status || 'active', matchedUser.role || 'worker');
+      const liveRow = await hydrateClientSingleUserRow(matchedUser.id);
       if (liveRow) {
         matchedUser = liveRow;
         passValid = await checkClientPasswordMatch(matchedUser, cleanPass);

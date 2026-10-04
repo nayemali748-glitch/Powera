@@ -596,22 +596,26 @@ function clearUsersStateCache() {
   gasCache.clear();
 }
 
-function buildUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; createdAt?: string }): string {
+function buildUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; role?: string; status?: string; createdAt?: string }): string {
   const baseDate = String(u.createdAt || '').split('||')[0] || new Date().toISOString().slice(0, 10);
   const idNo = String(u.idNo || '').trim();
   const password = String(u.password || '').trim();
   const phone = String(u.phone || '').trim();
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
-  return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}`;
+  const role = String(u.role || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker';
+  const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
+  return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
 
 function normalizeUserRecord(u: any): any {
   if (!u || typeof u !== 'object') return null;
   let merged: any = { ...u };
 
-  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo)
+  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo||role||status)
   const createdRaw = String(u.createdAt || u['Created At'] || '').trim();
+  let tagRole = '';
+  let tagStatus = '';
   if (createdRaw.includes('||')) {
     const parts = createdRaw.split('||');
     if (parts.length >= 3) {
@@ -620,6 +624,8 @@ function normalizeUserRecord(u: any): any {
       if (!merged.phone && parts[3]) merged.phone = parts[3];
       if (!merged.designation && parts[4]) merged.designation = parts[4];
       if (!merged.badgeNo && parts[5]) merged.badgeNo = parts[5];
+      if (parts[6]) tagRole = parts[6].trim().toLowerCase();
+      if (parts[7]) tagStatus = parts[7].trim().toLowerCase();
     }
   }
 
@@ -644,8 +650,8 @@ function normalizeUserRecord(u: any): any {
       : (merged['Password'] !== undefined && merged['Password'] !== null ? merged['Password'] : '')
   ).trim();
   const rawHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
-  const rawRole = String(merged.role || merged['Role'] || 'worker').trim().toLowerCase();
-  const rawStatus = String(merged.status || merged['Status'] || 'active').trim().toLowerCase();
+  const rawRole = String(tagRole || merged.role || merged['Role'] || 'worker').trim().toLowerCase();
+  const rawStatus = String(tagStatus || merged.status || merged['Status'] || 'active').trim().toLowerCase();
   const finalStatus = rawStatus === 'hold' ? 'hold' : 'active';
   const finalIdNo = rawIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
   if (!finalIdNo) return null;
@@ -676,7 +682,9 @@ function normalizeUserRecord(u: any): any {
     status: finalStatus,
     designation: finalDesig,
     badgeNo: finalBadge,
-    createdAt: createdRaw || buildUserSyncTag({ idNo: finalIdNo, password: rawPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge }),
+    createdAt: createdRaw.includes('||')
+      ? createdRaw
+      : buildUserSyncTag({ idNo: finalIdNo, password: rawPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: finalRole, status: finalStatus, createdAt: createdRaw }),
     updatedAt: String(merged.updatedAt || merged['Updated At'] || '').trim()
   };
 }
@@ -694,15 +702,14 @@ function extractEntriesArray(res: any): any[] {
   return [];
 }
 
-async function hydrateSingleUserFromUsersSheet(rowId: string, currentSt = 'active', currentRole = 'worker'): Promise<any | null> {
+async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | null> {
   if (!rowId) return null;
   try {
+    // 1. Read full entry from Users sheet using empty data {} so existing Role and Status columns are never overwritten
     const detailRes = await callGoogleAppsScript('updateEntry', {
       id: rowId,
       category: 'Users',
-      status: currentSt,
-      role: currentRole,
-      data: { status: currentSt, Status: currentSt, role: currentRole, Role: currentRole }
+      data: {}
     }, 'POST', 20000);
     const fullEntry = detailRes?.entry || detailRes?.data?.entry;
     if (fullEntry && typeof fullEntry === 'object') {
@@ -710,16 +717,23 @@ async function hydrateSingleUserFromUsersSheet(rowId: string, currentSt = 'activ
       if (hydrated && hydrated.idNo) {
         const tag = buildUserSyncTag(hydrated);
         hydrated.createdAt = tag;
-        // Persist sync tag into Users sheet createdAt column in background so future GETs are 1-call instant
-        if (!String(fullEntry.createdAt || '').includes('||')) {
-          callGoogleAppsScript('updateEntry', {
-            id: rowId,
-            category: 'Users',
+        // 2. ALWAYS await writing the 8-part sync tag back to createdAt because step 1's updateEntry overwrites createdAt in GAS
+        await callGoogleAppsScript('updateEntry', {
+          id: rowId,
+          category: 'Users',
+          status: hydrated.status,
+          role: hydrated.role,
+          createdAt: tag,
+          'Created At': tag,
+          data: {
+            status: hydrated.status,
+            Status: hydrated.status,
+            role: hydrated.role,
+            Role: hydrated.role,
             createdAt: tag,
-            'Created At': tag,
-            data: { createdAt: tag, 'Created At': tag }
-          }, 'POST', 20000).catch(() => {});
-        }
+            'Created At': tag
+          }
+        }, 'POST', 20000).catch(() => {});
         return hydrated;
       }
     }
@@ -753,10 +767,8 @@ async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]>
         continue;
       }
 
-      // If row was added directly in Google Sheets without sync tag, hydrate that specific row from Users sheet
-      const currentSt = (String(rowSummary.status || 'active').toLowerCase() === 'hold') ? 'hold' : 'active';
-      const currentRole = (String(rowSummary.role || 'worker').toLowerCase() === 'admin') ? 'admin' : 'worker';
-      const hydrated = await hydrateSingleUserFromUsersSheet(rowId, currentSt, currentRole);
+      // If row was added or edited directly in Google Sheets without sync tag, hydrate that row and persist its sync tag
+      const hydrated = await hydrateSingleUserFromUsersSheet(rowId);
       if (hydrated && hydrated.idNo) {
         userMap.set(rowId, hydrated);
         continue;
@@ -870,7 +882,7 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
 
     // If user exists in Users sheet, also hydrate their live row directly from Users sheet in case Password column was edited in Google Sheets
     if (matchedUser && !checkUserPasswordMatch(matchedUser, cleanPass)) {
-      const liveRow = await hydrateSingleUserFromUsersSheet(matchedUser.id, matchedUser.status || 'active', matchedUser.role || 'worker');
+      const liveRow = await hydrateSingleUserFromUsersSheet(matchedUser.id);
       if (liveRow) {
         matchedUser = liveRow;
         clearUsersStateCache();
@@ -943,12 +955,12 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
   };
 }
 
-app.post('/api/auth/login', async (req, res) => {
+app.all(['/api/auth/login', '/api/login'], async (req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const body = req.body || {};
-    const rawId = body.loginId || body.idNo || body.userId || body.phone;
+    const body = req.method === 'GET' ? (req.query || {}) : (req.body || {});
+    const rawId = body.loginId || body.idNo || body.userId || body.phone || body.username || body.id;
     const result = await authenticateUserCredentials(rawId, body.password);
     return res.status(result.status).json(result.body);
   } catch (error: any) {
@@ -1991,6 +2003,8 @@ app.post('/api/users', async (req, res) => {
       phone: cleanPhone,
       designation: cleanDesig,
       badgeNo: cleanBadge,
+      role: cleanRole,
+      status: cleanStatus,
       createdAt: existingMatch?.createdAt
     });
 
@@ -2158,6 +2172,8 @@ app.put('/api/users/:id', async (req, res) => {
       phone: mergedUser.phone || targetUser?.phone || '',
       designation: mergedUser.designation || targetUser?.designation || '',
       badgeNo: mergedUser.badgeNo || targetUser?.badgeNo || mergedUser.idNo || paramId,
+      role: mergedUser.role || targetUser?.role || 'worker',
+      status: mergedUser.status || targetUser?.status || 'active',
       createdAt: targetUser?.createdAt
     });
     mergedUser.createdAt = syncTag;
@@ -3988,8 +4004,15 @@ async function startServer() {
     });
   }
 
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html') || filePath.endsWith('sw.js')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      }
+    }
+  }));
   app.get('*', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const indexPath = path.join(distPath, 'index.html');
     if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);
