@@ -179,8 +179,8 @@ export function normalizeEntry(entry: any): PowerEntry {
     };
   }
 
-  // Ensure consumerName is never empty if consumerId is known
-  if (!normalized.consumerName && normalized.consumerId) {
+  // Ensure consumerName is never empty if consumerId is known (for non-Disconnection categories)
+  if (!isDisc && !normalized.consumerName && normalized.consumerId) {
     normalized.consumerName = `Consumer (${normalized.consumerId})`;
   }
 
@@ -193,6 +193,23 @@ export function normalizeEntry(entry: any): PowerEntry {
   }
 
   return normalized;
+}
+
+/**
+ * Validates that a Disconnection record has both a real Consumer ID (not SL001/PWR-DIS/TASK-DISC)
+ * and a real Consumer Name (not "Consumer", "Worker", "Unknown", or blank).
+ */
+export function isValidDisconnectionEntry(item: any): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const rawCId = String(item.consumerId || item['Consumer Id'] || item['Consumer ID'] || item.accountNumber || '').trim();
+  const isBadId = !rawCId || /^(PWR-DIS-|TASK-DISC-|DISC-\d+|SL\s*\d+|N\/A|NA|null|undefined|0|-)$/i.test(rawCId);
+  if (isBadId) return false;
+
+  const rawName = String(item.consumerName || item['Name'] || item.Name || item.name || '').trim();
+  const isBadName = !rawName || /^(Consumer|Consumer\s*\(.*\)|Worker|Unnamed Consumer|Unknown Consumer|Unknown|Demo|Test|N\/A|NA|null|undefined|-)$/i.test(rawName);
+  if (isBadName) return false;
+
+  return true;
 }
 
 /**
@@ -217,6 +234,11 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
       continue;
     }
 
+    const catVal = String(item.category || '').trim().toUpperCase();
+    if (catVal === 'DISCONNECTION' && !isValidDisconnectionEntry(item)) {
+      continue;
+    }
+
     // Skip empty ghost rows (records where no real form data was provided)
     const hasMeaningfulData = Boolean(
       item.consumerName ||
@@ -227,7 +249,7 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
       item.poleNo ||
       item.dtrName ||
       item.substation ||
-      (item.category && item.workerName)
+      (item.category && item.workerName && catVal !== 'DISCONNECTION')
     );
 
     if (!hasMeaningfulData) {
@@ -236,7 +258,6 @@ export function deduplicateEntries(entries: PowerEntry[]): PowerEntry[] {
 
     const subId = item.submissionId ? String(item.submissionId).trim() : '';
     const idVal = item.id ? String(item.id).trim() : '';
-    const catVal = String(item.category || '').trim().toUpperCase();
     const consVal = String(item.consumerId || '').trim().toLowerCase();
     const meterVal = String(item.meterNo || '').trim().toLowerCase();
     const appNo = String(item.applicationNo || '').trim().toLowerCase();

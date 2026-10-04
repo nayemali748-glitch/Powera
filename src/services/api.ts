@@ -1719,9 +1719,52 @@ export function invalidateDisconnectionCache() {
   // Keep cache intact for instant UI; server handles authoritative updates
 }
 
+export function isValidDisconnectionTaskOrRow(r: any): boolean {
+  if (!r || typeof r !== 'object') return false;
+  const rawSt = String(
+    r['Discon Status'] || r.disconStatus || r.taskStatus || r.status || r['Status'] || r['Update'] || ''
+  ).trim().toUpperCase();
+  const rawNotes = String(
+    r['Notes'] || r.notes || r.workerRemarks || r.workerReport || r['Remarks'] || ''
+  ).trim().toUpperCase();
+  if (
+    rawSt === 'DELETED' ||
+    rawSt === '[DELETED_BY_ADMIN]' ||
+    rawNotes.includes('[DELETED_BY_ADMIN]') ||
+    r._deleted === true
+  ) {
+    return false;
+  }
+
+  const cId = String(
+    r['Consumer Id'] ?? r['Consumer ID'] ?? r.consumerId ?? r.accountNumber ?? r['Consumer No'] ?? ''
+  ).trim();
+  const cName = String(
+    r['Name'] ?? r['Consumer Name'] ?? r.consumerName ?? r.name ?? r['Customer Name'] ?? ''
+  ).trim();
+
+  if (!cId || !cName) return false;
+  if (/^(SL\s*\d+|DISC[-_]|PWR-DIS-|SUB-|ROW-|TASK-|ID$|N\/A$|NULL$|UNDEFINED$|NONE$|-+$)/i.test(cId)) {
+    return false;
+  }
+  if (
+    /^(consumer|consumer\s*\(.*\)|unknown(\s+consumer)?|demo.*|sample.*|test.*|n\/a|null|undefined|none|-+)$/i.test(cName) ||
+    cName.length < 2
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
-    return readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
+    const raw = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
+    if (!Array.isArray(raw)) return [];
+    const valid = raw.filter(isValidDisconnectionTaskOrRow);
+    if (valid.length !== raw.length) {
+      writeCache(DISCONNECTION_TASKS_CACHE_KEY, valid);
+    }
+    return valid;
   } catch {
     return [];
   }
@@ -1729,8 +1772,9 @@ export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
 
 export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
   try {
+    const validTasks = (Array.isArray(tasks) ? tasks : []).filter(isValidDisconnectionTaskOrRow);
     // Strip heavy base64 images before writing to localStorage so we never exceed quota
-    const lightTasks = tasks.map(t => {
+    const lightTasks = validTasks.map(t => {
       const copy: any = { ...t };
       if (copy.photoUrl && copy.photoUrl.length > 5000) copy.photoUrl = '';
       if (copy.Image && copy.Image.length > 5000) copy.Image = '';
@@ -1814,14 +1858,15 @@ export async function fetchDisconnectionTasks(params: {
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.tasks)) {
-        const cleaned = data.tasks.map((t: any, idx: number) => ({
+        const validTasks = data.tasks.filter(isValidDisconnectionTaskOrRow);
+        const cleaned = validTasks.map((t: any, idx: number) => ({
           ...cleanDisconnectionTask(t),
           serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
         }));
         if (!params.search && (!params.status || params.status === 'ALL')) {
           setCachedDisconnectionTasksSync(cleaned);
         }
-        return { tasks: cleaned, stats: data.stats || computeStats(cleaned) };
+        return { tasks: cleaned, stats: computeStats(cleaned) };
       }
     }
   } catch (apiErr: any) {
@@ -1834,10 +1879,8 @@ export async function fetchDisconnectionTasks(params: {
     const rawEntries = rawRes && (Array.isArray(rawRes.entries) ? rawRes.entries : (Array.isArray(rawRes) ? rawRes : []));
     if (rawEntries && rawEntries.length > 0) {
       const discEntries = rawEntries.filter((e: any) => {
-        const rawSt = String(e['Discon Status'] || e.disconStatus || e.taskStatus || e.status || '').trim().toUpperCase();
-        const rawNotes = String(e['Notes'] || e.notes || '').trim();
-        if (rawSt === 'DELETED' || rawNotes.includes('[DELETED_BY_ADMIN]')) return false;
-        const cat = String(e.category || '').toUpperCase().trim();
+        if (!isValidDisconnectionTaskOrRow(e)) return false;
+        const cat = String(e.category || e.Category || e._sheet || '').toUpperCase().trim();
         const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
         const isCoreDisc = Boolean(e['Consumer Id'] && (e['D2 Net O/S'] || e.d2NetOs || e['O/S Duedate Range'] || e.disconStatus || e['Discon Status']));
         return isDiscCat || isCoreDisc;
@@ -1852,7 +1895,7 @@ export async function fetchDisconnectionTasks(params: {
         const mappedTasks: DisconnectionTask[] = sortedDiscEntries.map((e, idx) => {
           const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
           const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
-          const name = String(e['Name'] || e.consumerName || e.name || '').trim();
+          const name = String(e['Name'] || e['Consumer Name'] || e.consumerName || e.name || '').trim();
           const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
           const bClassPhase = String(e['BClass/Phase'] || e.bClassPhase || e.deviceType || 'I').trim();
           const consumerClass = String(e['Class'] || e.baseClass || e.class || 'Domestic').trim();
@@ -1886,7 +1929,7 @@ export async function fetchDisconnectionTasks(params: {
             Mobile: mobile,
             'Mobile Number': mobile,
             serialNumber: slNumber,
-            taskId: `TASK-DISC-${cId || idx + 1}`,
+            taskId: `TASK-DISC-${cId}`,
             consumerId: cId,
             consumerName: name,
             accountNumber: cId,
@@ -1900,7 +1943,7 @@ export async function fetchDisconnectionTasks(params: {
             assignedWorkerName: String(e['Worker Name'] || e.assignedWorkerName || '').trim(),
             taskStatus: disconStatus,
             workerReport: String(e['Notes'] || e.workerReport || '').trim(),
-            workerRemarks: String(e['Remarks'] || e.workerRemarks || '').trim(),
+            workerRemarks: String(e['Remarks'] || e['Notes'] || e.workerRemarks || '').trim(),
             reportDate: disconDate,
             reportTime: '',
             submittedBy: String(e['Submitted By'] || e.submittedBy || '').trim(),
@@ -2003,20 +2046,25 @@ export async function uploadDisconnectionTasks(
 ): Promise<{ success: boolean; count: number; message: string; tasks?: DisconnectionTask[]; insertedCount?: number; updatedCount?: number }> {
   const reqId = `REQ-UPL-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
+  // Strictly filter out any demo or invalid rows missing a real Consumer Id or Consumer Name
+  const validInputTasks = (Array.isArray(tasks) ? tasks : []).filter(isValidDisconnectionTaskOrRow);
+  if (validInputTasks.length === 0) {
+    throw new Error('No valid disconnection consumer records found. Each record must have a valid Consumer ID and Consumer Name.');
+  }
+
   // Map each task to the exact WBSEDCL Google Sheet headers and standard model
-  const standardizedTasks = tasks.map((t, idx) => {
+  const standardizedTasks = validInputTasks.map((t) => {
     const cId = String(
       (t as any)['Consumer Id'] ||
       t.consumerId ||
       (t as any)['Consumer ID'] ||
       t.accountNumber ||
-      (t as any).id ||
-      `DISC-${Date.now()}-${idx + 1}`
+      ''
     ).trim();
     const meter = String((t as any)['Number'] || (t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || t.reading || t.meterReading || '').trim();
     const offCode = String((t as any)['off_code'] || t.offCode || t.area || '5233100').trim();
     const mru = String((t as any)['MRU'] || (t as any).mru || t.mruSection || '').trim();
-    const name = String((t as any)['Name'] || t.consumerName || (t as any)['Customer Name'] || '').trim();
+    const name = String((t as any)['Name'] || (t as any)['Consumer Name'] || t.consumerName || (t as any)['Customer Name'] || '').trim();
     const address = String((t as any)['Address'] || t.consumerAddress || '').trim();
     const baseClass = String((t as any)['Base Class'] || t.baseClass || 'Domestic').trim();
     const consumerClass = String((t as any)['Class'] || t.classType || t.baseClass || 'Domestic').trim();
@@ -2051,6 +2099,7 @@ export async function uploadDisconnectionTasks(
       'MRU': mru,
       'Consumer Id': cId,
       'Name': name,
+      'Consumer Name': name,
       'Address': address,
       'Base Class': baseClass,
       'Class': consumerClass,
@@ -2109,7 +2158,7 @@ export async function uploadDisconnectionTasks(
     };
   });
 
-  // 1. Primary: Ultra-fast Express /api/disconnection-tasks/upload endpoint (<15ms response + background Sheet sync)
+  // 1. Primary: Ultra-fast Express /api/disconnection-tasks/upload endpoint (saves to Disconnection tab in Google Sheets)
   try {
     const fastRes = await fetch('/api/disconnection-tasks/upload', {
       method: 'POST',
@@ -2129,25 +2178,53 @@ export async function uploadDisconnectionTasks(
     console.warn('[Disconnection] Fast upload endpoint notice:', fastErr);
   }
 
-  // 2. Secondary: Gas Proxy
-  try {
-    const res = await callGasApi<any>('uploadDisconnectionTasks', { tasks: standardizedTasks, adminInfo, requestId: reqId }, 'POST');
-    if (res && res.success) {
-      if (Array.isArray(res.tasks)) {
-        setCachedDisconnectionTasksSync(res.tasks);
+  // 2. Fallback: Save directly to Google Sheet 'Disconnection' tab via updateEntry/createEntry
+  let insertedCount = 0;
+  let updatedCount = 0;
+  for (let i = 0; i < standardizedTasks.length; i++) {
+    const row = standardizedTasks[i];
+    const cId = String(row.consumerId || '').trim();
+    const submissionId = `TASK-DISC-${cId}`;
+    const entryPayload = {
+      ...row,
+      id: submissionId,
+      submissionId,
+      category: 'Disconnection',
+      Category: 'Disconnection',
+      workerName: adminInfo?.adminName || 'Admin Upload',
+      'Worker Name': adminInfo?.adminName || 'Admin Upload'
+    };
+    try {
+      const updRes = await callGasApi<any>('updateEntry', {
+        id: cId,
+        submissionId,
+        consumerId: cId,
+        category: 'Disconnection',
+        entry: entryPayload
+      }, 'POST');
+      if (updRes && updRes.updated === true) {
+        updatedCount++;
+      } else {
+        await callGasApi<any>('createEntry', entryPayload, 'POST');
+        insertedCount++;
       }
-      return res;
+    } catch {
+      try {
+        await callGasApi<any>('createEntry', entryPayload, 'POST');
+        insertedCount++;
+      } catch (e: any) {
+        console.warn('[Disconnection] Direct sheet upload error for consumer', cId, e?.message || e);
+      }
     }
-  } catch (err: any) {
-    console.warn('[Disconnection] uploadDisconnectionTasks notice:', err?.message || err);
   }
 
   return {
-    success: true,
-    count: standardizedTasks.length,
-    insertedCount: standardizedTasks.length,
+    success: (insertedCount + updatedCount) > 0,
+    count: insertedCount + updatedCount,
+    insertedCount,
+    updatedCount,
     tasks: standardizedTasks as any[],
-    message: `Uploaded ${standardizedTasks.length} disconnection records to Google Sheets.`
+    message: `Uploaded ${insertedCount + updatedCount} disconnection records to Google Sheets Disconnection tab.`
   };
 }
 
@@ -2231,6 +2308,8 @@ export async function submitDisconnectionTaskReport(report: {
     workerReport: remarksStr,
     notes: remarksStr,
     'Notes': remarksStr,
+    remarks: remarksStr,
+    'Remarks': remarksStr,
     photoUrl: report.photoUrl || (report as any).image || '',
     image: report.photoUrl || (report as any).image || '',
     'Image': report.photoUrl || (report as any).image || '',
@@ -2280,7 +2359,7 @@ export async function submitDisconnectionTaskReport(report: {
     }
   } catch {}
 
-  // 1. Primary: Call ultra-fast /api/disconnection-tasks/report (<15ms response + background Sheet sync)
+  // 1. Primary: Call ultra-fast /api/disconnection-tasks/report (saves remark & status to Disconnection tab in Google Sheets)
   try {
     const res = await fetch('/api/disconnection-tasks/report', {
       method: 'POST',
@@ -2297,26 +2376,35 @@ export async function submitDisconnectionTaskReport(report: {
     // Continue to direct GAS
   }
 
+  // 2. Fallback: Directly update the row in Google Sheet 'Disconnection' tab via updateEntry
   try {
-    const res = await callGasApi<any>('updateDisconnection', payload, 'POST');
-    if (res && res.success) {
+    const submissionId = report.taskId || `TASK-DISC-${cId}`;
+    const entryPayload = {
+      ...payload,
+      id: submissionId,
+      submissionId,
+      category: 'Disconnection',
+      Category: 'Disconnection',
+      status: newStatus,
+      'Status': newStatus,
+      'Update': remarksStr ? `${newStatus} - ${remarksStr}` : newStatus
+    };
+    const updRes = await callGasApi<any>('updateEntry', {
+      id: cId,
+      submissionId,
+      consumerId: cId,
+      category: 'Disconnection',
+      entry: entryPayload
+    }, 'POST');
+    if (updRes && updRes.success) {
       return {
         success: true,
-        message: res.message || 'Disconnection sheet remark updated successfully',
+        message: 'Disconnection status & remarks saved to Google Sheets Disconnection tab',
         taskId: report.taskId,
         status: newStatus
       };
     }
-  } catch (err: any) {
-    console.warn('[Disconnection] updateDisconnection notice:', err?.message || err);
-  }
-
-  try {
-    const res = await callGasApi<any>('submitDisconnectionReport', payload, 'POST');
-    if (res && res.success) {
-      return res;
-    }
-    throw new Error(res?.error || 'Failed to update disconnection remark in Google Sheets');
+    throw new Error(updRes?.error || 'Failed to update Disconnection sheet');
   } catch (err: any) {
     throw new Error(err.message || 'Failed to update disconnection remark in Google Sheets');
   }

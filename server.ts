@@ -1745,8 +1745,19 @@ function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'): any
 function handleFastUpdateEntry(cleanId: string, bodyData: any): any {
   const nowIso = new Date().toISOString();
   const key = cleanId.toLowerCase();
-  const existingInCache = cachedEntriesState?.entries?.find(e => String(e.id).toLowerCase() === key || String(e.submissionId).toLowerCase() === key) || {};
-  const existingOverlay = localEntriesOverlayMap.get(key) || {};
+  const bareCId = String(
+    bodyData?.consumerId || bodyData?.['Consumer Id'] || cleanId
+  ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
+  const bareKey = bareCId.toLowerCase();
+
+  const existingInCache =
+    cachedEntriesState?.entries?.find(
+      e =>
+        String(e.id || '').toLowerCase() === key ||
+        String(e.submissionId || '').toLowerCase() === key ||
+        (bareKey && String(e.consumerId || e['Consumer Id'] || '').trim().toLowerCase() === bareKey)
+    ) || {};
+  const existingOverlay = localEntriesOverlayMap.get(key) || (bareKey ? localEntriesOverlayMap.get(bareKey) : {}) || {};
 
   const merged = normalizeServerEntry({
     ...existingInCache,
@@ -1756,42 +1767,141 @@ function handleFastUpdateEntry(cleanId: string, bodyData: any): any {
     updatedAt: nowIso
   });
 
+  const isDisc =
+    String(bodyData?.category || merged.category || '').toUpperCase().includes('DISCONNECT') ||
+    /^PWR-DIS-|^TASK-DISC-/i.test(cleanId);
+
+  if (isDisc && bareCId) {
+    merged.category = 'DISCONNECTION';
+    merged.consumerId = bareCId;
+    merged['Consumer Id'] = bareCId;
+    const remarksVal = String(
+      bodyData?.notes ?? bodyData?.['Notes'] ?? bodyData?.workerRemarks ?? bodyData?.remarks ?? merged.notes ?? ''
+    ).trim();
+    const statusVal = String(
+      bodyData?.disconStatus ?? bodyData?.['Discon Status'] ?? bodyData?.taskStatus ?? bodyData?.status ?? merged.status ?? 'PENDING'
+    ).trim().toUpperCase();
+    merged.notes = remarksVal;
+    merged['Notes'] = remarksVal;
+    merged.workerRemarks = remarksVal;
+    merged.status = statusVal;
+    merged.disconStatus = statusVal;
+    merged['Discon Status'] = statusVal;
+
+    const existingDisc = localDisconnectionOverlayMap.get(bareKey) ||
+      cachedDisconnectionState?.tasks?.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === bareKey) ||
+      {};
+    const updatedDiscTask = {
+      ...existingDisc,
+      ...merged,
+      consumerId: bareCId,
+      'Consumer Id': bareCId,
+      consumerName: merged.consumerName || existingDisc.consumerName || existingDisc['Name'] || '',
+      'Name': merged.consumerName || existingDisc['Name'] || existingDisc.consumerName || '',
+      taskStatus: statusVal,
+      disconStatus: statusVal,
+      'Discon Status': statusVal,
+      workerRemarks: remarksVal,
+      workerReport: remarksVal,
+      notes: remarksVal,
+      'Notes': remarksVal,
+      _localUpdatedAt: Date.now(),
+      _hasUserRemarkUpdate: true,
+      _syncedToSheet: false
+    };
+    if (isValidDisconnectionConsumerRow(updatedDiscTask)) {
+      localDisconnectionOverlayMap.set(bareKey, updatedDiscTask);
+      saveDiscOverlayToDisk();
+      if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+        const dIdx = cachedDisconnectionState.tasks.findIndex(
+          (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === bareKey
+        );
+        if (dIdx !== -1) {
+          cachedDisconnectionState.tasks[dIdx] = updatedDiscTask;
+        } else {
+          cachedDisconnectionState.tasks.push(updatedDiscTask);
+        }
+        try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+      }
+    }
+  }
+
   localEntriesOverlayMap.set(key, { ...merged, _localUpdatedAt: Date.now(), _syncedToSheet: false });
   saveEntriesOverlayToDisk();
 
   if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-    const idx = cachedEntriesState.entries.findIndex(e => String(e.id).toLowerCase() === key || String(e.submissionId).toLowerCase() === key);
+    const idx = cachedEntriesState.entries.findIndex(
+      e =>
+        String(e.id || '').toLowerCase() === key ||
+        String(e.submissionId || '').toLowerCase() === key ||
+        (isDisc && bareKey && String(e.consumerId || e['Consumer Id'] || '').trim().toLowerCase() === bareKey)
+    );
     if (idx !== -1) {
       cachedEntriesState.entries[idx] = { ...cachedEntriesState.entries[idx], ...merged };
-    } else {
+    } else if (!isDisc || isValidDisconnectionConsumerRow(merged)) {
       cachedEntriesState.entries.unshift(merged);
     }
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
 
-  const category = bodyData.category || merged.category || '';
-  const submissionId = bodyData.submissionId || merged.submissionId || cleanId;
-  const payload = {
-    id: cleanId,
-    category,
-    submissionId,
-    ...bodyData,
-    data: bodyData
-  };
+  const category = isDisc ? 'Disconnection' : (bodyData.category || merged.category || '');
+  const targetSheetId = (isDisc && bareCId) ? bareCId : cleanId;
+  const submissionId = bodyData.submissionId || merged.submissionId || targetSheetId;
+  const payload = isDisc
+    ? {
+        ...buildComplete33ColumnPayload(merged),
+        id: targetSheetId,
+        submissionId,
+        consumerId: bareCId,
+        'Consumer Id': bareCId,
+        category: 'Disconnection'
+      }
+    : {
+        id: cleanId,
+        category,
+        submissionId,
+        ...bodyData,
+        data: bodyData
+      };
 
-  (async () => {
+  enqueueGasWrite(async () => {
     try {
-      await callGoogleAppsScript('updateEntry', payload, 'POST', 35000);
+      const upRes = await callGoogleAppsScript('updateEntry', { ...payload, data: payload }, 'POST', 35000);
+      if (!upRes || upRes.success === false) {
+        if (isDisc) {
+          await callGoogleAppsScript('createEntry', { ...payload, data: payload }, 'POST', 35000);
+        }
+      }
       const ov = localEntriesOverlayMap.get(key);
       if (ov) {
         ov._syncedToSheet = true;
         saveEntriesOverlayToDisk();
       }
+      if (isDisc && bareKey) {
+        const dOv = localDisconnectionOverlayMap.get(bareKey);
+        if (dOv) {
+          dOv._syncedToSheet = true;
+          saveDiscOverlayToDisk();
+        }
+      }
       gasCache.clear();
     } catch (err) {
-      console.warn('[Background UpdateEntry] Notice:', err);
+      if (isDisc) {
+        try {
+          await callGoogleAppsScript('createEntry', { ...payload, data: payload }, 'POST', 35000);
+          const dOv = localDisconnectionOverlayMap.get(bareKey);
+          if (dOv) {
+            dOv._syncedToSheet = true;
+            saveDiscOverlayToDisk();
+          }
+        } catch (err2) {
+          console.warn('[Background Disconnection UpdateEntry Fallback] Notice:', err2);
+        }
+      } else {
+        console.warn('[Background UpdateEntry] Notice:', err);
+      }
     }
-  })();
+  });
 
   return merged;
 }
@@ -1817,6 +1927,7 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
     if (isRecordDeleted(ov)) continue;
     const ovCatUpper = String(ov?.category || '').toUpperCase().trim();
     if (ovCatUpper === 'USERS' || ovCatUpper === 'USERS_AUTH' || ovCatUpper === 'WORKORDERS_KHATA') continue;
+    if (ovCatUpper === 'DISCONNECTION' && !isValidDisconnectionConsumerRow(ov)) continue;
     const existing = resultMap.get(k);
     if (!existing) {
       resultMap.set(k, ov);
@@ -1829,7 +1940,7 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
 }
 
 async function refreshEntriesFromSheetInBackground() {
-  if (isRefreshingEntriesInBg) return;
+  if (isRefreshingEntriesInBg || activeGasWriteCount > 0) return;
   isRefreshingEntriesInBg = true;
   try {
     gasCache.clear();
@@ -1850,7 +1961,7 @@ async function refreshEntriesFromSheetInBackground() {
 async function getFastMergedEntries(query: any = {}, forceRefresh = false): Promise<any[]> {
   if (cachedEntriesState && cachedEntriesState.entries.length > 0) {
     const age = Date.now() - cachedEntriesState.timestamp;
-    if (forceRefresh || age > 6000) {
+    if (forceRefresh || age > 45000) {
       refreshEntriesFromSheetInBackground();
     }
     let list = mergeEntriesWithOverlay(cachedEntriesState.entries);
@@ -3068,28 +3179,93 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   };
 }
 
+let activeGasWriteCount = 0;
+let gasWriteQueue: Promise<any> = Promise.resolve();
+
+function enqueueGasWrite<T>(taskFn: () => Promise<T>): Promise<T> {
+  activeGasWriteCount++;
+  const next = gasWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      try {
+        return await taskFn();
+      } finally {
+        activeGasWriteCount = Math.max(0, activeGasWriteCount - 1);
+      }
+    });
+  gasWriteQueue = next.catch(() => {});
+  return next;
+}
+
 function isValidDisconnectionConsumerRow(e: any): boolean {
   if (!e || typeof e !== 'object') return false;
-  const rawStatus = String(e['Discon Status'] || e.disconStatus || e.taskStatus || e.status || e['Status'] || '').trim().toUpperCase();
-  const rawNotes = String(e['Notes'] || e.notes || e.workerRemarks || '').trim();
-  if (rawStatus === 'DELETED' || rawNotes.includes('[DELETED_BY_ADMIN]')) return false;
-  const rawCId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
-  const isSyntheticId = /^(PWR-DIS-|TASK-DISC-|SL\s*\d+|N\/A|null|undefined|-)$/i.test(rawCId);
-  const validCId = isSyntheticId ? '' : rawCId;
+  const rawStatus = String(
+    e['Discon Status'] || e.disconStatus || e.taskStatus || e.status || e['Status'] || ''
+  ).trim().toUpperCase();
+  const rawNotes = String(
+    e['Notes'] || e.notes || e.workerRemarks || e.workerReport || e['Remarks'] || ''
+  ).trim();
+  if (rawStatus === 'DELETED' || rawStatus === '[DELETED_BY_ADMIN]' || rawNotes.includes('[DELETED_BY_ADMIN]')) {
+    return false;
+  }
 
-  const rawName = String(e['Name'] || e.Name || e.consumerName || '').trim();
-  const isInvalidName = /^(Worker|CONSUMER|Unnamed Consumer|Unknown Consumer|null|undefined|-)$/i.test(rawName);
-  const validName = isInvalidName ? '' : rawName;
+  const rawCId = String(
+    e['Consumer Id'] ?? e['Consumer ID'] ?? e.consumerId ?? e.accountNumber ?? e['Consumer No'] ?? ''
+  ).trim();
+  const isInvalidId =
+    !rawCId ||
+    /^(PWR-DIS-|TASK-DISC-|DISC[-_]|SUB-|ROW-|SL\s*\d+|ID$|N\/A$|null$|undefined$|none$|-+$)/i.test(rawCId);
+  if (isInvalidId) return false;
 
-  const address = String(e['Address'] || e.Address || e.consumerAddress || e.address || '').trim();
-  const d2NetOs = String(e['D2 Net O/S'] || e.d2NetOs || e.outstandingDue || e.arrearAmount || '').trim();
-  const mobile = String(e['Mobile'] || e['Mobile Number'] || e.mobile || e.phoneNumber || '').trim();
-  const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
+  const rawName = String(
+    e['Name'] ?? e.Name ?? e['Consumer Name'] ?? e.consumerName ?? e.name ?? ''
+  ).trim();
+  const isInvalidName =
+    !rawName ||
+    rawName.length < 2 ||
+    /^(Worker|Consumer|Consumer\s*\(.*\)|Unnamed(\s+Consumer)?|Unknown(\s+Consumer)?|Demo.*|Sample.*|Test.*|N\/A|null|undefined|none|-+)$/i.test(rawName);
+  if (isInvalidName) return false;
 
-  if (validCId) return true;
-  if (validName && (address || d2NetOs || mobile || mru)) return true;
-  return false;
+  return true;
 }
+
+// Purge any invalid/demo Disconnection records that may have been persisted to disk previously
+(function purgeBogusDisconnectionRecordsFromDisk() {
+  try {
+    let discOverlayChanged = false;
+    for (const [k, v] of Array.from(localDisconnectionOverlayMap.entries())) {
+      if (!isValidDisconnectionConsumerRow(v)) {
+        localDisconnectionOverlayMap.delete(k);
+        discOverlayChanged = true;
+      }
+    }
+    if (discOverlayChanged) saveDiscOverlayToDisk();
+
+    let entriesOverlayChanged = false;
+    for (const [k, v] of Array.from(localEntriesOverlayMap.entries())) {
+      const cat = String(v?.category || v?.Category || '').toUpperCase().trim();
+      if ((cat === 'DISCONNECTION' || cat === 'DISCONNECT') && !isValidDisconnectionConsumerRow(v)) {
+        localEntriesOverlayMap.delete(k);
+        entriesOverlayChanged = true;
+      }
+    }
+    if (entriesOverlayChanged) saveEntriesOverlayToDisk();
+
+    if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
+      const beforeLen = cachedEntriesState.entries.length;
+      cachedEntriesState.entries = cachedEntriesState.entries.filter(e => {
+        const cat = String(e?.category || e?.Category || '').toUpperCase().trim();
+        if (cat === 'DISCONNECTION' || cat === 'DISCONNECT') {
+          return isValidDisconnectionConsumerRow(e);
+        }
+        return true;
+      });
+      if (cachedEntriesState.entries.length !== beforeLen) {
+        try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
+      }
+    }
+  } catch {}
+})();
 
 interface CachedDisconnectionState {
   tasks: any[];
@@ -3099,13 +3275,19 @@ let cachedDisconnectionState: CachedDisconnectionState | null = null;
 try {
   if (fs.existsSync(DISC_CACHE_FILE)) {
     const diskTasks = JSON.parse(fs.readFileSync(DISC_CACHE_FILE, 'utf-8'));
-    if (Array.isArray(diskTasks) && diskTasks.length > 0) {
-      cachedDisconnectionState = { tasks: diskTasks, timestamp: Date.now() - 10000 };
+    if (Array.isArray(diskTasks)) {
+      const validDiskTasks = diskTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
+      if (validDiskTasks.length !== diskTasks.length) {
+        try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(validDiskTasks), 'utf-8'); } catch {}
+      }
+      if (validDiskTasks.length > 0) {
+        cachedDisconnectionState = { tasks: validDiskTasks, timestamp: Date.now() - 10000 };
+      }
     }
   }
 } catch {}
 
-const DISCONNECTION_CACHE_TTL_MS = 15000;
+const DISCONNECTION_CACHE_TTL_MS = 45000;
 
 function clearDisconnectionStateCache() {
   gasCache.clear();
@@ -3116,12 +3298,12 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
   // 1. Always iterate sheetTasks FIRST so the Map insertion order strictly matches the Google Sheet order
   for (const t of sheetTasks) {
-    if (isRecordDeleted(t)) continue;
+    if (isRecordDeleted(t) || !isValidDisconnectionConsumerRow(t)) continue;
     const key = String(t.consumerId || t['Consumer Id'] || t.taskId || '').trim().toLowerCase();
     if (!key) continue;
 
     const ov = localDisconnectionOverlayMap.get(key);
-    if (ov && !isRecordDeleted(ov)) {
+    if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
       const hasOverlayRemarkOrStatus = Boolean(
         ov._hasUserRemarkUpdate ||
         (ov.workerRemarks && String(ov.workerRemarks).trim() !== '') ||
@@ -3149,7 +3331,7 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
   // 2. Append any newly uploaded overlay items that are not yet present in sheetTasks
   for (const [key, ov] of localDisconnectionOverlayMap.entries()) {
-    if (isRecordDeleted(ov)) continue;
+    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
     if (!mergedMap.has(key)) {
       mergedMap.set(key, ov);
     }
@@ -3169,6 +3351,42 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
   return finalTasks;
 }
 
+const purgedBogusSheetRowIds = new Set<string>();
+
+async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolean> {
+  if (!taskOrRow || !isValidDisconnectionConsumerRow(taskOrRow)) return false;
+  const full33 = buildComplete33ColumnPayload(taskOrRow);
+  const cId = String(full33.consumerId || full33['Consumer Id'] || '').trim();
+  if (!cId) return false;
+
+  try {
+    const upRes = await callGoogleAppsScript(
+      'updateEntry',
+      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...full33, data: full33 },
+      'POST',
+      35000
+    );
+    if (upRes && upRes.success) {
+      return true;
+    }
+  } catch {}
+
+  try {
+    const crRes = await callGoogleAppsScript(
+      'createEntry',
+      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...full33, data: full33 },
+      'POST',
+      35000
+    );
+    if (crRes && crRes.success !== false) {
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[Disconnection Sheet Sync] Retry pending for Consumer ${cId}:`, err);
+  }
+  return false;
+}
+
 async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   let entriesRes: any = null;
   try {
@@ -3176,6 +3394,24 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   } catch {}
 
   const rawEntries = entriesRes && (Array.isArray(entriesRes.entries) ? entriesRes.entries : (Array.isArray(entriesRes) ? entriesRes : []));
+
+  // Automatically purge any bogus/demo Disconnection rows found in the Google Sheet
+  for (const rawRow of rawEntries) {
+    const cat = String(rawRow?.category || rawRow?.Category || '').toUpperCase().trim();
+    const isDiscCat = cat === 'DISCONNECTION' || cat === 'DISCONNECT';
+    if (isDiscCat && !isRecordDeleted(rawRow) && !isValidDisconnectionConsumerRow(rawRow)) {
+      const badId = String(rawRow.id || rawRow.submissionId || rawRow['Consumer Id'] || rawRow.consumerId || '').trim();
+      if (badId && !purgedBogusSheetRowIds.has(badId)) {
+        purgedBogusSheetRowIds.add(badId);
+        enqueueGasWrite(async () => {
+          try {
+            await callGoogleAppsScript('deleteEntry', { id: badId, submissionId: badId, category: 'Disconnection', confirmCritical: true }, 'POST', 20000);
+          } catch {}
+        });
+      }
+    }
+  }
+
   const discEntries = rawEntries.filter((e: any) => {
     if (isRecordDeleted(e)) return false;
     if (!isValidDisconnectionConsumerRow(e)) return false;
@@ -3202,6 +3438,22 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
 
   let idx = 1;
   const sheetTasks = deduplicatedEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
+
+  // If any overlay item is already present in sheetTasks with matching status & notes, mark it synced
+  const sheetConsumerIds = new Set(sheetTasks.map((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase()));
+  for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
+    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
+    if (!ov._syncedToSheet || !sheetConsumerIds.has(k)) {
+      enqueueGasWrite(async () => {
+        const ok = await syncSingleDisconnectionRowToSheet(ov);
+        if (ok) {
+          ov._syncedToSheet = true;
+          saveDiscOverlayToDisk();
+        }
+      });
+    }
+  }
+
   const merged = mergeSheetDisconnectionTasksWithOverlay(sheetTasks);
   cachedDisconnectionState = { tasks: merged, timestamp: Date.now() };
   try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), 'utf-8'); } catch {}
@@ -3209,7 +3461,7 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
 }
 
 function refreshDisconnectionFromSheetInBackground() {
-  if (isRefreshingDiscInBg) return;
+  if (isRefreshingDiscInBg || activeGasWriteCount > 0) return;
   isRefreshingDiscInBg = true;
   (async () => {
     try {
@@ -3223,11 +3475,18 @@ function refreshDisconnectionFromSheetInBackground() {
   })();
 }
 
-// Keep server caches continuously warm and synced with Google Sheets every 10 seconds
+// Keep server caches warm and synced with Google Sheets without rate-limiting GAS
 setInterval(() => {
-  refreshDisconnectionFromSheetInBackground();
-  refreshEntriesFromSheetInBackground();
-}, 10000);
+  if (activeGasWriteCount === 0) {
+    refreshDisconnectionFromSheetInBackground();
+  }
+}, 60000);
+
+setInterval(() => {
+  if (activeGasWriteCount === 0) {
+    refreshEntriesFromSheetInBackground();
+  }
+}, 90000);
 
 app.get('/api/disconnection-tasks', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -3253,7 +3512,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
 
   if (cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0) {
     const age = Date.now() - cachedDisconnectionState.timestamp;
-    if (forceRefresh || age > 6000) {
+    if (forceRefresh || age > 45000) {
       refreshDisconnectionFromSheetInBackground();
     }
     return res.json(applyFilterAndStats(cachedDisconnectionState.tasks));
@@ -3271,7 +3530,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
 function buildComplete33ColumnPayload(t: any): Record<string, any> {
   const nowTimestamp = new Date().toISOString();
   const cId = String(t['Consumer Id'] || t.consumerId || t['Consumer ID'] || t.accountNumber || '').trim();
-  const name = String(t['Name'] || t.consumerName || t.name || cId || 'Consumer').trim();
+  const name = String(t['Name'] || t['Consumer Name'] || t.consumerName || t.name || '').trim();
   const offCode = String(t['off_code'] || t.offCode || t.area || '5233100').trim();
   const mru = String(t['MRU'] || t.mru || t.mruSection || '').trim();
   const address = String(t['Address'] || t.consumerAddress || t.address || '').trim();
@@ -3302,8 +3561,8 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
   const uploadDate = String(t['Upload Date'] || t.uploadDate || nowTimestamp).trim();
 
   return {
-    id: cId || `TASK-DISC-${Date.now()}`,
-    submissionId: cId || `SUB-DISC-${Date.now()}`,
+    id: cId,
+    submissionId: cId,
     category: 'Disconnection',
     consumerId: cId,
     consumerName: name,
@@ -3322,6 +3581,7 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
     'MRU': mru,
     'Consumer Id': cId,
     'Name': name,
+    'Consumer Name': name,
     'Address': address,
     'Base Class': baseClass,
     'Class': consumerClass,
@@ -3344,6 +3604,7 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
     'Gis Pole': gisPole,
     'Agency': agency,
     'Notes': notes,
+    'Remarks': notes,
     'Nature of Conn': natureOfConn,
     'Gov/Non-Gov': govNonGov,
     'Last Updated': nowTimestamp,
@@ -3361,7 +3622,8 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
 app.post('/api/disconnection-tasks/upload', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const tasksArray = Array.isArray(req.body?.tasks) ? req.body.tasks : (Array.isArray(req.body) ? req.body : []);
+    const rawTasksArray = Array.isArray(req.body?.tasks) ? req.body.tasks : (Array.isArray(req.body) ? req.body : []);
+    const tasksArray = rawTasksArray.filter(isValidDisconnectionConsumerRow);
     if (tasksArray.length === 0) {
       return res.json({ success: true, count: 0, insertedCount: 0, updatedCount: 0, tasks: cachedDisconnectionState?.tasks || [] });
     }
@@ -3378,6 +3640,7 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
 
       deletedTombstoneSet.delete(cIdKey);
       deletedTombstoneSet.delete(`task-disc-${cIdKey}`);
+      deletedTombstoneSet.delete(`pwr-dis-${cIdKey}`);
 
       const existingInCache = cachedDisconnectionState?.tasks?.find(
         (ct: any) => String(ct.consumerId || ct['Consumer Id'] || '').trim().toLowerCase() === cIdKey
@@ -3406,68 +3669,21 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
     cachedDisconnectionState = { tasks: mergedAllTasks, timestamp: Date.now() };
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(mergedAllTasks), 'utf-8'); } catch {}
 
-    const requestId = req.body?.requestId || `REQ-UPL-${Date.now()}`;
-    (async () => {
-      try {
-        const gasResult = await callGoogleAppsScript(
-          'uploadDisconnectionTasks',
-          { tasks: preparedPayloads, requestId },
-          'POST',
-          45000
-        );
-        if (gasResult && gasResult.success) {
-          for (const p of preparedPayloads) {
-            const k = String(p.consumerId || p.id || '').trim().toLowerCase();
-            const ov = localDisconnectionOverlayMap.get(k);
-            if (ov) ov._syncedToSheet = true;
+    // Sequentially write each uploaded consumer to the Google Sheet 'Disconnection' tab via enqueueGasWrite
+    for (const rowPayload of preparedPayloads) {
+      const k = String(rowPayload.consumerId || rowPayload.id || '').trim().toLowerCase();
+      enqueueGasWrite(async () => {
+        const ok = await syncSingleDisconnectionRowToSheet(rowPayload);
+        if (ok) {
+          const ov = localDisconnectionOverlayMap.get(k);
+          if (ov) {
+            ov._syncedToSheet = true;
+            saveDiscOverlayToDisk();
           }
-          saveDiscOverlayToDisk();
           gasCache.clear();
-          return;
         }
-      } catch (e) {
-        console.warn('[Upload Disconnection] Primary uploadDisconnectionTasks notice, running direct Disconnection sheet row sync:', e);
-      }
-
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < preparedPayloads.length; i += BATCH_SIZE) {
-        const chunk = preparedPayloads.slice(i, i + BATCH_SIZE);
-        await Promise.all(
-          chunk.map(async (rowPayload) => {
-            const k = String(rowPayload.consumerId || rowPayload.id || '').trim().toLowerCase();
-            try {
-              const upRes = await callGoogleAppsScript(
-                'updateEntry',
-                { id: rowPayload.consumerId, category: 'Disconnection', ...rowPayload, data: rowPayload },
-                'POST',
-                30000
-              );
-              if (upRes && upRes.success) {
-                const ov = localDisconnectionOverlayMap.get(k);
-                if (ov) ov._syncedToSheet = true;
-                return;
-              }
-            } catch {}
-            try {
-              const crRes = await callGoogleAppsScript(
-                'createEntry',
-                { category: 'Disconnection', ...rowPayload, data: rowPayload },
-                'POST',
-                30000
-              );
-              if (crRes && crRes.success !== false) {
-                const ov = localDisconnectionOverlayMap.get(k);
-                if (ov) ov._syncedToSheet = true;
-              }
-            } catch (err) {
-              console.warn('[Upload Disconnection Fallback] Row write notice:', err);
-            }
-          })
-        );
-      }
-      saveDiscOverlayToDisk();
-      gasCache.clear();
-    })();
+      });
+    }
 
     return res.json({
       success: true,
@@ -3844,34 +4060,9 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   };
   submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
 
-  // Direct background write to Google Sheet Disconnection tab using verified updateEntry + createEntry fallback
-  (async () => {
-    let savedToSheet = false;
-    try {
-      const full33 = buildComplete33ColumnPayload(updatedTaskObj);
-      const res3 = await callGoogleAppsScript(
-        'updateEntry',
-        { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...full33, data: full33 },
-        'POST',
-        35000
-      );
-      if (res3 && res3.success) {
-        savedToSheet = true;
-      } else {
-        const res4 = await callGoogleAppsScript(
-          'createEntry',
-          { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...full33, data: full33 },
-          'POST',
-          35000
-        );
-        if (res4 && res4.success !== false) {
-          savedToSheet = true;
-        }
-      }
-    } catch (err) {
-      console.warn('[Background Disconnection Remark Sync] Notice:', err);
-    }
-
+  // Direct serialized background write to Google Sheet Disconnection tab via enqueueGasWrite
+  enqueueGasWrite(async () => {
+    const savedToSheet = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
     if (savedToSheet && cIdKey) {
       const ov = localDisconnectionOverlayMap.get(cIdKey);
       if (ov) {
@@ -3880,7 +4071,7 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       }
     }
     gasCache.clear();
-  })();
+  });
 
   return res.json(responseObj);
 });

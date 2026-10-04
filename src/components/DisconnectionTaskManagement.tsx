@@ -37,7 +37,8 @@ import {
   deleteDisconnectionTask,
   submitDisconnectionTaskReport,
   getCachedDisconnectionTasksSync,
-  setCachedDisconnectionTasksSync
+  setCachedDisconnectionTasksSync,
+  isValidDisconnectionTaskOrRow
 } from '../services/api';
 import { Language } from '../utils/translations';
 import {
@@ -76,18 +77,23 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
 
-  // Navigation tab state
-  const [activeTab, setActiveTab] = useState<DisconnectionTab>(initialTab);
-  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(initialTab === 'DASHBOARD');
+  // Navigation tab state (Workers always view the Consumer List directly)
+  const [activeTab, setActiveTab] = useState<DisconnectionTab>(isAdmin ? initialTab : 'VIEW_LIST');
+  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(isAdmin && initialTab === 'DASHBOARD');
 
   useEffect(() => {
+    if (!isAdmin) {
+      setActiveTab('VIEW_LIST');
+      setIsDashboardExpanded(false);
+      return;
+    }
     if (initialTab) {
       setActiveTab(initialTab);
       if (initialTab === 'DASHBOARD') {
         setIsDashboardExpanded(true);
       }
     }
-  }, [initialTab]);
+  }, [initialTab, isAdmin]);
 
   // Core Data States (Initialized synchronously from local cache for 0ms instant rendering)
   const [tasks, setTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
@@ -135,9 +141,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       });
 
       if (discResult && Array.isArray(discResult.tasks)) {
+        const cleanIncoming = discResult.tasks.filter(isValidDisconnectionTaskOrRow);
         setTasks(prev => {
-          const incomingList = discResult.tasks;
-          if (prev.length === 0) {
+          const cleanPrev = prev.filter(isValidDisconnectionTaskOrRow);
+          const incomingList = cleanIncoming;
+          if (cleanPrev.length === 0) {
             setCachedDisconnectionTasksSync(incomingList);
             return incomingList;
           }
@@ -152,7 +160,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           const nextOrdered: DisconnectionTask[] = [];
           const visitedKeys = new Set<string>();
 
-          for (const oldItem of prev) {
+          for (const oldItem of cleanPrev) {
             const key = String(oldItem.consumerId || (oldItem as any)['Consumer Id'] || oldItem.taskId || '').trim().toLowerCase();
             if (key && incomingMap.has(key)) {
               const updated = incomingMap.get(key)!;
@@ -318,8 +326,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     setActiveTab('VIEW_LIST');
   };
 
-  // Delete Consumer Handler (Instant 0ms UI removal + Permanent Backend Sheet deletion)
+  // Delete Consumer Handler (Admin Only - Instant 0ms UI removal + Permanent Backend Sheet deletion)
   const handleDeleteTask = async (task: DisconnectionTask) => {
+    if (!isAdmin) return;
     const cId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
     const tId = String(task.taskId || '').trim();
 
@@ -462,6 +471,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   // Filtered & Sorted View List Consumers
   const filteredTasks = useMemo(() => {
     return tasks.filter(t => {
+      if (!isValidDisconnectionTaskOrRow(t)) return false;
       // Worker only restriction if toggled or worker mode
       if (workerOnlyFilter && !isAdmin) {
         const myName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || '').toLowerCase();
@@ -679,7 +689,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         </div>
       </div>
 
-      {/* Compact Option Cards (Matching Admin Panel NSC / DISCONNECT / POLE CASE layout) */}
+      {/* Compact Option Cards (Admin Only - Workers view the consumer list directly) */}
+      {isAdmin && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="disconnection-compact-options">
         {/* 1. PERFORMANCE DASHBOARD */}
         <button
@@ -818,6 +829,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           </span>
         </button>
       </div>
+      )}
 
       {/* ADMIN SMS-STYLE RE-ISSUE REQUEST NOTIFICATION BANNER */}
       {isAdmin && pendingReissueTasks.length > 0 && (
@@ -943,7 +955,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 onUpdateStatus={handleOpenUpdateModal}
                 onRequestReissue={handleRequestReissue}
                 onApproveReissue={isAdmin ? handleApproveReissue : undefined}
-                onDeleteTask={handleDeleteTask}
+                onDeleteTask={isAdmin ? handleDeleteTask : undefined}
                 isAdmin={isAdmin}
                 lang={lang}
               />
@@ -976,9 +988,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           )}
 
           {/* SECTION 4: VIEW LIST */}
-          {activeTab === 'VIEW_LIST' && (
+          {(activeTab === 'VIEW_LIST' || !isAdmin) && (
             <div className="space-y-4" id="disconnection-view-list-container">
-              {/* INTERACTIVE COLLAPSIBLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
+              {/* INTERACTIVE COLLAPSIBLE PERFORMANCE DASHBOARD OPTION (ADMIN ONLY) */}
+              {isAdmin && (
               <div className="space-y-3">
                 <div
                   onClick={() => setIsDashboardExpanded(!isDashboardExpanded)}
@@ -1092,7 +1105,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         onUpdateStatus={handleOpenUpdateModal}
                         onRequestReissue={handleRequestReissue}
                         onApproveReissue={isAdmin ? handleApproveReissue : undefined}
-                        onDeleteTask={handleDeleteTask}
+                        onDeleteTask={isAdmin ? handleDeleteTask : undefined}
                         isAdmin={isAdmin}
                         lang={lang}
                       />
@@ -1100,6 +1113,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   </div>
                 )}
               </div>
+              )}
 
               {/* Search & Three-Dot Menu Bar */}
               <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-3.5 shadow-xs w-full max-w-full box-border">
@@ -1501,7 +1515,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       onRequestReissue={handleRequestReissue}
                       onApproveReissue={isAdmin ? handleApproveReissue : undefined}
                       isAdmin={isAdmin}
-                      onDeleteTask={handleDeleteTask}
+                      onDeleteTask={isAdmin ? handleDeleteTask : undefined}
                       lang={lang}
                     />
                   ))}

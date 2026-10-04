@@ -378,9 +378,18 @@ export const DisconnectionUpload: React.FC<DisconnectionUploadProps> = ({
       let isInvalid = false;
       const notes: string[] = [];
 
-      if (!r.consumerName && !r.consumerId && !r.accountNumber) {
+      const rawCid = String(r.consumerId || r.accountNumber || '').trim();
+      const rawName = String(r.consumerName || '').trim();
+
+      if (
+        !rawCid ||
+        !rawName ||
+        /^(SL\s*\d+|DISC[-_]|PWR-DIS-|SUB-|ROW-|TASK-|ID$|N\/A$|NULL$|UNDEFINED$|NONE$|-+$)/i.test(rawCid) ||
+        /^(consumer|consumer\s*\(.*\)|unknown(\s+consumer)?|demo.*|sample.*|test.*|n\/a|null|undefined|none|-+)$/i.test(rawName) ||
+        rawName.length < 2
+      ) {
         isInvalid = true;
-        notes.push('Missing Name and Consumer ID');
+        notes.push('Missing valid Consumer ID or Consumer Name');
       }
 
       if (cid) {

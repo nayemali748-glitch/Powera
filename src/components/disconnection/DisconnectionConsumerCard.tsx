@@ -122,8 +122,8 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
     return `₹${num.toLocaleString('en-IN')}`;
   })();
 
-  // Display Consumer ID or Serial Number or Fallback
-  const displayId = task.consumerId || task.accountNumber || task.serialNumber || 'N/A';
+  // Display Consumer ID (never fallback to SL serial number)
+  const displayId = task.consumerId || task.accountNumber || (task as any)['Consumer Id'] || '';
 
   // Device: Domestic -> D, Commercial -> C, Industrial -> I, STW -> A | 1 ph -> 1 ph, 3ph -> 3ph
   const connClass = getTaskConnectionClass(task);
@@ -274,7 +274,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
         <div className="space-y-1.5 min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap min-w-0">
             <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight uppercase break-words">
-              {task.consumerName || (task as any)['Name'] || 'Consumer'}
+              {task.consumerName || (task as any)['Name'] || (task as any)['Consumer Name'] || ''}
             </h3>
             {isUrgent && (
               <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold">
@@ -459,8 +459,8 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
         </div>
       )}
 
-      {/* 6. Action Buttons: Update Status + Delete Button */}
-      {confirmingDelete && onDeleteTask ? (
+      {/* 6. Action Buttons: Update Status + Delete Button (Admin Only) */}
+      {isAdmin && confirmingDelete && onDeleteTask ? (
         <div className="pt-1 bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
           <p className="text-xs font-bold text-red-800 text-center">
             {lang === 'bn'
@@ -543,7 +543,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             </button>
           )}
 
-          {onDeleteTask && (
+          {isAdmin && onDeleteTask && (
             <button
               id={`delete-consumer-btn-${task.taskId || task.consumerId}`}
               type="button"

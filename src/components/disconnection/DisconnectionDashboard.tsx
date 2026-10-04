@@ -600,7 +600,7 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
                   onRequestReissue={onRequestReissue}
                   onApproveReissue={onApproveReissue}
                   isAdmin={isAdmin}
-                  onDeleteTask={onDeleteTask}
+                  onDeleteTask={isAdmin ? onDeleteTask : undefined}
                   lang={lang}
                 />
               ))}

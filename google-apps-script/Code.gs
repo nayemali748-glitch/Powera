@@ -726,7 +726,8 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'submissionid') return dataObj.submissionId || dataObj.SubmissionID || '';
   if (targetNorm === 'recordid' || targetNorm === 'id') return dataObj.id || dataObj.ID || '';
   if (targetNorm === 'userid' || targetNorm === 'idno') return dataObj.idNo || dataObj.userId || dataObj.workerId || '';
-  if (targetNorm === 'fullname' || targetNorm === 'name') return dataObj.name || dataObj.fullName || dataObj.workerName || '';
+  if (targetNorm === 'fullname') return dataObj.fullName || dataObj.name || dataObj.workerName || '';
+  if (targetNorm === 'name') return dataObj.consumerName || dataObj.name || dataObj.fullName || (!dataObj.consumerId && !dataObj['Consumer Id'] ? dataObj.workerName : '') || '';
   if (targetNorm === 'role') return dataObj.role || 'worker';
   if (targetNorm === 'status') return dataObj.status || 'Completed';
   if (targetNorm === 'date') return dataObj.date || now();
