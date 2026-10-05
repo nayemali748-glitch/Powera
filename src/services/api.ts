@@ -248,7 +248,7 @@ export async function syncPendingEntries(): Promise<number> {
     for (const item of pending) {
       try {
         const { _isPendingSync, ...cleanItem } = item;
-        const res = await callGasApi<{ success: boolean; entry?: PowerEntry; duplicate?: boolean }>('createEntry', { data: cleanItem }, 'POST');
+        const res = await callGasApi<{ success: boolean; entry?: PowerEntry; duplicate?: boolean }>('submitRecord', { ...cleanItem, data: cleanItem }, 'POST');
         if (res && (res.success || res.duplicate)) {
           item._isPendingSync = false;
           syncedCount++;
@@ -279,6 +279,7 @@ export async function fetchEntries(filters?: {
   search?: string;
   workerId?: string;
   workerName?: string;
+  refresh?: boolean;
 }): Promise<PowerEntry[]> {
   try {
     const query = new URLSearchParams();
@@ -287,8 +288,9 @@ export async function fetchEntries(filters?: {
     if (filters?.search) query.set('search', filters.search);
     if (filters?.workerId) query.set('workerId', filters.workerId);
     if (filters?.workerName) query.set('workerName', filters.workerName);
+    if (filters?.refresh) query.set('refresh', 'true');
 
-    // 1. Primary: Ultra-fast Express /api/entries endpoint (returns server cache in <10ms + background syncs Sheet)
+    // 1. Primary: Express /api/entries endpoint (Synced with Google Sheets)
     try {
       const fastRes = await fetch(`/api/entries?${query.toString()}`, {
         headers: { 'Accept': 'application/json' }
@@ -351,7 +353,7 @@ export async function fetchEntries(filters?: {
         catUp !== 'CALL CASE'
       );
     });
-    const uniqueEntries = deduplicateEntries(filteredList);
+    const uniqueEntries = deduplicateEntries(filteredList.map((e: any) => normalizeEntry(e)));
     
     // Save to local cache for instant UI availability
     writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
@@ -373,10 +375,9 @@ export async function fetchEntries(filters?: {
   }
 }
 
-// Map category to explicit Apps Script action
-// Map category to explicit Apps Script action - 'createEntry' is the canonical GAS action
+// Map category to explicit Apps Script action - 'submitRecord' is the canonical GAS action
 export function getCreateActionForCategory(_cat?: string): string {
-  return 'createEntry';
+  return 'submitRecord';
 }
 
 export async function createEntry(
@@ -399,7 +400,7 @@ export async function createEntry(
     ...entryData as any,
     submissionId,
     id: generatedId,
-    workerId: String(entryData.workerId || currentUser?.idNo || currentUser?.id || ''),
+    workerId: String(entryData.workerId || currentUser?.idNo || currentUser?.id || '').trim(),
     workerName: String(entryData.workerName || currentUser?.name || 'Field Worker').trim(),
     role: String(entryData.role || currentUser?.role || 'worker'),
     submittedBy: String(entryData.submittedBy || (currentUser?.idNo ? `${currentUser.name} (${currentUser.idNo})` : entryData.workerName || 'Worker')),
@@ -410,65 +411,92 @@ export async function createEntry(
     status: entryData.status || 'Completed',
   };
 
-  // Immediately update localStorage cache for zero-latency UI reflection
-  try {
-    const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    const filtered = list.filter(e => e.id !== cleanEntry.id && e.submissionId !== cleanEntry.submissionId);
-    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache([cleanEntry, ...filtered]));
-  } catch {}
-
   const promise = (async () => {
-    let res: { success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string } | null = null;
+    let res: { success: boolean; entry?: PowerEntry; data?: any; duplicate?: boolean; recordId?: string; message?: string } | null = null;
     let backendError: any = null;
 
-    // 1. Primary: Send to ultra-fast /api/entries endpoint (<15ms response + background Sheet sync)
+    // 1. Primary: Send to /api/entries endpoint (Waits for confirmed Google Sheets write)
     try {
       const localRes = await fetch('/api/entries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleanEntry)
       });
-      if (localRes.ok) {
-        const localData = await localRes.json();
-        if (localData && (localData.success || localData.entry)) {
-          res = { success: true, entry: localData.entry || cleanEntry };
-        }
+      const localData = await localRes.json().catch(() => null);
+      if (localRes.ok && localData && (localData.success || localData.entry)) {
+        res = { success: true, entry: localData.entry || localData.data || cleanEntry };
+      } else if (localData && localData.error) {
+        backendError = new Error(typeof localData.error === 'string' ? localData.error : (localData.error.message || 'Google Sheets write failed'));
       }
     } catch (localErr) {
       backendError = localErr;
     }
 
-    // 2. Fallback to gas-proxy if needed
+    // 2. Fallback to gas-proxy / direct GAS submitRecord if needed
     if (!res || res.success === false) {
       try {
-        res = await callGasApi<{ success: boolean; entry?: PowerEntry; data?: PowerEntry; duplicate?: boolean; recordId?: string; message?: string }>(
-          'createEntry',
-          { data: cleanEntry },
+        const directPayload: any = { ...cleanEntry };
+        if (String(directPayload.category || '').toUpperCase() === 'NSC') {
+          const nscMeta = {
+            applicationNo: String(directPayload.applicationNo || '').trim(),
+            fatherName: String(directPayload.fatherName || '').trim(),
+            agencyName: String(directPayload.agencyName || '').trim(),
+            cccName: String(directPayload.cccName || directPayload.substation || '').trim(),
+            sealNo: String(directPayload.sealNo || '').trim(),
+            meterMake: String(directPayload.meterMake || '').trim(),
+            meterInstallDate: String(directPayload.meterInstallDate || '').trim(),
+            inspectionAgencyName: String(directPayload.inspectionAgencyName || '').trim(),
+            appliedLoad: String(directPayload.appliedLoad || '').trim(),
+            phase: String(directPayload.phase || '').trim(),
+            tariffCategory: String(directPayload.tariffCategory || '').trim(),
+            serviceCableLength: String(directPayload.serviceCableLength || '').trim(),
+            earthResistance: String(directPayload.earthResistance || '').trim(),
+            workOrderNo: String(directPayload.workOrderNo || '').trim(),
+            workOrderDate: String(directPayload.workOrderDate || '').trim(),
+            workOrderNoticeId: String(directPayload.workOrderNoticeId || '').trim(),
+            workOrderNoticeTitle: String(directPayload.workOrderNoticeTitle || '').trim(),
+            workOrderNoticeDate: String(directPayload.workOrderNoticeDate || '').trim(),
+            notes: String(directPayload.notes || '').trim(),
+            locationGps: String(directPayload.locationGps || '').trim(),
+            role: String(directPayload.role || 'worker').trim(),
+            submittedBy: String(directPayload.submittedBy || directPayload.workerName || '').trim(),
+            createdAt: String(directPayload.createdAt || nowIso).trim(),
+            updatedAt: nowIso
+          };
+          directPayload.reading = String(directPayload.initialReading || '000000').trim();
+          directPayload.substation = nscMeta.cccName;
+          directPayload.feederName = `NSC_META::${JSON.stringify(nscMeta)}`;
+          directPayload.remarks = nscMeta.notes;
+        }
+        if (typeof directPayload.photoUrl === 'string' && directPayload.photoUrl.length > 42000) {
+          directPayload.photoUrl = '';
+        }
+        if (typeof directPayload.workOrderPhoto === 'string' && directPayload.workOrderPhoto.length > 42000) {
+          directPayload.workOrderPhoto = '';
+        }
+
+        const gasRes = await callGasApi<any>(
+          'submitRecord',
+          { ...directPayload, data: directPayload },
           'POST',
-          15000
+          40000
         );
+        if (gasRes && gasRes.success !== false) {
+          const inner = gasRes.entry || gasRes.data?.entry || gasRes.data || cleanEntry;
+          res = { success: true, entry: { ...cleanEntry, ...(typeof inner === 'object' ? inner : {}) } };
+        }
       } catch (err: any) {
         backendError = err;
       }
     }
 
-    // 3. Fallback to offline queue if client has completely lost connectivity
+    // 3. Do NOT fake success if Google Sheets write failed — throw a real error
     if (!res || res.success === false) {
-      console.warn('Network unavailable, storing entry safely in offline queue:', backendError?.message || backendError);
-      const offlineEntry: PowerEntry & { _isPendingSync?: boolean } = {
-        ...cleanEntry,
-        _isPendingSync: true
-      };
-      try {
-        const list = readCache<(PowerEntry & { _isPendingSync?: boolean })[]>(LOCAL_STORAGE_KEY, []);
-        const filtered = list.filter(e => e.id !== offlineEntry.id && e.submissionId !== offlineEntry.submissionId);
-        writeCache(LOCAL_STORAGE_KEY, [offlineEntry, ...filtered]);
-      } catch {}
-      return offlineEntry as PowerEntry;
+      throw backendError || new Error(res?.message || 'Failed to save record to Google Sheets');
     }
 
-    // Data successfully saved!
-    const confirmedEntry: PowerEntry = normalizeEntry(res.entry || res.data || cleanEntry);
+    // Data confirmed saved in Google Sheets!
+    const confirmedEntry: PowerEntry = normalizeEntry({ ...cleanEntry, ...(res.entry || res.data || {}) });
 
     try {
       const list = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);

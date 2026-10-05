@@ -107,7 +107,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [consumerName, setConsumerName] = useState('');
   const [fatherName, setFatherName] = useState('');
   const [applicationNo, setApplicationNo] = useState('');
-  const [nscWorkerName, setNscWorkerName] = useState(workerName || '');
+  const [nscWorkerName, setNscWorkerName] = useState(workerName || currentUser?.name || '');
   const [agencyName, setAgencyName] = useState('');
   const [cccName, setCccName] = useState('Central CCC');
   const [consumerId, setConsumerId] = useState('');
@@ -232,8 +232,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   useEffect(() => {
     if (workerName) {
       setWorker(workerName);
+      setNscWorkerName(prev => prev || workerName);
     } else if (currentUser?.name) {
       setWorker(String(currentUser.name));
+      setNscWorkerName(prev => prev || String(currentUser.name));
     }
     if (currentUser?.phone) {
       setWorkerPhone(String(currentUser.phone));
@@ -323,7 +325,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     };
 
     // 1. Worker Name Validation
-    const effectiveWorker = (category === 'NSC' ? nscWorkerName : worker).trim();
+    const effectiveWorker = (category === 'NSC' ? (nscWorkerName || worker || currentUser?.name || '') : worker).trim();
     if (!effectiveWorker) {
       recordError(
         'workerName',
@@ -446,9 +448,9 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     const generatedId = `PWR-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
 
-    const workerIdVal = '';
-    const workerNameVal = String(currentUser?.name || (category === 'NSC' ? nscWorkerName : worker) || '').trim();
-    const workerRoleVal = String(currentUser?.role || 'Field Worker');
+    const workerIdVal = String(currentUser?.idNo || currentUser?.id || '').trim();
+    const workerNameVal = String((category === 'NSC' ? (nscWorkerName || worker || currentUser?.name) : (worker || currentUser?.name)) || '').trim();
+    const workerRoleVal = String(currentUser?.role || 'worker');
     const submittedByVal = workerNameVal;
     const workerPhoneVal = String(currentUser?.phone || workerPhone || '').trim();
 
@@ -488,9 +490,10 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.consumerName = consumerName.trim();
       entryPayload.fatherName = fatherName.trim();
       entryPayload.applicationNo = applicationNo.trim();
-      entryPayload.workerName = nscWorkerName.trim() || worker.trim();
+      entryPayload.workerName = nscWorkerName.trim() || worker.trim() || String(currentUser?.name || '').trim();
       entryPayload.agencyName = agencyName.trim();
       entryPayload.cccName = cccName.trim();
+      entryPayload.substation = cccName.trim() || substation.trim();
       entryPayload.consumerId = consumerId.trim();
       entryPayload.meterNo = meterNo.trim();
       entryPayload.sealNo = sealNo.trim();

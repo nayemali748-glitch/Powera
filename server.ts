@@ -93,6 +93,23 @@ function normalizeServerEntry(entry: any): any {
   if (!entry || typeof entry !== 'object') return entry;
   const raw: any = { ...entry };
 
+  // Unpack NSC structured metadata stored in feederName column of NSC sheet
+  const rawFeeder = String(raw.feederName || raw['Feeder Name'] || '').trim();
+  if (rawFeeder.startsWith('NSC_META::')) {
+    try {
+      const meta = JSON.parse(rawFeeder.slice('NSC_META::'.length));
+      if (meta && typeof meta === 'object') {
+        for (const [mk, mv] of Object.entries(meta)) {
+          if (mv !== undefined && mv !== null && mv !== '' && (raw[mk] === undefined || raw[mk] === '')) {
+            raw[mk] = mv;
+          }
+        }
+      }
+    } catch {}
+    raw.feederName = '';
+    delete raw['Feeder Name'];
+  }
+
   raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || '';
   raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || raw.submissionId || '';
   raw.category = toFrontendCategory(raw.category || raw['Category'] || 'NSC');
@@ -107,15 +124,15 @@ function normalizeServerEntry(entry: any): any {
   raw.createdAt = raw.createdAt || raw['Created At'] || raw['Upload Date'] || raw.date || '';
   raw.updatedAt = raw.updatedAt || raw['Updated At'] || raw['Last Updated'] || '';
 
-  raw.workerId = raw.workerId || raw['Worker ID'] || raw['Lineman ID'] || '';
+  raw.workerId = String(raw.workerId || raw['Worker ID'] || raw['Lineman ID'] || '').trim();
   raw.workerName = raw.workerName || raw['Worker Name'] || raw['Lineman Name'] || raw['NSC Worker Name'] || '';
   raw.role = raw.role || raw['Role'] || '';
   raw.submittedBy = raw.submittedBy || raw['Submitted By'] || raw.workerName || '';
   raw.workerPhone = raw.workerPhone || raw['Worker Phone'] || '';
 
   raw.agencyName = raw.agencyName || raw['Agency Name'] || '';
-  raw.cccName = raw.cccName || raw['CCC Name'] || '';
   raw.substation = raw.substation || raw['Substation'] || raw['off_code'] || '';
+  raw.cccName = raw.cccName || raw['CCC Name'] || (raw.category === 'NSC' && raw.substation && raw.substation !== '5233100' ? raw.substation : '') || '';
   raw.feederName = raw.feederName || raw['Feeder Name'] || '';
 
   raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
@@ -133,15 +150,15 @@ function normalizeServerEntry(entry: any): any {
   raw.address = raw.address || raw['Address'] || '';
 
   raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
-  raw.phase = raw.phase || raw['BClass/Phase'] || raw['Supply Phase'] || raw['Phase'] || '';
-  raw.tariffCategory = raw.tariffCategory || raw['Class'] || raw['Tariff Category'] || '';
+  raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || (raw.category === 'DISCONNECTION' ? raw['BClass/Phase'] : '') || '';
+  raw.tariffCategory = raw.tariffCategory || raw['Tariff Category'] || (raw.category === 'DISCONNECTION' ? raw['Class'] : '') || '';
   raw.serviceCableLength = raw.serviceCableLength || raw['Service Cable Length'] || '';
   raw.poleNo = raw.poleNo || raw['Pole No'] || '';
   raw.earthResistance = raw.earthResistance || raw['Earth Resistance'] || '';
 
   raw.meterNo = raw.meterNo || raw['Meter'] || raw['Meter No'] || raw['Meter Number'] || '';
   raw.meterMake = raw.meterMake || raw['Meter Make'] || '';
-  raw.initialReading = raw.initialReading || raw['Initial Reading'] || '';
+  raw.initialReading = raw.initialReading || raw['Initial Reading'] || raw['Reading'] || raw.reading || '';
   raw.sealNo = raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
   raw.meterInstallDate = raw.meterInstallDate || raw['Meter Install Date'] || '';
   raw.inspectionAgencyName = raw.inspectionAgencyName || raw['Inspection Agency Name'] || '';
@@ -186,7 +203,7 @@ function normalizeServerEntry(entry: any): any {
 
   raw.locationGps = raw.locationGps || raw['GPS Location'] || raw['Location GPS'] || '';
   raw.photoUrl = raw.photoUrl || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
-  raw.notes = raw.notes || raw['Notes'] || '';
+  raw.notes = raw.notes || raw['Notes'] || raw.remarks || raw['Remarks'] || '';
 
   return raw;
 }
@@ -1765,6 +1782,66 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
 const ISOLATED_FIELD_MODULES = ['NSC', 'Broken', 'Meter Replacement', 'DTR Replacement'] as const;
 const moduleEntriesCacheMap = new Map<string, { entries: any[]; timestamp: number }>();
 
+function buildNscSheetPayloadFields(payload: any): Record<string, any> {
+  const nscMeta = {
+    applicationNo: String(payload.applicationNo || payload['Application No'] || '').trim(),
+    fatherName: String(payload.fatherName || payload['Father Name'] || '').trim(),
+    agencyName: String(payload.agencyName || payload['Agency Name'] || '').trim(),
+    cccName: String(payload.cccName || payload['CCC Name'] || (payload.substation !== '5233100' ? payload.substation : '') || '').trim(),
+    sealNo: String(payload.sealNo || payload['Meter Seal No'] || payload['Seal No'] || '').trim(),
+    meterMake: String(payload.meterMake || payload['Meter Make'] || '').trim(),
+    meterInstallDate: String(payload.meterInstallDate || payload['Meter Install Date'] || '').trim(),
+    inspectionAgencyName: String(payload.inspectionAgencyName || payload['Inspection Agency Name'] || '').trim(),
+    appliedLoad: String(payload.appliedLoad || payload['Applied Load'] || '').trim(),
+    phase: String(payload.phase || payload['Supply Phase'] || '').trim(),
+    tariffCategory: String(payload.tariffCategory || payload['Tariff Category'] || '').trim(),
+    serviceCableLength: String(payload.serviceCableLength || payload['Service Cable Length'] || '').trim(),
+    earthResistance: String(payload.earthResistance || payload['Earth Resistance'] || '').trim(),
+    workOrderNo: String(payload.workOrderNo || payload['Work Order No'] || '').trim(),
+    workOrderDate: String(payload.workOrderDate || payload['Work Order Date'] || '').trim(),
+    workOrderNoticeId: String(payload.workOrderNoticeId || '').trim(),
+    workOrderNoticeTitle: String(payload.workOrderNoticeTitle || '').trim(),
+    workOrderNoticeDate: String(payload.workOrderNoticeDate || '').trim(),
+    workOrderPhoto: String(payload.workOrderPhoto || '').trim(),
+    notes: String(payload.notes || payload.remarks || '').trim(),
+    locationGps: String(payload.locationGps || '').trim(),
+    role: String(payload.role || 'worker').trim(),
+    submittedBy: String(payload.submittedBy || payload.workerName || '').trim(),
+    createdAt: String(payload.createdAt || payload.date || new Date().toISOString()).trim(),
+    updatedAt: String(payload.updatedAt || new Date().toISOString()).trim()
+  };
+
+  const descParts = [
+    nscMeta.applicationNo ? `App No: ${nscMeta.applicationNo}` : '',
+    nscMeta.fatherName ? `Father: ${nscMeta.fatherName}` : '',
+    nscMeta.agencyName ? `Agency: ${nscMeta.agencyName}` : '',
+    nscMeta.cccName ? `CCC: ${nscMeta.cccName}` : '',
+    nscMeta.sealNo ? `Seal: ${nscMeta.sealNo}` : '',
+    nscMeta.meterMake ? `Make: ${nscMeta.meterMake}` : '',
+    nscMeta.meterInstallDate ? `Install Date: ${nscMeta.meterInstallDate}` : '',
+    nscMeta.inspectionAgencyName ? `Inspection: ${nscMeta.inspectionAgencyName}` : '',
+    nscMeta.appliedLoad ? `Load: ${nscMeta.appliedLoad}` : '',
+    nscMeta.phase ? `Phase: ${nscMeta.phase}` : '',
+    nscMeta.tariffCategory ? `Tariff: ${nscMeta.tariffCategory}` : '',
+    nscMeta.workOrderNo ? `WO: ${nscMeta.workOrderNo}` : ''
+  ].filter(Boolean).join(' | ');
+
+  const initReadingVal = String(payload.initialReading || payload.reading || payload['Reading'] || '000000').trim();
+
+  return {
+    ...nscMeta,
+    time: String(payload.time || new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })).trim(),
+    reading: initReadingVal,
+    Reading: initReadingVal,
+    initialReading: initReadingVal,
+    substation: nscMeta.cccName || String(payload.substation || '').trim(),
+    feederName: `NSC_META::${JSON.stringify(nscMeta)}`,
+    problemType: 'New Service Connection (NSC)',
+    workDescription: descParts,
+    remarks: nscMeta.notes
+  };
+}
+
 async function fetchIsolatedModuleEntriesFromSheet(sheetTabName: string, forceRefresh = false): Promise<any[]> {
   const canonicalTab = toSheetTabCategory(sheetTabName);
   const cached = moduleEntriesCacheMap.get(canonicalTab);
@@ -1778,6 +1855,9 @@ async function fetchIsolatedModuleEntriesFromSheet(sheetTabName: string, forceRe
   if (!result || result.success === false) {
     if (cached) {
       return mergeEntriesWithOverlay(cached.entries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+    }
+    if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
+      return mergeEntriesWithOverlay(cachedEntriesState.entries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
     }
     throw new Error(result?.error?.message || result?.error || `Failed to read ${canonicalTab} tab from Google Sheets`);
   }
@@ -1874,9 +1954,15 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
   if (payload.consumerId) deletedTombstoneSet.delete(String(payload.consumerId).trim().toLowerCase());
   saveTombstonesToDisk();
 
-  const sheetPayload = {
+  const mergedBase = {
     ...(existingMatch || {}),
-    ...payload,
+    ...payload
+  };
+  const nscSpecific = canonicalTab === 'NSC' ? buildNscSheetPayloadFields(mergedBase) : {};
+
+  const sheetPayload = {
+    ...mergedBase,
+    ...nscSpecific,
     category: canonicalTab,
     Category: canonicalTab
   };
@@ -1907,7 +1993,7 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
   localEntriesOverlayMap.set(normalized.id.toLowerCase(), { ...normalized, _localUpdatedAt: Date.now(), _syncedToSheet: true });
   saveEntriesOverlayToDisk();
 
-  // Update isolated module cache
+  // Update isolated module cache (initialize if not yet set)
   const modCached = moduleEntriesCacheMap.get(canonicalTab);
   if (modCached && Array.isArray(modCached.entries)) {
     modCached.entries = [
@@ -1915,6 +2001,8 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
       ...modCached.entries.filter(e => e.id !== normalized.id && e.submissionId !== normalized.submissionId)
     ];
     modCached.timestamp = Date.now();
+  } else {
+    moduleEntriesCacheMap.set(canonicalTab, { entries: [normalized], timestamp: Date.now() });
   }
 
   if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
@@ -1922,6 +2010,10 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
       normalized,
       ...cachedEntriesState.entries.filter(e => e.id !== normalized.id && e.submissionId !== normalized.submissionId)
     ];
+    cachedEntriesState.timestamp = Date.now();
+    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
+  } else {
+    cachedEntriesState = { entries: [normalized], timestamp: Date.now() };
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
 
@@ -1980,6 +2072,8 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     merged['Discon Status'] = statusVal;
   }
 
+  const nscUpdateFields = canonicalTab === 'NSC' ? buildNscSheetPayloadFields({ ...merged, ...bodyData }) : {};
+
   const payload = isDisc
     ? {
         ...buildComplete33ColumnPayload(merged),
@@ -1992,6 +2086,7 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     : {
         ...merged,
         ...bodyData,
+        ...nscUpdateFields,
         id: cleanId,
         category: canonicalTab,
         Category: canonicalTab,
@@ -2141,7 +2236,9 @@ async function refreshEntriesFromSheetInBackground() {
   try {
     const allModuleLists: any[][] = [];
     for (const tab of ISOLATED_FIELD_MODULES) {
-      const list = await fetchIsolatedModuleEntriesFromSheet(tab, true).catch(() => []);
+      const list = await fetchIsolatedModuleEntriesFromSheet(tab, true).catch(() => {
+        return moduleEntriesCacheMap.get(tab)?.entries || [];
+      });
       allModuleLists.push(list);
     }
     const combined = allModuleLists.flat();
@@ -2171,7 +2268,9 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
   try {
     const allModuleLists: any[][] = [];
     for (const tab of ISOLATED_FIELD_MODULES) {
-      const list = await fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => []);
+      const list = await fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
+        return moduleEntriesCacheMap.get(tab)?.entries || [];
+      });
       allModuleLists.push(list);
     }
     const combined = allModuleLists.flat();

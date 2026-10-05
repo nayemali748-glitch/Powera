@@ -28,6 +28,23 @@ export function normalizeEntry(entry: any): PowerEntry {
 
   const raw: any = { ...entry };
 
+  // Unpack NSC structured metadata stored in feederName column of NSC sheet
+  const rawFeederMeta = String(raw.feederName || raw['Feeder Name'] || '').trim();
+  if (rawFeederMeta.startsWith('NSC_META::')) {
+    try {
+      const meta = JSON.parse(rawFeederMeta.slice('NSC_META::'.length));
+      if (meta && typeof meta === 'object') {
+        for (const [mk, mv] of Object.entries(meta)) {
+          if (mv !== undefined && mv !== null && mv !== '' && (raw[mk] === undefined || raw[mk] === '')) {
+            raw[mk] = mv;
+          }
+        }
+      }
+    } catch {}
+    raw.feederName = '';
+    delete raw['Feeder Name'];
+  }
+
   // Normalize Category (handle 'Disconnection' -> 'DISCONNECTION')
   const rawCat = String(raw.category || raw['Category'] || 'NSC').trim();
   const rawCatUpper = rawCat.toUpperCase();
@@ -56,15 +73,16 @@ export function normalizeEntry(entry: any): PowerEntry {
   raw.createdAt = raw.createdAt || raw['Created At'] || raw['Upload Date'] || raw.date || '';
   raw.updatedAt = raw.updatedAt || raw['Updated At'] || raw['Last Updated'] || '';
 
-  raw.workerId = '';
+  raw.workerId = String(raw.workerId || raw['Worker ID'] || raw['Lineman ID'] || '').trim();
   raw.workerName = cleanNameOnly(raw.workerName || raw['Worker Name'] || raw['Lineman Name'] || raw['NSC Worker Name'] || raw['Agency'] || raw.agency || '');
   raw.role = raw.role || raw['Role'] || '';
   raw.submittedBy = cleanNameOnly(raw.submittedBy || raw['Submitted By'] || raw.workerName || '');
   raw.workerPhone = raw.workerPhone || raw['Worker Phone'] || '';
 
+  const rawSubstation = String(raw.substation || raw['Substation'] || '').trim();
   raw.agencyName = cleanNameOnly(raw.agencyName || raw['Agency Name'] || raw['Agency'] || raw.agency || '');
-  raw.cccName = raw.cccName || raw['CCC Name'] || raw['MRU'] || raw.mru || '';
-  raw.substation = isNscOrDisc ? '' : (raw.substation || raw['Substation'] || '');
+  raw.cccName = raw.cccName || raw['CCC Name'] || (raw.category === 'NSC' && rawSubstation && rawSubstation !== '5233100' ? rawSubstation : '') || raw['MRU'] || raw.mru || '';
+  raw.substation = isNscOrDisc ? '' : rawSubstation;
   raw.feederName = isNscOrDisc ? '' : (raw.feederName || raw['Feeder Name'] || '');
 
   raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
@@ -80,8 +98,8 @@ export function normalizeEntry(entry: any): PowerEntry {
   raw.address = raw.address || raw['Address'] || raw.consumerAddress || '';
 
   raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
-  raw.phase = raw.phase || raw['Device'] || raw['BClass/Phase'] || raw['Supply Phase'] || raw['Phase'] || raw.deviceType || '';
-  raw.tariffCategory = raw.tariffCategory || raw['Base Class'] || raw['Class'] || raw['Tariff Category'] || raw.baseClass || '';
+  raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || (isDisc ? (raw['Device'] || raw['BClass/Phase'] || raw.deviceType) : '') || '';
+  raw.tariffCategory = raw.tariffCategory || raw['Tariff Category'] || (isDisc ? (raw['Base Class'] || raw['Class'] || raw.baseClass) : '') || '';
   raw.serviceCableLength = raw.serviceCableLength || raw['Service Cable Length'] || '';
   raw.poleNo = raw.poleNo || raw['Pole No'] || raw['Gis Pole'] || raw.gisPole || '';
   raw.earthResistance = raw.earthResistance || raw['Earth Resistance'] || '';
@@ -99,85 +117,31 @@ export function normalizeEntry(entry: any): PowerEntry {
 
   raw.locationGps = raw.locationGps || raw['GPS Location'] || raw['Location GPS'] || '';
   raw.photoUrl = raw.photoUrl || raw['Image'] || raw['Photo Evidence'] || raw['Photo URL'] || raw.directImageUrl || '';
-  raw.notes = raw.notes || raw['Notes'] || raw.workerRemarks || '';
+  raw.notes = raw.notes || raw['Notes'] || raw.remarks || raw['Remarks'] || raw.workerRemarks || '';
 
-  const cName = String(raw.consumerName || '').trim();
-  const cId = String(raw.consumerId || '').trim();
-  const mNo = String(raw.meterNo || '').trim();
-  const initR = String(raw.initialReading || '').trim();
-  const fName = String(raw.feederName || '').trim();
-  const sub = String(raw.substation || '').trim();
-  const workOrd = String(raw.workOrderNo || '').trim();
-  const notesVal = String(raw.notes || '').trim();
-  const updatedVal = String(raw.updatedAt || '').trim();
-
-  const isShifted =
-    !isDisc && (
-      (cName && (/^CON/i.test(cName) || /^\d{8,12}$/.test(cName)) && mNo && (mNo.includes(' ') || /[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/.test(mNo) || /[\u0980-\u09FF]/.test(mNo))) ||
-      (initR && /^APP/i.test(initR)) ||
-      (sub && /^[6-9]\d{9}$/.test(sub.replace(/\D/g, ''))) ||
-      (cId && (cId.toLowerCase().includes('feeder') || cId.toLowerCase().includes('substation') || cId.toLowerCase().includes('kv') || cId.toLowerCase().includes('town') || cId.toLowerCase().includes('bazar'))) ||
-      (fName && (fName.toLowerCase().includes('sub-') || fName.toLowerCase().includes('substation') || fName.toLowerCase().includes('33/11') || fName.toLowerCase().includes('132/33')))
-    );
-
-  let normalized: PowerEntry;
-
-  if (isShifted) {
-    const isMobileInWorkOrder = /^[6-9]\d{9}$/.test(workOrd.replace(/\D/g, ''));
-    const isAppliedLoadInNotes = /kw|hp|phase|w|load/i.test(notesVal);
-    const isPhaseInUpdatedAt = /phase/i.test(updatedVal);
-
-    normalized = {
-      ...raw,
-      id: String(raw.id || '').trim(),
-      category: raw.category || 'NSC',
-      status: raw.status || 'Completed',
-      date: raw.date || raw.createdAt || new Date().toISOString(),
-      createdAt: raw.createdAt || raw.date || new Date().toISOString(),
-      workerName: String(raw.workerName || '').trim(),
-      workerPhone: String(raw.substation || raw.workerPhone || '').trim(),
-      substation: String(raw.feederName || raw.substation || '').trim(),
-      feederName: String(raw.consumerId || raw.feederName || '').trim(),
-      consumerId: String(raw.consumerName || raw.consumerId || '').trim(),
-      consumerName: String(raw.meterNo || raw.consumerName || '').trim(),
-      fatherName: String(raw.sealNo || raw.fatherName || '').trim(),
-      applicationNo: String(raw.initialReading || raw.applicationNo || '').trim(),
-      meterNo: String(raw.finalReading || (mNo.includes(' ') ? '' : raw.meterNo) || '').trim(),
-      sealNo: String(raw.address || raw.sealNo || '').trim(),
-      initialReading: String(raw.initialReading && !/^APP/i.test(raw.initialReading) ? raw.initialReading : (raw.finalReading || '000000')).trim(),
-      finalReading: '',
-      mobile: isMobileInWorkOrder ? workOrd : (raw.mobile || ''),
-      address: String(raw.locationGps || raw.address || '').trim(),
-      workOrderNo: isMobileInWorkOrder ? '' : String(raw.workOrderNo || '').trim(),
-      locationGps: isAppliedLoadInNotes ? '' : String(raw.locationGps || '').trim(),
-      appliedLoad: isAppliedLoadInNotes ? notesVal : (raw.appliedLoad || ''),
-      phase: isPhaseInUpdatedAt ? updatedVal : (raw.phase || '1 Phase'),
-      notes: isAppliedLoadInNotes || isPhaseInUpdatedAt ? '' : String(raw.notes || '').trim(),
-      photoUrl: String(raw.photoUrl && (raw.photoUrl.startsWith('http') || raw.photoUrl.startsWith('data:')) ? raw.photoUrl : (raw.directImageUrl || '')),
-      updatedAt: String(raw[''] || raw.updatedAt || raw.createdAt || new Date().toISOString())
-    };
-  } else {
-    normalized = {
-      ...raw,
-      id: String(raw.id || '').trim(),
-      category: raw.category || 'NSC',
-      status: raw.status || 'Completed',
-      date: raw.date || raw.createdAt || new Date().toISOString(),
-      createdAt: raw.createdAt || raw.date || new Date().toISOString(),
-      consumerName: String(raw.consumerName || '').trim(),
-      consumerId: String(raw.consumerId || '').trim(),
-      meterNo: String(raw.meterNo || '').trim(),
-      workerName: String(raw.workerName || '').trim(),
-      workerPhone: String(raw.workerPhone || '').trim(),
-      substation: String(raw.substation || '').trim(),
-      feederName: String(raw.feederName || '').trim(),
-      applicationNo: String(raw.applicationNo || '').trim(),
-      fatherName: String(raw.fatherName || '').trim(),
-      address: String(raw.address || '').trim(),
-      notes: String(raw.notes || '').trim(),
-      photoUrl: String(raw.photoUrl || raw.directImageUrl || '')
-    };
-  }
+  const normalized: PowerEntry = {
+    ...raw,
+    id: String(raw.id || '').trim(),
+    category: raw.category || 'NSC',
+    status: raw.status || 'Completed',
+    date: raw.date || raw.createdAt || new Date().toISOString(),
+    createdAt: raw.createdAt || raw.date || new Date().toISOString(),
+    consumerName: String(raw.consumerName || '').trim(),
+    consumerId: String(raw.consumerId || '').trim(),
+    meterNo: String(raw.meterNo || '').trim(),
+    workerId: String(raw.workerId || '').trim(),
+    workerName: String(raw.workerName || '').trim(),
+    workerPhone: String(raw.workerPhone || '').trim(),
+    substation: String(raw.substation || '').trim(),
+    feederName: String(raw.feederName || '').trim(),
+    cccName: String(raw.cccName || '').trim(),
+    agencyName: String(raw.agencyName || '').trim(),
+    applicationNo: String(raw.applicationNo || '').trim(),
+    fatherName: String(raw.fatherName || '').trim(),
+    address: String(raw.address || '').trim(),
+    notes: String(raw.notes || '').trim(),
+    photoUrl: String(raw.photoUrl || raw.directImageUrl || '')
+  };
 
   // Ensure consumerName is never empty if consumerId is known (for non-Disconnection categories)
   if (!isDisc && !normalized.consumerName && normalized.consumerId) {

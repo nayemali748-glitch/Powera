@@ -180,16 +180,16 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [disconnectionInitialTab, setDisconnectionInitialTab] = useState<'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST'>('VIEW_LIST');
 
-  const loadData = async (silent: boolean | unknown = false) => {
+  const loadData = async (silent: boolean | unknown = false, forceRefresh = false) => {
     if (!currentUser) return;
-    if (inFlightRef.current) return;
+    if (inFlightRef.current && !forceRefresh) return;
     inFlightRef.current = true;
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent && entries.length === 0) setLoading(true);
       const [data, orders, discRes] = await Promise.all([
-        fetchEntries().catch(() => []),
+        fetchEntries({ refresh: forceRefresh }).catch(() => []),
         fetchWorkOrders().catch(() => []),
         fetchDisconnectionTasks({
           role: currentUser?.role,
@@ -314,7 +314,7 @@ export default function App() {
   };
 
   const handleManualSync = () => {
-    loadData(true);
+    loadData(true, true);
   };
 
   // Strict role sync: Workers NEVER have admin privileges
@@ -341,13 +341,13 @@ export default function App() {
         newEntry,
         ...prev.filter(e => e.id !== newEntry.id && (!newEntry.submissionId || e.submissionId !== newEntry.submissionId))
       ];
-      lastDataHashRef.current = computeJsonChangeHash(updated);
+      lastDataHashRef.current = `${computeJsonChangeHash(updated)}_disc:${disconnectionTasks.length}`;
       return updated;
     });
     setActiveFormCategory(null);
     setTimeout(() => {
-      loadData(true);
-    }, 1200);
+      loadData(true, true);
+    }, 800);
   };
 
   const handleAdminLogin = (pin?: string): boolean => {
@@ -603,7 +603,7 @@ export default function App() {
 
           {isAdmin && (
             <button
-              onClick={() => { setActiveTab('admin'); setSidebarOpen(false); loadData(); }}
+              onClick={() => { setActiveTab('admin'); setSidebarOpen(false); loadData(false, true); }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'admin'
                   ? 'bg-slate-800 text-white shadow-xs font-bold'
