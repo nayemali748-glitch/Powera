@@ -302,7 +302,18 @@ export async function fetchEntries(filters?: {
         if (Array.isArray(fastArr)) {
           const filteredFast = fastArr.filter((e: any) => {
             const catUp = String(e?.category || '').toUpperCase().trim();
-            return catUp !== 'USERS' && catUp !== 'USERS_AUTH' && catUp !== 'WORKORDERS_KHATA';
+            return (
+              catUp !== 'USERS' &&
+              catUp !== 'USERS_AUTH' &&
+              catUp !== 'WORKORDERS_KHATA' &&
+              catUp !== 'WORK ORDERS' &&
+              catUp !== 'CHAT' &&
+              catUp !== 'CHAT_MESSAGES' &&
+              catUp !== 'SETTINGS' &&
+              catUp !== 'SYSTEM LOGS' &&
+              catUp !== 'DISCONNECTION_HISTORY' &&
+              catUp !== 'CALL CASE'
+            );
           });
           const uniqueEntries = deduplicateEntries(filteredFast.map((e: any) => normalizeEntry(e)));
           if (!filters || (!filters.category || filters.category === 'ALL')) {
@@ -327,7 +338,18 @@ export async function fetchEntries(filters?: {
       : (Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []));
     const filteredList = rawList.filter((e: any) => {
       const catUp = String(e?.category || '').toUpperCase().trim();
-      return catUp !== 'USERS' && catUp !== 'USERS_AUTH' && catUp !== 'WORKORDERS_KHATA';
+      return (
+        catUp !== 'USERS' &&
+        catUp !== 'USERS_AUTH' &&
+        catUp !== 'WORKORDERS_KHATA' &&
+        catUp !== 'WORK ORDERS' &&
+        catUp !== 'CHAT' &&
+        catUp !== 'CHAT_MESSAGES' &&
+        catUp !== 'SETTINGS' &&
+        catUp !== 'SYSTEM LOGS' &&
+        catUp !== 'DISCONNECTION_HISTORY' &&
+        catUp !== 'CALL CASE'
+      );
     });
     const uniqueEntries = deduplicateEntries(filteredList);
     
@@ -1443,10 +1465,10 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
       } catch {}
     }
 
-    // 3. Fallback: Direct read from Google Sheets 'WorkOrders_Khata' sheet via 'entries'
+    // 3. Fallback: Direct read from Google Sheets 'Work Orders' sheet via 'entries'
     if (!fetchedSuccessfully) {
       try {
-        const sheetRes = await callGasApi<any>('entries', { category: 'WorkOrders_Khata' }, 'GET');
+        const sheetRes = await callGasApi<any>('entries', { category: 'Work Orders' }, 'GET');
         const rows = Array.isArray(sheetRes?.entries) ? sheetRes.entries : (Array.isArray(sheetRes?.data) ? sheetRes.data : []);
         if (Array.isArray(rows)) {
           rawList = rows.map((r: any) => {
@@ -1630,7 +1652,7 @@ export async function uploadWorkOrder(payload: {
     await callGasApi('submitRecord', {
       id: generatedId,
       submissionId: generatedId,
-      category: 'WorkOrders_Khata',
+      category: 'Work Orders',
       status: uploadPayload.isHidden ? 'Hidden' : 'Active',
       consumerName: uploadPayload.title,
       workerName: uploadPayload.adminName,
@@ -1705,7 +1727,7 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
     if (res.ok) return true;
   } catch {}
   try {
-    await callGasApi('deleteEntry', { id, submissionId: id, category: 'WorkOrders_Khata' }, 'POST');
+    await callGasApi('deleteEntry', { id, submissionId: id, category: 'Work Orders' }, 'POST');
   } catch {}
   return true;
 }
@@ -2436,16 +2458,7 @@ export async function restoreDisconnectionTask(taskId: string): Promise<{ succes
   return callGasApi('restoreDisconnectionTask', { taskId, requestId: 'REQ-RST-' + Date.now() }, 'POST');
 }
 
-export async function fetchDisconnectionHistory(consumerId: string): Promise<{ success: boolean; history: any[] }> {
-  if (!consumerId) return { success: true, history: [] };
-  try {
-    const res = await callGasApi<any>('getDisconnectionHistory', { consumerId, 'Consumer Id': consumerId }, 'GET');
-    if (res && res.success && Array.isArray(res.history)) {
-      return res;
-    }
-  } catch (err: any) {
-    console.warn('[Disconnection] fetchDisconnectionHistory notice:', err?.message || err);
-  }
+export async function fetchDisconnectionHistory(_consumerId: string): Promise<{ success: boolean; history: any[] }> {
   return { success: true, history: [] };
 }
 

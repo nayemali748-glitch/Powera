@@ -7,25 +7,38 @@
 const SPREADSHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
 const WORK_ORDERS_FOLDER_NAME = 'WBSEDCL_Work_Orders_Khata_Files';
 
-// Canonical Sheet Aliases
+// Canonical Sheet Aliases (Permanent Module Tabs Only)
 const SHEET_ALIASES = {
   'Users': ['Users', 'USERS', 'users', 'User'],
   'NSC': ['NSC', 'NewConnection', 'NEW_CONNECTION', 'New Connection', 'NEW CONNECTION'],
   'Disconnection': ['DISCONNECTION', 'Disconnection', 'Disconnect', 'DISCONNECT'],
   'DISCONNECTION': ['DISCONNECTION', 'Disconnection', 'Disconnect', 'DISCONNECT'],
-  'Disconnection_History': ['Disconnection_History', 'DisconnectionHistory', 'DISCONNECTION_HISTORY', 'Disconnection_history'],
   'Broken': ['Broken', 'BROKEN', 'POLE CASE', 'POLE_CASE', 'PoleCase', 'Pole Case'],
   'Meter Replacement': ['Meter Replacement', 'METER REPLACEMENT', 'METER REPLESMENT', 'METER_REPLESMENT', 'MeterReplacement'],
   'DTR Replacement': ['DTR Replacement', 'DTR REPLACEMENT', 'DTR REPLESMENT', 'DTR_REPLESMENT', 'DtrReplacement'],
-  'Call Case': ['Call Case', 'CALL CASE', 'CALL_CASE', 'CallCase'],
-  'Work Orders': ['Work Orders', 'WORK_ORDERS', 'WorkOrders', 'workorders'],
-  'System Logs': ['System Logs', 'SYSTEM_LOGS', 'SystemLogs', 'USER_ACTIVITY', 'ActivityLogs'],
+  'Work Orders': ['Work Orders', 'WORK_ORDERS', 'WorkOrders', 'workorders', 'WorkOrders_Khata', 'WORKORDERS_KHATA'],
   'Settings': ['Settings', 'SETTINGS'],
-  'Chat': ['Chat', 'CHAT']
+  'Chat': ['Chat', 'CHAT', 'Chat_Messages', 'CHAT_MESSAGES']
 };
+
+// Permanently Removed Tabs (Never created, automatically deleted if present)
+const REMOVED_TABS_NORM = [
+  'SYSTEMLOGS',
+  'USERACTIVITY',
+  'ACTIVITYLOGS',
+  'DISCONNECTIONHISTORY',
+  'CALLCASE'
+];
+
+function isRemovedSheetName(name) {
+  const norm = String(name || '').toUpperCase().replace(/[\s_\-]/g, '');
+  return REMOVED_TABS_NORM.indexOf(norm) >= 0 || norm.indexOf('DISCONNECTIONHIST') >= 0;
+}
 
 // Canonical Category Normalization
 const CATEGORY_MAP = {
+  'USERS': 'Users',
+  'USER': 'Users',
   'NSC': 'NSC',
   'NEW_CONNECTION': 'NSC',
   'NEW CONNECTION': 'NSC',
@@ -47,14 +60,21 @@ const CATEGORY_MAP = {
   'DTR REPLACEMENT': 'DTR Replacement',
   'DTR_REPLACEMENT': 'DTR Replacement',
   'DTRREPLACEMENT': 'DTR Replacement',
-  'CALL CASE': 'Call Case',
-  'CALL_CASE': 'Call Case',
-  'CALLCASE': 'Call Case'
+  'WORK ORDERS': 'Work Orders',
+  'WORK_ORDERS': 'Work Orders',
+  'WORKORDERS': 'Work Orders',
+  'WORKORDERS_KHATA': 'Work Orders',
+  'WORKORDERSKHATA': 'Work Orders',
+  'SETTINGS': 'Settings',
+  'CHAT': 'Chat',
+  'CHAT_MESSAGES': 'Chat',
+  'CHATMESSAGES': 'Chat'
 };
 
 function normalizeCategory(cat) {
   if (!cat) return null;
   const raw = String(cat).trim();
+  if (isRemovedSheetName(raw)) return null;
   const upper = raw.toUpperCase();
   if (CATEGORY_MAP[upper]) return CATEGORY_MAP[upper];
   const cleaned = upper.replace(/[\s_\-]/g, '');
@@ -64,7 +84,9 @@ function normalizeCategory(cat) {
   if (cleaned.includes('POLE') || cleaned.includes('BROKEN')) return 'Broken';
   if (cleaned.includes('METER')) return 'Meter Replacement';
   if (cleaned.includes('DTR')) return 'DTR Replacement';
-  if (cleaned.includes('CALL')) return 'Call Case';
+  if (cleaned.includes('WORKORDER')) return 'Work Orders';
+  if (cleaned.includes('CHAT')) return 'Chat';
+  if (cleaned.includes('USER')) return 'Users';
   return raw;
 }
 
@@ -197,18 +219,15 @@ function getHeadersForSheet(name) {
   if (norm === 'Users') return USERS_HEADERS;
   if (norm === 'NSC') return NSC_HEADERS;
   if (norm === 'Disconnection') return DISCONNECTION_HEADERS;
-  if (norm === 'Disconnection_History' || norm === 'DisconnectionHistory') return DISCONNECTION_HISTORY_HEADERS;
   if (norm === 'Broken' || norm === 'POLE CASE') return BROKEN_HEADERS;
   if (norm === 'Meter Replacement' || norm === 'METER REPLESMENT') return METER_REPLACEMENT_HEADERS;
   if (norm === 'DTR Replacement' || norm === 'DTR REPLESMENT') return DTR_REPLACEMENT_HEADERS;
-  if (norm === 'Call Case') return CALL_CASE_HEADERS;
   if (norm === 'Work Orders') return WORK_ORDERS_HEADERS;
-  if (norm === 'System Logs') return SYSTEM_LOGS_HEADERS;
   if (norm === 'Chat') return CHAT_HEADERS;
   return NSC_HEADERS;
 }
 
-// Spreadsheet Singleton
+// Spreadsheet Singleton (Strictly read/write existing sheets only; never create or delete sheets)
 var _ss = null;
 function ss() {
   if (!_ss) {
@@ -217,8 +236,15 @@ function ss() {
   return _ss;
 }
 
+function cleanupRemovedTabs() {
+  return [];
+}
+
 // Find existing sheet by canonical name or any alias case-insensitively
 function getSheet(canonicalName) {
+  if (!canonicalName || isRemovedSheetName(canonicalName)) {
+    return null;
+  }
   const spreadsheet = ss();
   const rawAliases = SHEET_ALIASES[canonicalName] || [canonicalName];
   const aliases = rawAliases.concat([canonicalName, canonicalName.toUpperCase(), canonicalName.toLowerCase()]);
@@ -227,7 +253,6 @@ function getSheet(canonicalName) {
   });
   
   const allSheets = spreadsheet.getSheets();
-  const isTargetHist = normAliases.some(function(a) { return a.indexOf('HIST') >= 0; });
   const isTargetDisc = normAliases.some(function(a) { return a.indexOf('DISCON') >= 0; });
 
   let bestSheet = null;
@@ -236,15 +261,13 @@ function getSheet(canonicalName) {
   // Case-insensitive search across all sheets in the spreadsheet
   for (let i = 0; i < allSheets.length; i++) {
     const s = allSheets[i];
-    const sNorm = s.getName().toUpperCase().replace(/[\s_\-]/g, '');
-    const isSheetHist = sNorm.indexOf('HIST') >= 0;
+    const sName = s.getName();
+    if (isRemovedSheetName(sName)) continue;
 
-    // Do not mix history sheet with main disconnection sheet
-    if (isTargetHist !== isSheetHist) continue;
-
+    const sNorm = sName.toUpperCase().replace(/[\s_\-]/g, '');
     let matches = (normAliases.indexOf(sNorm) >= 0);
-    if (!matches && isTargetDisc && !isTargetHist) {
-      matches = (sNorm.indexOf('DISCON') >= 0);
+    if (!matches && isTargetDisc) {
+      matches = (sNorm.indexOf('DISCON') >= 0 && sNorm.indexOf('HIST') === -1);
     }
 
     if (matches) {
@@ -264,27 +287,22 @@ function getSheet(canonicalName) {
   if (!targetSheet) {
     for (let i = 0; i < aliases.length; i++) {
       const s = spreadsheet.getSheetByName(aliases[i]);
-      if (s) {
+      if (s && !isRemovedSheetName(s.getName())) {
         targetSheet = s;
         break;
       }
     }
   }
 
-  // If not found, auto-create sheet with canonical name and default headers
+  // STRICT RULE 22: NO AUTOMATIC SHEET CREATION
+  // If required tab is not found in the existing Google Spreadsheet, STOP and report missing tab.
   if (!targetSheet) {
-    targetSheet = spreadsheet.insertSheet(canonicalName);
-    const defaultHeaders = getHeadersForSheet(canonicalName);
-    targetSheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
-    targetSheet.setFrozenRows(1);
+    throw Error('STOP: Required Google Sheet tab "' + canonicalName + '" was not found in the spreadsheet. Automatic tab creation is strictly disabled.');
   }
 
   const norm = canonicalName.toUpperCase().replace(/[\s_\-]/g, '');
   if (norm.indexOf('DISCON') >= 0 && norm.indexOf('HIST') === -1) {
     ensureDisconnectionHeaders(targetSheet);
-  }
-  if (norm.indexOf('DISCON') >= 0 && norm.indexOf('HIST') >= 0) {
-    ensureDisconnectionHistoryHeaders(targetSheet);
   }
 
   return targetSheet;
@@ -357,61 +375,27 @@ function ensureDisconnectionHistoryHeaders(sheet) {
   }
 }
 
-// Master Disconnection Database Setup (Idempotent and safe)
+// Master Disconnection Database Setup (Idempotent and safe — Disconnection tab only)
 function setupDisconnectionDatabase() {
   const spreadsheet = ss();
-  
-  // 1. Ensure Disconnection sheet with exact 14 headers
-  let discSheet = null;
-  const sheets = spreadsheet.getSheets();
-  for (let i = 0; i < sheets.length; i++) {
-    if (sheets[i].getName() === 'Disconnection') {
-      discSheet = sheets[i];
-      break;
-    }
-  }
-  if (!discSheet) {
-    discSheet = spreadsheet.insertSheet('Disconnection');
-    discSheet.getRange(1, 1, 1, DISCONNECTION_HEADERS.length).setValues([DISCONNECTION_HEADERS]);
-    discSheet.setFrozenRows(1);
-  } else {
-    ensureDisconnectionHeaders(discSheet);
-  }
+  const deletedTabs = cleanupRemovedTabs(spreadsheet);
 
-  // 2. Ensure Disconnection_History sheet with exact 17 headers
-  let histSheet = null;
-  for (let i = 0; i < sheets.length; i++) {
-    if (sheets[i].getName() === 'Disconnection_History') {
-      histSheet = sheets[i];
-      break;
-    }
-  }
-  if (!histSheet) {
-    histSheet = spreadsheet.insertSheet('Disconnection_History');
-    histSheet.getRange(1, 1, 1, DISCONNECTION_HISTORY_HEADERS.length).setValues([DISCONNECTION_HISTORY_HEADERS]);
-    histSheet.setFrozenRows(1);
-  } else {
-    ensureDisconnectionHistoryHeaders(histSheet);
-  }
+  // Ensure Disconnection sheet with exact 33 headers
+  let discSheet = getSheet('Disconnection');
+  ensureDisconnectionHeaders(discSheet);
 
   const lastColD = discSheet.getLastColumn() || DISCONNECTION_HEADERS.length;
   const discHeaders = discSheet.getRange(1, 1, 1, lastColD).getValues()[0].map(function(h) { return String(h || '').trim(); });
-  const lastColH = histSheet.getLastColumn() || DISCONNECTION_HISTORY_HEADERS.length;
-  const histHeaders = histSheet.getRange(1, 1, 1, lastColH).getValues()[0].map(function(h) { return String(h || '').trim(); });
 
   return {
     success: true,
-    message: 'Disconnection and Disconnection_History sheets verified successfully',
+    message: 'Disconnection sheet verified and removed tabs cleaned up',
     spreadsheetId: SPREADSHEET_ID,
+    deletedTabs: deletedTabs,
     disconnectionSheet: {
-      name: 'Disconnection',
+      name: discSheet.getName(),
       rowCount: discSheet.getLastRow(),
       headers: discHeaders
-    },
-    historySheet: {
-      name: 'Disconnection_History',
-      rowCount: histSheet.getLastRow(),
-      headers: histHeaders
     }
   };
 }
@@ -419,6 +403,11 @@ function setupDisconnectionDatabase() {
 // Utility: Normalize Header for loose matching
 function normHeader(h) {
   return String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Utility: Normalize 10-digit Indian phone number
+function normalizePhone(val) {
+  return String(val || '').replace(/\D/g, '').slice(-10);
 }
 
 // SHA-256 Password Hasher
@@ -488,25 +477,9 @@ function errOut(code, message, reqId) {
   return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
 
-// System Logging
+// System Logging (No-op: System Logs tab permanently removed per requirements)
 function logSystemActivity(userId, idNo, userName, role, action, details) {
-  try {
-    const s = getSheet('System Logs');
-    s.appendRow([
-      generateId('LOG'),
-      userId || '',
-      idNo || '',
-      userName || '',
-      role || '',
-      action || '',
-      typeof details === 'object' ? JSON.stringify(details) : String(details || ''),
-      '',
-      now(),
-      now()
-    ]);
-  } catch (e) {
-    Logger.log('Error logging activity: ' + e);
-  }
+  return;
 }
 
 // ============================================================================
@@ -514,6 +487,9 @@ function logSystemActivity(userId, idNo, userName, role, action, details) {
 // ============================================================================
 
 function initializeDatabase() {
+  const spreadsheet = ss();
+  const deletedTabs = cleanupRemovedTabs(spreadsheet);
+
   const requiredSheets = [
     'Users',
     'NSC',
@@ -521,9 +497,7 @@ function initializeDatabase() {
     'Broken',
     'Meter Replacement',
     'DTR Replacement',
-    'Call Case',
     'Work Orders',
-    'System Logs',
     'Settings',
     'Chat'
   ];
@@ -531,6 +505,7 @@ function initializeDatabase() {
   const createdOrVerified = [];
   requiredSheets.forEach(name => {
     const s = getSheet(name);
+    if (!s) return;
     const expectedHeaders = getHeadersForSheet(name);
     const lastRow = s.getLastRow();
     const lastCol = s.getLastColumn();
@@ -590,6 +565,7 @@ function initializeDatabase() {
 // Fast Single-Call Sheet Reader
 function getSheetRows(sheetName) {
   const s = getSheet(sheetName);
+  if (!s) return [];
   const lastRow = s.getLastRow();
   const lastCol = s.getLastColumn();
   if (lastRow < 2) return [];
@@ -1185,8 +1161,8 @@ function updateEntry(targetId, category, updateData) {
   if (!cleanId) throw Error('Entry ID is required for update');
 
   const sheetsToSearch = category 
-    ? [category] 
-    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+    ? [normalizeCategory(category) || category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement'];
 
   let matchedSheet = null;
   let matchedRowIndex = -1;
@@ -1291,8 +1267,8 @@ function deleteEntry(targetId, category, options) {
   if (!cleanId) throw Error('Entry ID required for deletion');
 
   const sheetsToSearch = category 
-    ? [category] 
-    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+    ? [normalizeCategory(category) || category] 
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement'];
 
   let matchedSheet = null;
   let matchedRow = null;
@@ -1329,18 +1305,18 @@ function deleteEntry(targetId, category, options) {
 
   matchedSheet.deleteRow(matchedRow._rowIndex);
   try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
-  logSystemActivity('admin', cleanId, '', '', 'DELETE_RECORD', 'Deleted record: ' + cleanId);
 
   return { success: true, deleted: true, message: 'Record deleted from Google Sheets', id: cleanId };
 }
 
-// Query Entries across dedicated sheets
+// Query Entries across dedicated permanent module sheets
 function queryRecords(filters) {
   filters = filters || {};
   const catFilter = filters.category ? normalizeCategory(filters.category) : null;
+  if (filters.category && !catFilter) return [];
   const targetSheets = catFilter && catFilter !== 'ALL' 
     ? [catFilter] 
-    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement', 'Call Case'];
+    : ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement'];
 
   const allRecords = [];
 
@@ -1364,10 +1340,10 @@ function queryRecords(filters) {
           id: stableId,
           submissionId: String(r['Submission ID'] || r.submissionId || stableId),
           category: String(r['Category'] || r.category || sheetName),
-          status: String(r['Status'] || r.status || 'Completed'),
-          date: String(r['Date'] || r.date || r['Created At'] || now()),
-          createdAt: String(r['Created At'] || r.createdAt || now()),
-          updatedAt: String(r['Updated At'] || r.updatedAt || ''),
+          status: String(r['Status'] || r['Discon Status'] || r.status || 'Completed'),
+          date: String(r['Date'] || r['Discon Date'] || r.date || r['Created At'] || r['Upload Date'] || ''),
+          createdAt: String(r['Created At'] || r['Upload Date'] || r.createdAt || r['Last Updated'] || ''),
+          updatedAt: String(r['Updated At'] || r['Last Updated'] || r.updatedAt || ''),
           workerId: String(r['Worker ID'] || r.workerId || ''),
           workerName: String(r['Worker Name'] || r.workerName || 'Worker'),
           role: String(r['Role'] || r.role || 'worker'),
@@ -1688,9 +1664,9 @@ function doGet(e) {
       }, 'Refreshed from Google Sheets');
     }
 
-    // 8. User Activity Logs
+    // 8. User Activity Logs (System Logs tab permanently removed)
     if (action === 'logs' || action === 'getSystemLogs' || action === 'userActivity') {
-      return out({ logs: getSheetRows('System Logs').reverse() }, 'System logs retrieved');
+      return out({ logs: [] }, 'System logs tab removed');
     }
 
     // 9. Disconnection Tasks & Module
@@ -1702,6 +1678,9 @@ function doGet(e) {
     }
     if (action === 'setupDisconnectionDatabase' || action === 'setupDisconnection') {
       return out(setupDisconnectionDatabase(), 'Disconnection database verified');
+    }
+    if (action === 'cleanupTabs' || action === 'deleteRemovedTabs') {
+      return out({ deletedTabs: cleanupRemovedTabs(ss()) }, 'Removed tabs cleaned up');
     }
 
     // Fallback: Unknown action
@@ -1932,43 +1911,7 @@ function getDisconnectionTasksData(params) {
     rawRows = [];
   }
 
-  // Read Disconnection_History to attach real status history to consumers
-  let historyMap = {};
-  try {
-    const histSheet = getSheet('Disconnection_History');
-    const hLastRow = histSheet.getLastRow();
-    const hLastCol = histSheet.getLastColumn();
-    if (hLastRow > 1 && hLastCol > 0) {
-      const hData = histSheet.getRange(1, 1, hLastRow, hLastCol).getValues();
-      const hHeaders = hData[0].map(function(h) { return String(h || '').trim(); });
-      const cIdIdx = hHeaders.indexOf('Consumer Id');
-      for (let hr = 1; hr < hData.length; hr++) {
-        const row = hData[hr];
-        const cId = cIdIdx !== -1 ? String(row[cIdIdx] || '').trim().toLowerCase() : '';
-        if (!cId) continue;
-        const item = {};
-        for (let hc = 0; hc < hHeaders.length; hc++) {
-          item[hHeaders[hc]] = row[hc];
-        }
-        item.date = String(item.Timestamp || item.PaymentDate || '').split('T')[0] || '';
-        item.time = String(item.Timestamp || '').includes('T') ? String(item.Timestamp).split('T')[1].split('.')[0] : '';
-        item.previousStatus = String(item['Previous Status'] || '');
-        item.newStatus = String(item['New Status'] || '');
-        item.workerName = String(item['Worker Name'] || '');
-        item.remarks = String(item['Remarks'] || '');
-        item.paidAmount = String(item['Paid Amount'] || '');
-        item.meterReading = String(item['Meter Reading'] || '');
-        item.photoUrl = String(item['Photo URL'] || '');
-        item.action = String(item['Action'] || 'UPDATE');
-
-        if (!historyMap[cId]) historyMap[cId] = [];
-        historyMap[cId].push(item);
-      }
-    }
-  } catch (e) {
-    historyMap = {};
-  }
-
+  const historyMap = {};
   const tasks = [];
   const seenRecordKeys = {};
 
@@ -2259,9 +2202,6 @@ function handleUploadDisconnectionTasks(body) {
 
     const s = getSheet('Disconnection');
     ensureDisconnectionHeaders(s);
-
-    const histSheet = getSheet('Disconnection_History');
-    ensureDisconnectionHistoryHeaders(histSheet);
 
     const data = s.getDataRange().getValues();
     const headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : DISCONNECTION_HEADERS;
@@ -2596,34 +2536,9 @@ function handleSubmitDisconnectionReport(body) {
       appendSheetRecord('Disconnection', newRecord);
     }
 
-    // Append history record to Disconnection_History in the SAME spreadsheet
-    const histSheet = getSheet('Disconnection_History');
-    ensureDisconnectionHistoryHeaders(histSheet);
-
-    const historyRow = [
-      reqId,
-      targetConsumerId,
-      'SL ' + ('000' + (foundRow > 1 ? (foundRow - 1) : 1)).slice(-3),
-      prevStatus,
-      status,
-      workerId,
-      workerName || agency,
-      notes,
-      paidAmount,
-      paidDate,
-      paidType,
-      reading,
-      agency,
-      priority,
-      finalImageUrl,
-      'UPDATE',
-      nowTimestamp
-    ];
-    histSheet.appendRow(historyRow);
-
     const res = {
       success: true,
-      message: 'Disconnection report saved successfully in Google Sheets',
+      message: 'Disconnection report saved successfully in Google Sheets Disconnection tab',
       taskId: 'TASK-DISC-' + targetConsumerId,
       consumerId: targetConsumerId,
       status: status,
@@ -2648,39 +2563,29 @@ function handleAssignDisconnectionTask(body) {
   }
 
   try {
-    const reqId = String(body.requestId || ('REQ-ASG-' + Date.now())).trim();
     const cId = String(body.consumerId || body['Consumer Id'] || body.taskId || '').replace('TASK-DISC-', '').trim();
     const agency = String(body.assignedAgency || body.agency || body.workerName || '').trim();
-    const workerId = String(body.workerId || '').trim();
-    const workerName = String(body.workerName || agency || '').trim();
 
-    const histSheet = getSheet('Disconnection_History');
-    ensureDisconnectionHistoryHeaders(histSheet);
+    const s = getSheet('Disconnection');
+    ensureDisconnectionHeaders(s);
+    const data = s.getDataRange().getValues();
+    const headers = data[0].map(function(h) { return String(h || '').trim(); });
+    const cIdIdx = headers.indexOf('Consumer Id');
+    const agencyIdx = headers.indexOf('Agency');
 
-    const historyRow = [
-      reqId,
-      cId,
-      '',
-      '',
-      '',
-      workerId,
-      workerName,
-      'Assigned to ' + (agency || workerName),
-      '',
-      '',
-      '',
-      '',
-      agency,
-      '',
-      '',
-      'ASSIGN',
-      now()
-    ];
-    histSheet.appendRow(historyRow);
+    if (cIdIdx !== -1 && agencyIdx !== -1) {
+      for (let r = 1; r < data.length; r++) {
+        const rowCId = String(data[r][cIdIdx] || '').trim();
+        if (rowCId && rowCId.toLowerCase() === cId.toLowerCase()) {
+          s.getRange(r + 1, agencyIdx + 1).setValue(agency);
+          break;
+        }
+      }
+    }
 
     return {
       success: true,
-      message: 'Task assigned successfully',
+      message: 'Task assigned in Disconnection sheet',
       consumerId: cId,
       assignedAgency: agency
     };
@@ -2697,7 +2602,6 @@ function handleArchiveDisconnectionTask(body) {
   }
 
   try {
-    const reqId = String(body.requestId || ('REQ-ARC-' + Date.now())).trim();
     const cId = String(body.consumerId || body['Consumer Id'] || body.taskId || '').replace('TASK-DISC-', '').trim();
 
     const s = getSheet('Disconnection');
@@ -2717,29 +2621,7 @@ function handleArchiveDisconnectionTask(body) {
       }
     }
 
-    const histSheet = getSheet('Disconnection_History');
-    ensureDisconnectionHistoryHeaders(histSheet);
-    histSheet.appendRow([
-      reqId,
-      cId,
-      '',
-      '',
-      'ARCHIVED',
-      body.workerId || '',
-      body.workerName || 'Admin',
-      'Archived record',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      'ARCHIVE',
-      now()
-    ]);
-
-    return { success: true, message: 'Task archived successfully', consumerId: cId };
+    return { success: true, message: 'Task archived in Disconnection sheet', consumerId: cId };
   } finally {
     lock.releaseLock();
   }
@@ -2753,7 +2635,6 @@ function handleRestoreDisconnectionTask(body) {
   }
 
   try {
-    const reqId = String(body.requestId || ('REQ-RST-' + Date.now())).trim();
     const cId = String(body.consumerId || body['Consumer Id'] || body.taskId || '').replace('TASK-DISC-', '').trim();
 
     const s = getSheet('Disconnection');
@@ -2773,84 +2654,16 @@ function handleRestoreDisconnectionTask(body) {
       }
     }
 
-    const histSheet = getSheet('Disconnection_History');
-    ensureDisconnectionHistoryHeaders(histSheet);
-    histSheet.appendRow([
-      reqId,
-      cId,
-      '',
-      'ARCHIVED',
-      'PENDING',
-      body.workerId || '',
-      body.workerName || 'Admin',
-      'Restored record',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      'RESTORE',
-      now()
-    ]);
-
-    return { success: true, message: 'Task restored successfully', consumerId: cId };
+    return { success: true, message: 'Task restored in Disconnection sheet', consumerId: cId };
   } finally {
     lock.releaseLock();
   }
 }
 
 function getDisconnectionHistory(params) {
-  params = params || {};
-  const cId = String(params.consumerId || params['Consumer Id'] || '').trim().toLowerCase();
-
-  let histSheet = null;
-  try {
-    histSheet = getSheet('Disconnection_History');
-  } catch (e) {
-    return { success: true, history: [] };
-  }
-
-  const lastRow = histSheet.getLastRow();
-  const lastCol = histSheet.getLastColumn();
-  if (lastRow < 2 || lastCol < 1) {
-    return { success: true, history: [] };
-  }
-
-  const data = histSheet.getRange(1, 1, lastRow, lastCol).getValues();
-  const headers = data[0].map(function(h) { return String(h || '').trim(); });
-  const cIdIdx = headers.indexOf('Consumer Id');
-
-  const history = [];
-  for (let r = 1; r < data.length; r++) {
-    const row = data[r];
-    const rowCId = cIdIdx !== -1 ? String(row[cIdIdx] || '').trim().toLowerCase() : '';
-    if (cId && rowCId !== cId) continue;
-
-    const item = {};
-    for (let c = 0; c < headers.length; c++) {
-      item[headers[c]] = row[c];
-    }
-    item.date = String(item.Timestamp || item.PaymentDate || '').split('T')[0] || '';
-    item.time = String(item.Timestamp || '').includes('T') ? String(item.Timestamp).split('T')[1].split('.')[0] : '';
-    item.previousStatus = String(item['Previous Status'] || '');
-    item.newStatus = String(item['New Status'] || '');
-    item.workerName = String(item['Worker Name'] || '');
-    item.remarks = String(item['Remarks'] || '');
-    item.paidAmount = String(item['Paid Amount'] || '');
-    item.meterReading = String(item['Meter Reading'] || '');
-    item.photoUrl = String(item['Photo URL'] || '');
-    item.action = String(item['Action'] || 'UPDATE');
-
-    history.push(item);
-  }
-
-  // Sort newest history first
-  history.reverse();
-
   return {
     success: true,
-    history: history
+    history: []
   };
 }
+
