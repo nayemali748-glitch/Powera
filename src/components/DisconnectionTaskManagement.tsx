@@ -422,6 +422,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
     try {
       await submitDisconnectionTaskReport({
+        ...task,
         taskId: task.taskId,
         consumerId: task.consumerId || (task as any)['Consumer Id'],
         workerId: currentUser?.idNo || 'WORKER',
@@ -467,6 +468,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
     try {
       await submitDisconnectionTaskReport({
+        ...task,
         taskId: task.taskId,
         consumerId: task.consumerId || (task as any)['Consumer Id'],
         workerId: currentUser?.idNo || 'ADMIN',

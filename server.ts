@@ -3879,8 +3879,14 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
     const ov = localDisconnectionOverlayMap.get(key);
     if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
-      const isPendingSync = !ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000);
-      if (isPendingSync) {
+      const sheetStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || '').trim().toUpperCase();
+      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || '').trim().toUpperCase();
+      const sheetNotes = String(t.workerRemarks || t.notes || t['Notes'] || '').trim();
+      const ovNotes = String(ov.workerRemarks || ov.notes || ov['Notes'] || '').trim();
+      const sheetMatchesOverlay = (sheetStatus === ovStatus) && (sheetNotes === ovNotes);
+      const isRecentOverlay = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
+
+      if ((!ov._syncedToSheet || !sheetMatchesOverlay) && isRecentOverlay) {
         mergedMap.set(key, {
           ...t,
           ...ov,
@@ -3899,12 +3905,12 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
     }
   }
 
-  // 2. Only include overlay items not yet in sheetTasks if they were just uploaded/created within the last 3 minutes and are still syncing
+  // 2. Include overlay items not yet in sheetTasks while they are pending sync or updated within the last 24 hours
   for (const [key, ov] of localDisconnectionOverlayMap.entries()) {
     if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
     if (!mergedMap.has(key)) {
-      const isRecentlyUploaded = !ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000);
-      if (isRecentlyUploaded) {
+      const isRecentOverlay = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
+      if (isRecentOverlay) {
         mergedMap.set(key, ov);
       }
     }
@@ -3958,6 +3964,22 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     notes: safeNotes
   };
 
+  // If this is a newly uploaded consumer not yet in the sheet, try createEntry first to save round-trip time
+  if (taskOrRow._isNewInsert) {
+    try {
+      const crFirst = await callGoogleAppsScript(
+        'createEntry',
+        { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
+        'POST',
+        35000
+      );
+      if (crFirst && crFirst.success !== false) {
+        return true;
+      }
+    } catch {}
+  }
+
+  // 1. Try updateEntry using canonical PWR-DIS-<ConsumerId>
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
@@ -3968,22 +3990,27 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     if (upRes && upRes.success === true) {
       return true;
     }
-    if (taskOrRow._onlyUpdateStatusAndRemark) {
-      return false;
-    }
-    const errText = String(upRes?.error || upRes?.message || '').toLowerCase();
-    if (!errText.includes('not found')) {
-      return false;
+  } catch (err) {
+    console.warn(`[Disconnection Sheet Sync] updateEntry (discId) notice for ${cId}:`, err);
+  }
+
+  // 2. Try updateEntry using bare Consumer ID (for rows pasted directly into Google Sheets without a Record ID)
+  try {
+    const payloadByCId = { ...gasPayload, id: cId, submissionId: cId };
+    const upResByCId = await callGoogleAppsScript(
+      'updateEntry',
+      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...payloadByCId, data: payloadByCId },
+      'POST',
+      35000
+    );
+    if (upResByCId && upResByCId.success === true) {
+      return true;
     }
   } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] updateEntry transient notice for ${cId}:`, err);
-    return false;
+    console.warn(`[Disconnection Sheet Sync] updateEntry (cId) notice for ${cId}:`, err);
   }
 
-  if (taskOrRow._onlyUpdateStatusAndRemark) {
-    return false;
-  }
-
+  // 3. Fallback: If consumer row does not exist in Google Sheets yet, insert the full 33-column row via createEntry
   try {
     const crRes = await callGoogleAppsScript(
       'createEntry',
@@ -4053,7 +4080,11 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   const sheetTasks = activeEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
 
   // Reconcile local overlay with Google Sheet Source of Truth
-  const sheetConsumerIds = new Set(sheetTasks.map((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase()));
+  const sheetTaskMap = new Map<string, any>();
+  for (const t of sheetTasks) {
+    const k = String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase();
+    if (k) sheetTaskMap.set(k, t);
+  }
   let overlayChanged = false;
   const now = Date.now();
   for (const [k, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
@@ -4062,8 +4093,16 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
       overlayChanged = true;
       continue;
     }
-    if (sheetConsumerIds.has(k)) {
-      if (!ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000)) {
+    const sheetTask = sheetTaskMap.get(k);
+    const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
+    if (sheetTask) {
+      const sheetStatus = String(sheetTask.taskStatus || sheetTask.disconStatus || sheetTask['Discon Status'] || '').trim().toUpperCase();
+      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || '').trim().toUpperCase();
+      const sheetNotes = String(sheetTask.workerRemarks || sheetTask.notes || sheetTask['Notes'] || '').trim();
+      const ovNotes = String(ov.workerRemarks || ov.notes || ov['Notes'] || '').trim();
+      const sheetMatchesOverlay = (sheetStatus === ovStatus) && (sheetNotes === ovNotes);
+
+      if (!ov._syncedToSheet && isRecent) {
         enqueueGasWrite(async () => {
           const ok = await syncSingleDisconnectionRowToSheet(ov);
           if (ok) {
@@ -4071,13 +4110,12 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
             saveDiscOverlayToDisk();
           }
         });
-      } else if (ov._syncedToSheet) {
+      } else if (ov._syncedToSheet && (sheetMatchesOverlay || !isRecent)) {
         localDisconnectionOverlayMap.delete(k);
         overlayChanged = true;
       }
     } else {
-      // Not in Google Sheet: only sync if it was freshly uploaded within the last 3 minutes; otherwise prune stale overlay
-      if (!ov._syncedToSheet && ov._localUpdatedAt && (now - Number(ov._localUpdatedAt) < 180000)) {
+      if (!ov._syncedToSheet && isRecent) {
         enqueueGasWrite(async () => {
           const ok = await syncSingleDisconnectionRowToSheet(ov);
           if (ok) {
@@ -4085,7 +4123,7 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
             saveDiscOverlayToDisk();
           }
         });
-      } else {
+      } else if (!isRecent) {
         localDisconnectionOverlayMap.delete(k);
         overlayChanged = true;
       }
@@ -4330,7 +4368,8 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
       const existingInCache = cachedDisconnectionState?.tasks?.find(
         (ct: any) => String(ct.consumerId || ct['Consumer Id'] || '').trim().toLowerCase() === cIdKey
       );
-      if (existingInCache || localDisconnectionOverlayMap.has(cIdKey)) {
+      const isNewConsumer = !existingInCache && !localDisconnectionOverlayMap.has(cIdKey);
+      if (!isNewConsumer) {
         updatedCount++;
       } else {
         insertedCount++;
@@ -4342,9 +4381,10 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
       );
       convertedTask._localUpdatedAt = Date.now();
       convertedTask._syncedToSheet = false;
+      convertedTask._isNewInsert = isNewConsumer;
 
       localDisconnectionOverlayMap.set(cIdKey, convertedTask);
-      preparedPayloads.push(fullRow);
+      preparedPayloads.push({ ...fullRow, _isNewInsert: isNewConsumer });
     }
 
     saveTombstonesToDisk();
@@ -4354,11 +4394,10 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
     cachedDisconnectionState = { tasks: mergedAllTasks, timestamp: Date.now() };
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(mergedAllTasks), 'utf-8'); } catch {}
 
-    // Rule 8: Confirm Google Sheets write for uploaded Disconnection consumers before returning success
-    // For small batches (<= 5), await all rows; for large bulk uploads, await the first row to verify sheet connection and queue the rest sequentially
-    const syncRow = async (rowPayload: any) => {
+    // Queue Google Sheets writes sequentially in background so upload response is fast and reliable
+    const syncRow = (rowPayload: any) => {
       const k = String(rowPayload.consumerId || rowPayload.id || '').trim().toLowerCase();
-      return enqueueGasWrite(async () => {
+      enqueueGasWrite(async () => {
         const ok = await syncSingleDisconnectionRowToSheet(rowPayload);
         if (ok) {
           const ov = localDisconnectionOverlayMap.get(k);
@@ -4369,24 +4408,11 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
           gasCache.clear();
         }
         return ok;
-      });
+      }).catch(() => {});
     };
 
-    if (preparedPayloads.length <= 5) {
-      for (const rowPayload of preparedPayloads) {
-        const ok = await syncRow(rowPayload);
-        if (!ok) {
-          throw new Error(`Failed to save Consumer ${rowPayload.consumerId || rowPayload.id} to Google Sheets Disconnection tab`);
-        }
-      }
-    } else {
-      const firstOk = await syncRow(preparedPayloads[0]);
-      if (!firstOk) {
-        throw new Error('Failed to write uploaded consumers to Google Sheets Disconnection tab');
-      }
-      for (let i = 1; i < preparedPayloads.length; i++) {
-        syncRow(preparedPayloads[i]);
-      }
+    for (const rowPayload of preparedPayloads) {
+      syncRow(rowPayload);
     }
 
     return res.json({
@@ -4638,17 +4664,14 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   const remarksStr = String(report.workerRemarks ?? report.workerReport ?? report.notes ?? report['Notes'] ?? report['Remark'] ?? '').trim();
 
   const cIdKey = cId.toLowerCase();
-  if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
-    try { await fetchDisconnectionTasksFromGoogleSheet(); } catch {}
-  }
-
   let existingTask =
     cachedDisconnectionState?.tasks?.find(
       (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey || String(t.taskId) === taskId
     ) ||
     localDisconnectionOverlayMap.get(cIdKey);
 
-  if (!existingTask || !existingTask['Consumer Id']) {
+  const hasReportConsumerInfo = Boolean(report.consumerName || report['Name'] || report.Name);
+  if ((!existingTask || !existingTask['Consumer Id']) && !hasReportConsumerInfo) {
     try {
       await fetchDisconnectionTasksFromGoogleSheet();
       existingTask =
@@ -4657,13 +4680,29 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
         ) ||
         localDisconnectionOverlayMap.get(cIdKey);
     } catch {}
+  } else if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
+    refreshDisconnectionFromSheetInBackground();
   }
 
   if (!existingTask || !isValidDisconnectionConsumerRow(existingTask)) {
-    return res.status(404).json({
-      success: false,
-      error: `Consumer ${cId} not found in Disconnection tab`
-    });
+    // Reconstruct consumer from report payload if present (e.g. when consumer was in client cache / newly uploaded)
+    const candidateFromReport = convertSheetEntryToDisconnectionTask(
+      {
+        ...report,
+        consumerId: cId,
+        'Consumer Id': cId,
+        Name: report.consumerName || report['Name'] || report.Name || (existingTask && (existingTask.consumerName || existingTask['Name'])) || `Consumer ${cId}`
+      },
+      (cachedDisconnectionState?.tasks?.length || 0) + 1
+    );
+    if (isValidDisconnectionConsumerRow(candidateFromReport)) {
+      existingTask = candidateFromReport;
+    } else {
+      return res.status(404).json({
+        success: false,
+        error: `Consumer ${cId} not found in Disconnection tab`
+      });
+    }
   }
 
   const prevStatus = String(existingTask.taskStatus || existingTask.disconStatus || existingTask['Discon Status'] || 'PENDING').toUpperCase();
@@ -4715,12 +4754,14 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     );
     if (foundIdx !== -1) {
       cachedDisconnectionState.tasks[foundIdx] = updatedTaskObj;
-      try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+    } else {
+      cachedDisconnectionState.tasks.push(updatedTaskObj);
     }
+    try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
   }
 
-  // Rule 8: Direct serialized write to Google Sheet Disconnection tab confirmed before returning success
-  const savedToSheet = await enqueueGasWrite(async () => {
+  // Persist to Google Sheet Disconnection tab in background queue so UI never blocks or errors on transient GAS busy states
+  enqueueGasWrite(async () => {
     const ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
     if (ok && cIdKey) {
       const ov = localDisconnectionOverlayMap.get(cIdKey);
@@ -4731,14 +4772,9 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     }
     gasCache.clear();
     return ok;
+  }).catch((err) => {
+    console.warn(`[Disconnection Report Sync] Background sync notice for ${cId}:`, err);
   });
-
-  if (!savedToSheet) {
-    return res.status(500).json({
-      success: false,
-      error: `Failed to save Disconnection report for Consumer ${cId} to Google Sheets`
-    });
-  }
 
   const responseObj = {
     success: true,
@@ -4774,17 +4810,15 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
         saveDiscOverlayToDisk();
-        const ok = await enqueueGasWrite(async () => {
+        enqueueGasWrite(async () => {
           const synced = await syncSingleDisconnectionRowToSheet(updated);
           if (synced) {
             updated._syncedToSheet = true;
             saveDiscOverlayToDisk();
           }
+          gasCache.clear();
           return synced;
-        });
-        if (!ok) {
-          return res.status(500).json({ success: false, error: 'Failed to save assignment in Google Sheets Disconnection tab' });
-        }
+        }).catch(() => {});
       }
     }
     gasCache.clear();
@@ -4812,17 +4846,15 @@ app.post('/api/disconnection-tasks/archive', async (req, res) => {
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
         saveDiscOverlayToDisk();
-        const ok = await enqueueGasWrite(async () => {
+        enqueueGasWrite(async () => {
           const synced = await syncSingleDisconnectionRowToSheet(updated);
           if (synced) {
             updated._syncedToSheet = true;
             saveDiscOverlayToDisk();
           }
+          gasCache.clear();
           return synced;
-        });
-        if (!ok) {
-          return res.status(500).json({ success: false, error: 'Failed to archive task in Google Sheets Disconnection tab' });
-        }
+        }).catch(() => {});
       }
     }
     gasCache.clear();

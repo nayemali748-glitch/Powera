@@ -334,8 +334,9 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
       const targetConsumerId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
 
-      // Send ONLY Consumer Id, Status, and Remark/Notes so no other consumer data is modified in the Disconnection tab
+      // Include existing consumer snapshot so backend can always reconstruct & sync even if not yet in cache
       const reportPayload = {
+        ...task,
         taskId: task.taskId,
         consumerId: targetConsumerId,
         'Consumer Id': targetConsumerId,

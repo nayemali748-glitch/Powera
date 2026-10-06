@@ -2406,8 +2406,9 @@ export async function submitDisconnectionTaskReport(report: {
   const newStatus = String(report.taskStatus || (report as any).disconStatus || (report as any).status || 'COMPLETED').toUpperCase();
   const remarksStr = String(report.workerRemarks ?? report.workerReport ?? (report as any).notes ?? (report as any)['Notes'] ?? (report as any)['Remark'] ?? '').trim();
 
-  // Send ONLY Consumer ID, Status, and Remark/Notes so no other consumer columns (Meter/Device, Base Class, Class, etc.) are modified
+  // Preserve consumer fields as fallback if missing from server cache while updating Status and Remark/Notes
   const payload: Record<string, any> = {
+    ...report,
     taskId: report.taskId || `TASK-DISC-${cId}`,
     consumerId: cId,
     'Consumer Id': cId,
@@ -2427,6 +2428,30 @@ export async function submitDisconnectionTaskReport(report: {
     workerName: report.workerName,
     requestId: reqId
   };
+
+  // Immediately update local cache for instant persistence
+  try {
+    const cachedTasks = getCachedDisconnectionTasksSync();
+    if (cachedTasks.length > 0) {
+      const updatedCache = cachedTasks.map(t => {
+        const tCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+        if ((cId && tCId === cId) || (report.taskId && t.taskId === report.taskId)) {
+          return {
+            ...t,
+            taskStatus: newStatus as DisconnectionTaskStatus,
+            disconStatus: newStatus,
+            'Discon Status': newStatus,
+            workerRemarks: remarksStr,
+            workerReport: remarksStr,
+            notes: remarksStr,
+            'Notes': remarksStr
+          };
+        }
+        return t;
+      });
+      setCachedDisconnectionTasksSync(updatedCache);
+    }
+  } catch {}
 
   let lastError = 'Failed to save Disconnection status & remark to Google Sheets';
   for (let attempt = 0; attempt < 2; attempt++) {
