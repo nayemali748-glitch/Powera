@@ -129,6 +129,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
   const inFlightRef = useRef(false);
+  const deletedConsumerIdsRef = useRef<Set<string>>(new Set());
 
   // Fast Non-Blocking Data Fetch & Background Sync (Preserves canonical Consumer ID order & serial numbers across Admin and Worker)
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
@@ -149,7 +150,14 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
       if (discResult && Array.isArray(discResult.tasks)) {
         const cleanIncoming = discResult.tasks
-          .filter(isValidDisconnectionTaskOrRow)
+          .filter(t => {
+            if (!isValidDisconnectionTaskOrRow(t)) return false;
+            const cId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+            const tId = String(t.taskId || '').trim();
+            if (cId && deletedConsumerIdsRef.current.has(cId)) return false;
+            if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
+            return true;
+          })
           .map((item, idx) => ({
             ...item,
             serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
@@ -202,7 +210,14 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   useEffect(() => {
     if (Array.isArray(externalTasks)) {
       const cleanIncoming = externalTasks
-        .filter(isValidDisconnectionTaskOrRow)
+        .filter(t => {
+          if (!isValidDisconnectionTaskOrRow(t)) return false;
+          const cId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+          const tId = String(t.taskId || '').trim();
+          if (cId && deletedConsumerIdsRef.current.has(cId)) return false;
+          if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
+          return true;
+        })
         .map((item, idx) => ({
           ...item,
           serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
@@ -291,6 +306,12 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
   // Handle upload success (immediately shows uploaded consumers and syncs to backend sheet)
   const handleUploadSuccess = (newTasks: DisconnectionTask[]) => {
+    newTasks.forEach(nt => {
+      const cId = String(nt.consumerId || (nt as any)['Consumer Id'] || '').trim();
+      const tId = String(nt.taskId || '').trim();
+      if (cId) deletedConsumerIdsRef.current.delete(cId);
+      if (tId) deletedConsumerIdsRef.current.delete(tId);
+    });
     setTasks(prev => {
       const existingMap = new Map<string, DisconnectionTask>();
       prev.forEach(t => {
@@ -329,17 +350,16 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     setActiveTab('VIEW_LIST');
   };
 
-  // Delete Consumer Handler (Admin Only - Confirmed Backend Sheet deletion + UI removal)
+  // Delete Consumer Handler (Admin Only - Immediate UI removal + Backend Sheet deletion)
   const handleDeleteTask = async (task: DisconnectionTask) => {
     if (!isAdmin) return;
     const cId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
     const tId = String(task.taskId || '').trim();
 
-    // 1. Permanently delete from server & backend Google Sheet first
-    const delRes = await deleteDisconnectionTask(task);
-    if (!delRes || !delRes.success) return;
+    if (cId) deletedConsumerIdsRef.current.add(cId);
+    if (tId) deletedConsumerIdsRef.current.add(tId);
 
-    // 2. Remove from UI state once backend confirms deletion
+    // 1. Immediately remove from UI state for instant responsiveness
     setTasks(prev => {
       const next = prev.filter(t => {
         const curCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
@@ -352,6 +372,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       if (onTasksChange) onTasksChange(next.length);
       return next;
     });
+
+    // 2. Permanently delete from server & backend Google Sheet
+    try {
+      await deleteDisconnectionTask(task);
+    } catch (err) {
+      console.warn('Disconnection delete sync notice:', err);
+    }
   };
 
   // Open Update Modal (Enforce 1-time update lock for Workers unless Admin Re-issued)

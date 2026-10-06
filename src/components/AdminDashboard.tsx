@@ -683,7 +683,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const executeClearAll = async () => {
-    if (clearAllConfirmText.trim() !== 'CLEAR ALL') {
+    if (clearAllConfirmText.trim().toUpperCase() !== 'CLEAR ALL') {
       setClearAllError(lang === 'bn' 
         ? 'নিশ্চিত করতে হুবহু "CLEAR ALL" লিখুন' 
         : 'Type "CLEAR ALL" exactly to confirm');
@@ -695,8 +695,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       await clearAllEntries('CONFIRM_PERMANENT_WIPE');
+      setLocallyDeletedIds(prev => {
+        const next = new Set(prev);
+        entries.forEach(e => {
+          if (e.id) next.add(String(e.id).trim());
+          if (e.submissionId) next.add(String(e.submissionId).trim());
+          if (e.consumerId) {
+            next.add(String(e.consumerId).trim());
+            next.add(`TASK-DISC-${String(e.consumerId).trim()}`);
+          }
+        });
+        if (disconnectionTasks) {
+          disconnectionTasks.forEach(t => {
+            const cid = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+            if (cid) {
+              next.add(cid);
+              next.add(`TASK-DISC-${cid}`);
+            }
+            if (t.taskId) next.add(String(t.taskId).trim());
+          });
+        }
+        return next;
+      });
       setIsClearAllModalOpen(false);
       setSelectedEntry(null);
+      setEditingEntry(null);
+      setEntryToDelete(null);
       onRefresh();
     } catch (err: any) {
       setClearAllError(err.message || 'Failed to clear entries');
@@ -2806,7 +2830,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 onClick={executeClearAll}
-                disabled={isClearingAll || clearAllConfirmText.trim() !== 'CLEAR ALL'}
+                disabled={isClearingAll || clearAllConfirmText.trim().toUpperCase() !== 'CLEAR ALL'}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-300 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:cursor-not-allowed"
               >
                 {isClearingAll ? (

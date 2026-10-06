@@ -1266,7 +1266,7 @@ export default function App() {
               <AdminDashboard
                 entries={entries}
                 disconnectionTasks={disconnectionTasks}
-                onRefresh={() => loadData(true)}
+                onRefresh={() => loadData(true, true)}
                 onExportCsv={handleExportCsv}
                 onLogout={handleUserLogout}
                 lang={currentLanguage}

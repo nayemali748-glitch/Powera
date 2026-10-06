@@ -684,17 +684,66 @@ export async function deleteEntry(
 }
 
 export async function clearAllEntries(confirmPhrase: string = 'CONFIRM_PERMANENT_WIPE'): Promise<boolean> {
+  const clearLocalCaches = () => {
+    try {
+      writeCache(LOCAL_STORAGE_KEY, []);
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+      localStorage.removeItem('power_disconnection_tasks_cache_v2');
+      localStorage.removeItem('power_entries_local_cache_v1');
+    } catch {}
+  };
+
+  let clearedOnServer = false;
+  let lastError = '';
+
+  // 1. Primary: Dedicated /api/entries/clear endpoint
   try {
-    const res = await callGasApi<{ success?: boolean; error?: any; message?: string }>('clearEntries', { confirmClearAll: confirmPhrase }, 'POST');
-    if (res && res.success === false) {
-      const msg = typeof res.error === 'object' ? (res.error?.message || JSON.stringify(res.error)) : (res.error || res.message || 'Server rejected bulk clear');
-      throw new Error(msg);
+    const res = await fetch('/api/entries/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        confirmClearAll: confirmPhrase,
+        confirmation: confirmPhrase
+      })
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success !== false) {
+        clearedOnServer = true;
+      } else if (data?.error) {
+        lastError = typeof data.error === 'string' ? data.error : (data.error?.message || '');
+      }
     }
-  } catch (e: any) {
-    console.warn('Clear entries notice:', e);
-    throw e;
+  } catch (err: any) {
+    console.warn('POST /api/entries/clear fallback notice:', err);
   }
-  writeCache(LOCAL_STORAGE_KEY, []);
+
+  // 2. Fallback: gas-proxy clearEntries
+  if (!clearedOnServer) {
+    try {
+      const res = await callGasApi<{ success?: boolean; error?: any; message?: string }>(
+        'clearEntries',
+        { confirmClearAll: confirmPhrase, confirmation: confirmPhrase },
+        'POST'
+      );
+      if (res && res.success !== false) {
+        clearedOnServer = true;
+      } else if (res && res.success === false) {
+        const msg = typeof res.error === 'object' ? (res.error?.message || JSON.stringify(res.error)) : (res.error || res.message || 'Server rejected bulk clear');
+        lastError = msg;
+      }
+    } catch (e: any) {
+      console.warn('Clear entries gas-proxy notice:', e);
+      lastError = e?.message || lastError;
+    }
+  }
+
+  clearLocalCaches();
+
+  if (!clearedOnServer && lastError) {
+    throw new Error(lastError);
+  }
   return true;
 }
 
@@ -1136,16 +1185,34 @@ export async function deleteUserAccount(
     throw new Error('PRIMARY_ADMIN_PROTECTED: The Primary Admin account (8695716192) is permanently protected and cannot be deleted.');
   }
 
-  // 1. Try server endpoint
+  const reqPayload = {
+    id,
+    confirmDelete: true,
+    confirmAdminDelete: options?.confirmAdminDelete ?? true,
+    reason: options?.reason || 'Admin confirmed user deletion',
+    ...(options || {})
+  };
+
+  // 1. Try server DELETE / POST endpoint
   if (typeof window !== 'undefined') {
     try {
       const resp = await fetch(`/api/users/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(options || {})
+        body: JSON.stringify(reqPayload)
       });
       const ct = resp.headers.get('content-type') || '';
       if (resp.ok && ct.includes('application/json')) {
+        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+        writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
+        return true;
+      }
+      const postResp = await fetch(`/api/users/${encodeURIComponent(id)}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(reqPayload)
+      });
+      if (postResp.ok) {
         const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
         writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
         return true;
@@ -1157,7 +1224,8 @@ export async function deleteUserAccount(
   const cachedList = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   const target = cachedList.find(u => u.id === id || u.idNo === id);
   const rowId = target?.id || id;
-  await callGasApi<any>('deleteEntry', { id: rowId, category: 'Users', ...options }, 'POST').catch(() => {});
+  await callGasApi<any>('deleteUser', { id: rowId, idNo: target?.idNo || id, category: 'Users', ...reqPayload }, 'POST').catch(() => {});
+  await callGasApi<any>('deleteEntry', { id: rowId, category: 'Users', ...reqPayload }, 'POST').catch(() => {});
   writeCache(USERS_CACHE_KEY, cachedList.filter(u => u.id !== id && u.idNo !== id));
   return true;
 }
@@ -1753,7 +1821,15 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
     if (res.ok) return true;
   } catch {}
   try {
-    await callGasApi('deleteEntry', { id, submissionId: id, category: 'Work Orders' }, 'POST');
+    const postRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    if (postRes.ok) return true;
+  } catch {}
+  try {
+    await callGasApi('deleteWorkOrder', { id }, 'POST');
   } catch {}
   return true;
 }

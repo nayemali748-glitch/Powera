@@ -1262,8 +1262,8 @@ function updateEntry(targetId, category, updateData) {
 // Delete Record from Google Sheets with Protection
 function deleteEntry(targetId, category, options) {
   options = options || {};
-  const cleanId = String(targetId || options.consumerId || options['Consumer Id'] || '').trim();
-  const cleanConsumerId = cleanId.replace(/^TASK-DISC-/i, '').trim();
+  const cleanId = String(targetId || options.consumerId || options['Consumer Id'] || options.idNo || '').trim();
+  const cleanConsumerId = cleanId.replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
   if (!cleanId) throw Error('Entry ID required for deletion');
 
   const sheetsToSearch = category 
@@ -1279,16 +1279,22 @@ function deleteEntry(targetId, category, options) {
       const s = getSheet(sheetName);
       if (!s) continue;
       const rows = getSheetRows(sheetName);
-      const found = rows.find(function(r) {
+      const found = rows.find(function(r, idx) {
         const recId = String(r['Record ID'] || r.id || r.ID || '').trim();
         const subId = String(r['Submission ID'] || r.submissionId || '').trim();
         const conId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
         const tId = String(r['Task ID'] || r.taskId || '').trim();
+        const uId = String(r['User ID'] || r.idNo || '').trim();
+        const woId = String(r['Work Order Notice ID'] || r.workOrderNoticeId || '').trim();
+        const stableId = ('PWR-' + sheetName.substring(0, 3).toUpperCase() + '-' + (conId || r['SL No'] || r.slNo || (idx + 1))).trim();
         return (
           recId === cleanId ||
           subId === cleanId ||
           (cleanConsumerId && conId === cleanConsumerId) ||
-          (cleanId && tId === cleanId)
+          (cleanId && tId === cleanId) ||
+          (cleanId && uId === cleanId) ||
+          (cleanId && woId === cleanId) ||
+          stableId === cleanId
         );
       });
       if (found) {
@@ -1300,13 +1306,31 @@ function deleteEntry(targetId, category, options) {
   }
 
   if (!matchedRow || !matchedSheet) {
-    throw Error('Record not found in Google Sheets: ' + cleanId);
+    return { success: true, deleted: false, message: 'Record already absent in Google Sheets: ' + cleanId, id: cleanId };
   }
 
   matchedSheet.deleteRow(matchedRow._rowIndex);
   try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
 
   return { success: true, deleted: true, message: 'Record deleted from Google Sheets', id: cleanId };
+}
+
+function clearAllProductionSheets() {
+  const targetSheets = ['NSC', 'Disconnection', 'Broken', 'Meter Replacement', 'DTR Replacement'];
+  let totalCleared = 0;
+  for (let i = 0; i < targetSheets.length; i++) {
+    try {
+      const s = getSheet(targetSheets[i]);
+      if (!s) continue;
+      const lastRow = s.getLastRow();
+      if (lastRow > 1) {
+        s.deleteRows(2, lastRow - 1);
+        totalCleared += (lastRow - 1);
+      }
+    } catch (e) {}
+  }
+  try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+  return { success: true, cleared: true, clearedCount: totalCleared, message: 'All production sheets cleared' };
 }
 
 // Query Entries across dedicated permanent module sheets
@@ -1773,10 +1797,14 @@ function doPost(e) {
       return out(res, res.message || 'Record updated', reqId);
     }
     if (action === 'deleteEntry' || action === 'deleteRecord') {
-      const targetId = body.id || body.submissionId || data.id || data.submissionId;
+      const targetId = body.id || body.submissionId || data.id || data.submissionId || body.consumerId || data.consumerId;
       const category = body.category || data.category;
       const res = deleteEntry(targetId, category, body.options || body || data);
       return out(res, 'Record deleted', reqId);
+    }
+    if (action === 'clearEntries' || action === 'clearAllEntries' || action === 'wipeDatabase') {
+      const res = clearAllProductionSheets();
+      return out(res, 'All production records cleared from Google Sheets', reqId);
     }
 
     // Record Submission & Management

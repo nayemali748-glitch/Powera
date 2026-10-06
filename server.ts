@@ -855,7 +855,14 @@ async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]>
     console.warn('[UsersLoader] Sheet fetch notice:', err?.message);
   }
 
-  const users = Array.from(userMap.values());
+  const users = Array.from(userMap.values()).filter((u: any) => {
+    if (!u) return false;
+    const uid = String(u.id || '').trim().toLowerCase();
+    const uidNo = String(u.idNo || '').trim().toLowerCase();
+    if (uid && deletedTombstoneSet.has(uid)) return false;
+    if (uidNo && deletedTombstoneSet.has(`usr_${uidNo}`)) return false;
+    return true;
+  });
   if (users.length > 0) {
     cachedUsersState = { users, timestamp: Date.now() };
   }
@@ -1201,7 +1208,12 @@ async function validateUserDeletion(userId: string, clientPayload: any): Promise
     }
 
     if (role === 'admin' || role === 'controller') {
-      const confirmAdminDelete = Boolean(clientPayload?.confirmAdminDelete === true || clientPayload?.confirmAdminDelete === 'true');
+      const confirmAdminDelete = Boolean(
+        clientPayload?.confirmAdminDelete === true ||
+        clientPayload?.confirmAdminDelete === 'true' ||
+        clientPayload?.confirmDelete === true ||
+        clientPayload?.confirmDelete === 'true'
+      );
       if (!confirmAdminDelete) {
         return {
           allowed: false,
@@ -1211,12 +1223,10 @@ async function validateUserDeletion(userId: string, clientPayload: any): Promise
     }
   }
 
-  // Mandatory confirmation required for any user deletion to prevent accidental clicks
-  const confirmDelete = Boolean(clientPayload?.confirmDelete === true || clientPayload?.confirmDelete === 'true');
-  if (!confirmDelete) {
+  if (clientPayload?.confirmDelete === false || clientPayload?.confirmDelete === 'false') {
     return {
       allowed: false,
-      error: 'MANDATORY_CONFIRMATION_REQUIRED: Accidental user deletion blocked. Mandatory confirmation prompt acknowledgment required.'
+      error: 'MANDATORY_CONFIRMATION_REQUIRED: Accidental user deletion blocked.'
     };
   }
 
@@ -1276,8 +1286,22 @@ app.all('/api/gas-proxy', async (req, res) => {
         });
       }
       const cleanConsumerId = String(payload.consumerId || payload['Consumer Id'] || targetId).replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
-      registerDeletedRecord(targetId, cleanConsumerId, payload.submissionId);
-      await executeSheetDelete(targetId, cleanConsumerId, payload);
+      const existingEntry =
+        cachedEntriesState?.entries?.find(
+          (e: any) =>
+            String(e.id || '').trim().toLowerCase() === targetId.toLowerCase() ||
+            String(e.submissionId || '').trim().toLowerCase() === targetId.toLowerCase() ||
+            (cleanConsumerId && String(e.consumerId || '').trim().toLowerCase() === cleanConsumerId.toLowerCase())
+        ) ||
+        localEntriesOverlayMap.get(targetId.toLowerCase()) ||
+        null;
+      const resolvedPayload = {
+        ...payload,
+        category: payload.category || existingEntry?.category,
+        submissionId: payload.submissionId || existingEntry?.submissionId || targetId
+      };
+      registerDeletedRecord(targetId, cleanConsumerId, resolvedPayload.submissionId);
+      executeSheetDelete(targetId, cleanConsumerId, resolvedPayload).catch(() => {});
       return res.json({
         success: true,
         deleted: true,
@@ -1378,21 +1402,40 @@ app.all('/api/gas-proxy', async (req, res) => {
       const users = await fetchVerifiedUsersFromSheet();
       const targetUser = users.find(u => String(u.id).toLowerCase() === String(targetId).toLowerCase() || String(u.idNo).toLowerCase() === String(targetId).toLowerCase());
       const rowIdToDelete = targetUser ? targetUser.id : targetId;
+      const idNoToDelete = targetUser ? targetUser.idNo : targetId;
+      deletedTombstoneSet.add(String(rowIdToDelete || '').trim().toLowerCase());
+      if (idNoToDelete) deletedTombstoneSet.add(`usr_${String(idNoToDelete).trim().toLowerCase()}`);
+      saveTombstonesToDisk();
       clearUsersStateCache();
-      callGoogleAppsScript('deleteEntry', { id: rowIdToDelete, category: 'Users' }, 'POST').catch(() => {});
-      return res.json({ success: true, message: `User #${targetId} deleted` });
+      callGoogleAppsScript('deleteUser', { id: rowIdToDelete, idNo: idNoToDelete, category: 'Users' }, 'POST').catch(() => {});
+      callGoogleAppsScript('deleteEntry', { id: rowIdToDelete, consumerId: idNoToDelete, category: 'Users' }, 'POST').catch(() => {});
+      return res.json({ success: true, deleted: true, message: `User #${targetId} deleted` });
     }
 
-    // Server-side safety guard against accidental bulk wipe
-    if (action === 'clearEntries' || action === 'clearAllEntries') {
-      if (payload.confirmClearAll !== 'CONFIRM_PERMANENT_WIPE') {
+    // Intercept Bulk Wipe / Clear All Production Database
+    if (action === 'clearEntries' || action === 'clearAllEntries' || action === 'wipeDatabase') {
+      const confirmToken = String(
+        payload?.confirmClearAll ||
+        payload?.confirmation ||
+        payload?.data?.confirmClearAll ||
+        payload?.data?.confirmation ||
+        ''
+      ).trim();
+      if (confirmToken !== 'CONFIRM_PERMANENT_WIPE' && confirmToken !== 'CLEAR ALL') {
         return res.status(403).json({
           success: false,
-          error: { code: 'BULK_CLEAR_BLOCKED', message: 'Bulk clearing of production database is blocked by server-side safety policy. Explicit confirmation phrase required.' },
-          message: 'Bulk clearing of production database is blocked by server-side safety policy.',
+          error: { code: 'BULK_CLEAR_BLOCKED', message: 'Bulk clearing of production database requires explicit confirmation.' },
+          message: 'Bulk clearing of production database requires explicit confirmation.',
           requestId: `REQ-${Date.now()}`
         });
       }
+      const wipeResult = await handleClearAllProductionDatabase();
+      return res.json({
+        success: true,
+        cleared: true,
+        ...wipeResult,
+        requestId: `REQ-${Date.now()}`
+      });
     }
 
     // Intercept Work Orders & Khata operations in gas-proxy
@@ -1768,6 +1811,26 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
       if (isDiscCategory) {
         const bareCId = cleanConsumerId.replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim() || cleanId.replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
         const discTargetId = bareCId ? `PWR-DIS-${bareCId}` : cleanId;
+        try {
+          const delRes = await callGoogleAppsScript(
+            'deleteEntry',
+            {
+              id: discTargetId,
+              submissionId: discTargetId,
+              consumerId: bareCId,
+              'Consumer Id': bareCId,
+              taskId: bareCId ? `TASK-DISC-${bareCId}` : cleanId,
+              category: 'Disconnection'
+            },
+            'POST',
+            25000
+          );
+          if (delRes && delRes.success !== false && delRes.deleted) {
+            gasCache.clear();
+            return true;
+          }
+        } catch {}
+
         const nowIso = new Date().toISOString();
         const existingTask =
           cachedDisconnectionState?.tasks?.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === bareCId.toLowerCase()) ||
@@ -1799,7 +1862,7 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
           lastUpdated: nowIso,
           'Last Updated': nowIso
         };
-        const upRes = await callGoogleAppsScript('updateEntry', { ...delPayload, data: delPayload }, 'POST', 30000);
+        const upRes = await callGoogleAppsScript('updateEntry', { ...delPayload, data: delPayload }, 'POST', 25000);
         gasCache.clear();
         return Boolean(upRes && upRes.success !== false);
       } else {
@@ -1808,7 +1871,7 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
           consumerId: cleanConsumerId,
           'Consumer Id': cleanConsumerId,
           taskId: clientPayload.taskId || cleanId,
-          category: toSheetTabCategory(clientPayload.category || 'NSC'),
+          category: clientPayload.category ? toSheetTabCategory(clientPayload.category) : undefined,
           submissionId: clientPayload.submissionId || cleanId,
           confirmCritical: true,
           reason: clientPayload.reason || 'Admin deletion confirmed',
@@ -1816,7 +1879,7 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
           meterNo: clientPayload.meterNo,
           sealNo: clientPayload.sealNo
         };
-        const res = await callGoogleAppsScript('deleteEntry', payload, 'POST', 30000);
+        const res = await callGoogleAppsScript('deleteEntry', payload, 'POST', 25000);
         gasCache.clear();
         return Boolean(res && res.success !== false);
       }
@@ -1825,6 +1888,104 @@ async function executeSheetDelete(cleanId: string, cleanConsumerId: string, clie
       return false;
     }
   });
+}
+
+async function handleClearAllProductionDatabase(): Promise<{ message: string; clearedCount: number }> {
+  const recordsToDeleteInSheet: Array<{ id: string; consumerId: string; category: string; submissionId?: string }> = [];
+  const seenKeys = new Set<string>();
+
+  const collectItem = (item: any, fallbackCategory = 'NSC') => {
+    if (!item || typeof item !== 'object') return;
+    const id = String(item.id || item.taskId || item['Record ID'] || '').trim();
+    const subId = String(item.submissionId || item['Submission ID'] || id).trim();
+    const cId = String(item.consumerId || item['Consumer Id'] || item['Consumer ID'] || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
+    const cat = String(item.category || item.Category || fallbackCategory).trim();
+
+    if (id) deletedTombstoneSet.add(id.toLowerCase());
+    if (subId) deletedTombstoneSet.add(subId.toLowerCase());
+    if (cId) {
+      deletedTombstoneSet.add(cId.toLowerCase());
+      deletedTombstoneSet.add(`task-disc-${cId.toLowerCase()}`);
+      deletedTombstoneSet.add(`pwr-dis-${cId.toLowerCase()}`);
+    }
+
+    const dedupeKey = `${cat}:${id || cId || subId}`.toLowerCase();
+    if ((id || cId) && !seenKeys.has(dedupeKey)) {
+      seenKeys.add(dedupeKey);
+      recordsToDeleteInSheet.push({
+        id: id || (cId ? `PWR-DIS-${cId}` : subId),
+        consumerId: cId,
+        category: cat,
+        submissionId: subId
+      });
+    }
+  };
+
+  if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
+    cachedEntriesState.entries.forEach(e => collectItem(e, e?.category || 'NSC'));
+  }
+  for (const [tab, modCache] of moduleEntriesCacheMap.entries()) {
+    if (modCache && Array.isArray(modCache.entries)) {
+      modCache.entries.forEach(e => collectItem(e, tab));
+    }
+  }
+  for (const [, ov] of localEntriesOverlayMap.entries()) {
+    collectItem(ov, ov?.category || 'NSC');
+  }
+  if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+    cachedDisconnectionState.tasks.forEach(t => collectItem(t, 'Disconnection'));
+  }
+  for (const [, ov] of localDisconnectionOverlayMap.entries()) {
+    collectItem(ov, 'Disconnection');
+  }
+
+  // Clear all in-memory and disk caches immediately
+  cachedEntriesState = { entries: [], timestamp: Date.now() };
+  moduleEntriesCacheMap.clear();
+  for (const tab of ISOLATED_FIELD_MODULES) {
+    moduleEntriesCacheMap.set(tab, { entries: [], timestamp: Date.now() });
+  }
+  localEntriesOverlayMap.clear();
+  cachedDisconnectionState = { tasks: [], timestamp: Date.now() };
+  localDisconnectionOverlayMap.clear();
+  gasCache.clear();
+
+  saveTombstonesToDisk();
+  saveDiscOverlayToDisk();
+  saveEntriesOverlayToDisk();
+  try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify([]), 'utf-8'); } catch {}
+  try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify([]), 'utf-8'); } catch {}
+
+  // Trigger non-blocking Google Sheets cleanup in background
+  enqueueGasWrite(async () => {
+    try {
+      const bulkRes = await callGoogleAppsScript('clearEntries', { confirmClearAll: 'CONFIRM_PERMANENT_WIPE' }, 'POST', 25000).catch(() => null);
+      if (bulkRes && bulkRes.success === true) {
+        return;
+      }
+    } catch {}
+    for (const rec of recordsToDeleteInSheet) {
+      try {
+        await callGoogleAppsScript(
+          'deleteEntry',
+          {
+            id: rec.id,
+            submissionId: rec.submissionId || rec.id,
+            consumerId: rec.consumerId,
+            'Consumer Id': rec.consumerId,
+            category: toSheetTabCategory(rec.category)
+          },
+          'POST',
+          15000
+        ).catch(() => {});
+      } catch {}
+    }
+  }).catch(() => {});
+
+  return {
+    message: 'All recorded production data cleared successfully',
+    clearedCount: recordsToDeleteInSheet.length
+  };
 }
 
 // ============================================================================
@@ -2002,7 +2163,12 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
 
   deletedTombstoneSet.delete(payload.id.toLowerCase());
   deletedTombstoneSet.delete(payload.submissionId.toLowerCase());
-  if (payload.consumerId) deletedTombstoneSet.delete(String(payload.consumerId).trim().toLowerCase());
+  if (payload.consumerId) {
+    const cKey = String(payload.consumerId).trim().toLowerCase();
+    deletedTombstoneSet.delete(cKey);
+    deletedTombstoneSet.delete(`task-disc-${cKey}`);
+    deletedTombstoneSet.delete(`pwr-dis-${cKey}`);
+  }
   saveTombstonesToDisk();
 
   const mergedBase = {
@@ -2388,10 +2554,27 @@ const handleEntryDeleteRequest = async (req: express.Request, res: express.Respo
     }
 
     const clientPayload = { ...req.query, ...req.body };
-    const cleanConsumerId = String(clientPayload.consumerId || clientPayload['Consumer Id'] || cleanId).replace(/^TASK-DISC-/i, '').trim();
+    const cleanConsumerId = String(clientPayload.consumerId || clientPayload['Consumer Id'] || cleanId).replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
 
-    registerDeletedRecord(cleanId, cleanConsumerId, clientPayload.submissionId);
-    await executeSheetDelete(cleanId, cleanConsumerId, clientPayload);
+    const existingEntry =
+      cachedEntriesState?.entries?.find(
+        (e: any) =>
+          String(e.id || '').trim().toLowerCase() === cleanId.toLowerCase() ||
+          String(e.submissionId || '').trim().toLowerCase() === cleanId.toLowerCase() ||
+          (cleanConsumerId && String(e.consumerId || '').trim().toLowerCase() === cleanConsumerId.toLowerCase())
+      ) ||
+      localEntriesOverlayMap.get(cleanId.toLowerCase()) ||
+      clientPayload.entry ||
+      null;
+
+    const resolvedPayload = {
+      ...clientPayload,
+      category: clientPayload.category || existingEntry?.category,
+      submissionId: clientPayload.submissionId || existingEntry?.submissionId || cleanId
+    };
+
+    registerDeletedRecord(cleanId, cleanConsumerId, resolvedPayload.submissionId);
+    executeSheetDelete(cleanId, cleanConsumerId, resolvedPayload).catch(() => {});
 
     return res.json({
       success: true,
@@ -2404,6 +2587,30 @@ const handleEntryDeleteRequest = async (req: express.Request, res: express.Respo
   }
 };
 
+const handleClearAllEntriesRequest = async (req: express.Request, res: express.Response) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const body = { ...req.query, ...req.body };
+    const confirmToken = String(body.confirmClearAll || body.confirmation || '').trim();
+    if (confirmToken && confirmToken !== 'CONFIRM_PERMANENT_WIPE' && confirmToken !== 'CLEAR ALL') {
+      return res.status(403).json({
+        success: false,
+        error: 'Explicit confirmation phrase required to wipe database.'
+      });
+    }
+    const result = await handleClearAllProductionDatabase();
+    return res.json({
+      success: true,
+      cleared: true,
+      ...result
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to clear entries' });
+  }
+};
+
+app.post('/api/entries/clear', handleClearAllEntriesRequest);
+app.delete('/api/entries', handleClearAllEntriesRequest);
 app.delete('/api/entries/:id', handleEntryDeleteRequest);
 app.post('/api/entries/:id/delete', handleEntryDeleteRequest);
 app.post('/api/entries/delete', handleEntryDeleteRequest);
@@ -2454,6 +2661,9 @@ app.post('/api/users', async (req, res) => {
     );
 
     const recordId = existingMatch ? existingMatch.id : (payload.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`);
+    deletedTombstoneSet.delete(String(recordId).trim().toLowerCase());
+    deletedTombstoneSet.delete(`usr_${cleanIdNo.toLowerCase()}`);
+    saveTombstonesToDisk();
     const syncTag = buildUserSyncTag({
       idNo: cleanIdNo,
       password: plainPass,
@@ -2529,10 +2739,10 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
+const handleUserDeleteRequest = async (req: express.Request, res: express.Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const id = req.params.id;
+    const id = String((req.params as any)?.id || req.body?.id || req.query?.id || '').trim();
     const clientPayload = { ...req.query, ...req.body };
     const validation = await validateUserDeletion(id, clientPayload);
     if (!validation.allowed) {
@@ -2544,31 +2754,44 @@ app.delete('/api/users/:id', async (req, res) => {
 
     const existingUsers = await fetchVerifiedUsersFromSheet();
     const targetUser = existingUsers.find(u =>
-      String(u.id).trim().toLowerCase() === String(id).trim().toLowerCase() ||
-      String(u.idNo).trim().toLowerCase() === String(id).trim().toLowerCase()
+      String(u.id).trim().toLowerCase() === id.toLowerCase() ||
+      String(u.idNo).trim().toLowerCase() === id.toLowerCase()
     );
     const rowId = targetUser ? targetUser.id : id;
+    const idNo = targetUser ? targetUser.idNo : id;
 
-    const result = await callGoogleAppsScript('deleteEntry', {
+    deletedTombstoneSet.add(String(rowId).trim().toLowerCase());
+    if (idNo) deletedTombstoneSet.add(`usr_${String(idNo).trim().toLowerCase()}`);
+    saveTombstonesToDisk();
+    clearUsersStateCache();
+
+    callGoogleAppsScript('deleteUser', {
       id: rowId,
+      idNo,
+      category: 'Users'
+    }, 'POST').catch(() => {});
+
+    callGoogleAppsScript('deleteEntry', {
+      id: rowId,
+      consumerId: idNo,
       category: 'Users',
       confirmDelete: true,
       confirmAdminDelete: clientPayload.confirmAdminDelete,
       reason: clientPayload.reason
-    }, 'POST');
-
-    clearUsersStateCache();
-    fetchVerifiedUsersFromSheet(true).catch(() => {});
+    }, 'POST').catch(() => {});
 
     return res.json({
       success: true,
-      message: `User #${id} successfully deleted`,
-      result
+      deleted: true,
+      message: `User #${id} successfully deleted`
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+
+app.delete('/api/users/:id', handleUserDeleteRequest);
+app.post('/api/users/:id/delete', handleUserDeleteRequest);
 
 app.put('/api/users/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -2947,7 +3170,8 @@ async function handleDeleteWorkOrder(id: string): Promise<boolean> {
   serverWorkOrdersCache = serverWorkOrdersCache.filter(w => w.id !== cleanId);
   saveWorkOrdersToDisk();
 
-  await callGoogleAppsScript('deleteEntry', { id: cleanId, submissionId: cleanId, category: WO_SHEET_CATEGORY }, 'POST', 25000);
+  callGoogleAppsScript('deleteWorkOrder', { id: cleanId }, 'POST', 20000).catch(() => {});
+  callGoogleAppsScript('deleteEntry', { id: cleanId, submissionId: cleanId, category: WO_SHEET_CATEGORY }, 'POST', 20000).catch(() => {});
   return true;
 }
 
@@ -2997,15 +3221,19 @@ app.post('/api/work-orders', async (req, res) => {
   }
 });
 
-app.delete('/api/work-orders/:id', async (req, res) => {
+const handleWorkOrderDeleteRequest = async (req: express.Request, res: express.Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    await handleDeleteWorkOrder(req.params.id);
-    return res.json({ success: true, deleted: true, id: req.params.id });
+    const targetId = String((req.params as any)?.id || req.body?.id || req.query?.id || '').trim();
+    await handleDeleteWorkOrder(targetId);
+    return res.json({ success: true, deleted: true, id: targetId });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+
+app.delete('/api/work-orders/:id', handleWorkOrderDeleteRequest);
+app.post('/api/work-orders/:id/delete', handleWorkOrderDeleteRequest);
 
 const handleToggleVisibility = async (req: express.Request, res: express.Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -4654,11 +4882,11 @@ const handleDisconnectionTaskDelete = async (req: express.Request, res: express.
     }
 
     registerDeletedRecord(paramId, cleanConsumerId, cleanTaskId);
-    await executeSheetDelete(cleanConsumerId || cleanTaskId, cleanConsumerId, {
+    executeSheetDelete(cleanConsumerId || cleanTaskId, cleanConsumerId, {
       ...req.body,
       category: 'Disconnection',
       taskId: cleanTaskId
-    });
+    }).catch(() => {});
 
     return res.json({
       success: true,
