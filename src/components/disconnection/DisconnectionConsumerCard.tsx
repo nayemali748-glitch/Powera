@@ -125,29 +125,20 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   // Display Consumer ID (never fallback to SL serial number)
   const displayId = task.consumerId || task.accountNumber || (task as any)['Consumer Id'] || '';
 
-  // Device: Domestic -> D, Commercial -> C, Industrial -> I, STW -> A | 1 ph -> 1 ph, 3ph -> 3ph
-  const connClass = getTaskConnectionClass(task);
-  const classCode =
-    connClass === 'COMMERCIAL'
-      ? 'C'
-      : connClass === 'INDUSTRIAL'
-      ? 'I'
-      : connClass === 'STW'
-      ? 'A'
-      : 'D';
-  const phaseLabel = phaseType === '3PH' ? '3ph' : '1 ph';
-  const displayDevice = `${classCode} - ${phaseLabel}`;
+  // Show the exact value written in the backend Disconnection tab's "Base Class" column where "Device:" is displayed
+  const displayDevice =
+    String((task as any)['Base Class'] ?? task.baseClass ?? '').trim() || 'N/A';
 
   // Meter number (shown on the right side directly above the Dustbin delete icon)
   const displayMeter = (() => {
     const candidates = [
+      (task as any)['Device'],
+      (task as any).device,
       task.meterNumber,
       (task as any)['Number'],
       (task as any)['Meter'],
       (task as any).meterNo,
       task.deviceType,
-      (task as any).device,
-      (task as any)['Device'],
       task.meterReading,
       (task as any)['Reading']
     ];
@@ -160,10 +151,8 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
           str.toUpperCase() !== 'III' &&
           str.toUpperCase() !== '1PH' &&
           str.toUpperCase() !== '3PH' &&
-          str.toUpperCase() !== '1 PHASE' &&
-          str.toUpperCase() !== '3 PHASE' &&
-          str.toUpperCase() !== 'D -1 PHASE' &&
-          str.toUpperCase() !== 'D -3 PHASE' &&
+          !str.toUpperCase().includes('PHASE') &&
+          str.toUpperCase() !== 'DOMESTIC' &&
           str.toLowerCase() !== 'null' &&
           str.toLowerCase() !== 'undefined' &&
           str.toLowerCase() !== 'n/a' &&

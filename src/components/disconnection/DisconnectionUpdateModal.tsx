@@ -306,18 +306,12 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   // Submit Update
   const handleSubmitUpdate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage(null);
 
     if (!selectedStatus) {
       setErrorMessage(lang === 'bn' ? 'অনুগ্রহ করে একটি স্ট্যাটাস নির্বাচন করুন' : 'Please select a status');
       return;
-    }
-
-    if (selectedStatus === 'PAID') {
-      if (!paidAmount || isNaN(parseFloat(paidAmount)) || parseFloat(paidAmount) <= 0) {
-        setErrorMessage(lang === 'bn' ? 'পরিশোধিত টাকার পরিমাণ উল্লেখ করুন' : 'Please enter valid Paid Amount');
-        return;
-      }
     }
 
     setIsSubmitting(true);
@@ -338,45 +332,32 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         combinedRemarks = `${combinedRemarks} [REISSUE_APPROVED]`.trim();
       }
 
-      const cleanAgency = cleanWorkerOrAgencyName(assignedAgency || workerName);
+      const targetConsumerId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
 
+      // Send ONLY Consumer Id, Status, and Remark/Notes so no other consumer data is modified in the Disconnection tab
       const reportPayload = {
-        ...task,
         taskId: task.taskId,
-        consumerId: task.consumerId || (task as any)['Consumer Id'],
+        consumerId: targetConsumerId,
+        'Consumer Id': targetConsumerId,
         workerId,
         workerName,
         taskStatus: selectedStatus,
         disconStatus: selectedStatus,
-        disconDate: formatDateDDMMYYYY(disconDate) || dateNow,
-        reportDate: formatDateDDMMYYYY(disconDate) || dateNow,
-        reportTime: timeNow,
+        status: selectedStatus,
+        'Discon Status': selectedStatus,
+        'Status': selectedStatus,
         workerReport: combinedRemarks,
         workerRemarks: combinedRemarks,
         notes: combinedRemarks,
-        photoUrl: photoDataUrl || undefined,
-        image: photoDataUrl || undefined,
-        meterReading: meterReading || undefined,
-        reading: meterReading || undefined,
-        paymentStatus: selectedStatus === 'PAID' ? 'PAID' : 'UNPAID',
-        gisPole: gisPole || undefined,
-        priority: isUrgent ? 'URGENT' : 'NORMAL',
-        assignedAgency: cleanAgency || undefined,
-        agency: cleanAgency || undefined,
-        paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
-        paymentDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : undefined,
-        paidDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : undefined,
-        paidType: selectedStatus === 'PAID' ? (paidType || paymentReference || undefined) : undefined,
-        paymentReference: selectedStatus === 'PAID' ? (paidType || paymentReference || undefined) : undefined,
-        outstandingAfter: selectedStatus === 'PAID' ? (outstandingAfter || undefined) : undefined,
-        nextPaymentDate: selectedStatus === 'PAID' ? (nextPaymentDate || undefined) : undefined,
-        paymentSource: selectedStatus === 'PAID' ? (paymentSource || undefined) : undefined
+        'Notes': combinedRemarks,
+        'Remark': combinedRemarks,
+        'Remarks': combinedRemarks
       };
 
       const res = await submitDisconnectionTaskReport(reportPayload);
 
       if (res && res.success) {
-        const finalImgUrl = (res as any).imageUrl || photoDataUrl || task.photoUrl || (task as any)['Image'];
+        const finalImgUrl = task.photoUrl || (task as any)['Image'];
         const newHistoryItem = {
           date: dateNow,
           time: timeNow,
@@ -391,7 +372,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
         const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
 
-        // Keep consumer details in the Disconnection module completely unchanged; update status badge, remark, and operational fields
+        // Keep ALL consumer details in the Disconnection module completely unchanged; ONLY update status and remarks
         const updatedTaskObj: DisconnectionTask = {
           ...task,
           taskStatus: selectedStatus,
@@ -403,23 +384,6 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
           notes: combinedRemarks,
           reissueRequested: false,
           reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
-          disconDate: formatDateDDMMYYYY(disconDate) || dateNow,
-          reportDate: formatDateDDMMYYYY(disconDate) || dateNow,
-          'Discon Date': formatDateDDMMYYYY(disconDate) || dateNow,
-          assignedAgency: cleanAgency || task.assignedAgency,
-          Agency: cleanAgency || (task as any)['Agency'],
-          priority: (isUrgent ? 'URGENT' : 'NORMAL') as any,
-          Priority: isUrgent ? 'URGENT' : 'NORMAL',
-          meterReading: meterReading || task.meterReading,
-          Reading: meterReading || (task as any)['Reading'],
-          photoUrl: finalImgUrl || task.photoUrl,
-          Image: finalImgUrl || (task as any)['Image'],
-          paidAmount: selectedStatus === 'PAID' ? paidAmount : task.paidAmount,
-          'Paid Amount': selectedStatus === 'PAID' ? paidAmount : (task as any)['Paid Amount'],
-          paymentDate: selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : task.paymentDate,
-          'Paid Date': selectedStatus === 'PAID' ? formatDateDDMMYYYY(paymentDate) : (task as any)['Paid Date'],
-          paymentReference: selectedStatus === 'PAID' ? (paidType || paymentReference || '') : task.paymentReference,
-          'Paid Type': selectedStatus === 'PAID' ? (paidType || paymentReference || '') : (task as any)['Paid Type'],
           statusHistory: [newHistoryItem, ...existingHistory]
         };
 
@@ -467,8 +431,23 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   const displayOutstanding = task.outstandingDue
     ? Number(task.outstandingDue).toLocaleString('en-IN')
     : '0';
-  const displayClass = task.baseClass || (task as any)['Base Class'] || (task as any)['Class'] || '-';
-  const displayDevice = task.meterNumber || task.deviceType || (task as any)['device'] || (task as any)['Number'] || (task as any)['Device'] || '-';
+  const displayClass = String((task as any)['Base Class'] ?? task.baseClass ?? '').trim() || '-';
+  const displayDevice = (() => {
+    const candidates = [
+      (task as any)['Device'],
+      (task as any).device,
+      task.meterNumber,
+      (task as any)['Number'],
+      (task as any)['Meter']
+    ];
+    for (const c of candidates) {
+      const s = String(c ?? '').trim();
+      if (s && s.toUpperCase() !== 'I' && s.toUpperCase() !== 'III' && !s.toUpperCase().includes('PHASE')) {
+        return s;
+      }
+    }
+    return '-';
+  })();
   const displayDueDate = task.dueDateRange || (task as any)['O/S Duedate Range'] || '-';
   const displaySection = task.mruSection || (task as any)['MRU'] || '-';
 

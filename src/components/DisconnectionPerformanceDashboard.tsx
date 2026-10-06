@@ -1146,6 +1146,7 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
             setSelectedTaskForUpdate(null);
             if (onRefresh) onRefresh();
           }}
+          currentUser={{ role: 'admin', idNo: '8695716192', name: 'Admin Controller' }}
           lang={lang}
         />
       )}

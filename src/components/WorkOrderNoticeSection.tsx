@@ -139,18 +139,6 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   useEffect(() => {
     loadNotices(false);
 
-    // Only run background polling if auto-sync is active (conserves mobile data in manual mode)
-    if (syncMode !== 'auto') {
-      return;
-    }
-
-    // Background polling every 12 seconds when tab is visible
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadNotices(true);
-      }
-    }, 12000);
-
     const onFocus = () => {
       if (!document.hidden) loadNotices(true);
     };
@@ -162,7 +150,6 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      clearInterval(interval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };

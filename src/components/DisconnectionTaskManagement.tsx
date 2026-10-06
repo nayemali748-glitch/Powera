@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Zap,
   ArrowLeft,
@@ -66,6 +66,7 @@ interface DisconnectionTaskManagementProps {
   onBack?: () => void;
   onTasksChange?: (count: number) => void;
   initialTab?: DisconnectionTab;
+  externalTasks?: DisconnectionTask[];
 }
 
 export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementProps> = ({
@@ -73,7 +74,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   lang = 'en',
   onBack,
   onTasksChange,
-  initialTab = 'VIEW_LIST'
+  initialTab = 'VIEW_LIST',
+  externalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
 
@@ -126,8 +128,12 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
+  const inFlightRef = useRef(false);
+
   // Fast Non-Blocking Data Fetch & Background Sync (Preserves canonical Consumer ID order & serial numbers across Admin and Worker)
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
+    if (inFlightRef.current && !showRefreshingSpinner) return;
+    inFlightRef.current = true;
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
     }
@@ -186,10 +192,45 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     } catch (err: any) {
       console.error('Failed to load disconnection tasks:', err);
     } finally {
+      inFlightRef.current = false;
       setIsLoading(false);
       setIsRefreshing(false);
     }
   }, [currentUser?.role, currentUser?.idNo, currentUser?.name, onTasksChange]);
+
+  // Sync with parent 10-second auto-refresh state when provided
+  useEffect(() => {
+    if (Array.isArray(externalTasks)) {
+      const cleanIncoming = externalTasks
+        .filter(isValidDisconnectionTaskOrRow)
+        .map((item, idx) => ({
+          ...item,
+          serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+        }));
+      setTasks(prev => {
+        const hasChanged =
+          cleanIncoming.length !== prev.length ||
+          cleanIncoming.some((item, idx) => {
+            const p = prev[idx];
+            if (!p) return true;
+            return (
+              item.consumerId !== p.consumerId ||
+              item.serialNumber !== p.serialNumber ||
+              item.taskStatus !== p.taskStatus ||
+              item.disconStatus !== p.disconStatus ||
+              item.workerRemarks !== p.workerRemarks ||
+              item.notes !== p.notes ||
+              item.assignedAgency !== p.assignedAgency ||
+              item.assignedWorkerName !== p.assignedWorkerName ||
+              item.outstandingDue !== p.outstandingDue ||
+              item.meterNumber !== p.meterNumber ||
+              item.deviceType !== p.deviceType
+            );
+          });
+        return hasChanged ? cleanIncoming : prev;
+      });
+    }
+  }, [externalTasks]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {
@@ -209,14 +250,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       .catch(() => {});
   }, []);
 
-  // Initial load + Continuous 8s Live Auto-Sync with Backend Google Sheet
+  // Initial load when component mounts (ongoing 10s sync is centrally managed by App.tsx)
   useEffect(() => {
     loadData(false);
-    const interval = setInterval(() => {
-      loadData(false);
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+  }, []);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
@@ -292,13 +329,17 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     setActiveTab('VIEW_LIST');
   };
 
-  // Delete Consumer Handler (Admin Only - Instant 0ms UI removal + Permanent Backend Sheet deletion)
+  // Delete Consumer Handler (Admin Only - Confirmed Backend Sheet deletion + UI removal)
   const handleDeleteTask = async (task: DisconnectionTask) => {
     if (!isAdmin) return;
     const cId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
     const tId = String(task.taskId || '').trim();
 
-    // 1. Immediately remove from UI & local cache in 0ms
+    // 1. Permanently delete from server & backend Google Sheet first
+    const delRes = await deleteDisconnectionTask(task);
+    if (!delRes || !delRes.success) return;
+
+    // 2. Remove from UI state once backend confirms deletion
     setTasks(prev => {
       const next = prev.filter(t => {
         const curCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
@@ -311,9 +352,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       if (onTasksChange) onTasksChange(next.length);
       return next;
     });
-
-    // 2. Permanently delete from server & backend Google Sheet
-    await deleteDisconnectionTask(task);
   };
 
   // Open Update Modal (Enforce 1-time update lock for Workers unless Admin Re-issued)
@@ -357,7 +395,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
     try {
       await submitDisconnectionTaskReport({
-        ...task,
         taskId: task.taskId,
         consumerId: task.consumerId || (task as any)['Consumer Id'],
         workerId: currentUser?.idNo || 'WORKER',
@@ -403,7 +440,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
     try {
       await submitDisconnectionTaskReport({
-        ...task,
         taskId: task.taskId,
         consumerId: task.consumerId || (task as any)['Consumer Id'],
         workerId: currentUser?.idNo || 'ADMIN',

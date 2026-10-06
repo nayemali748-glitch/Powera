@@ -44,11 +44,23 @@ import {
   BarChart3,
   TrendingUp,
   HelpCircle,
-  WifiOff
+  WifiOff,
+  Settings
 } from 'lucide-react';
 
 /**
- * Computes a fast 32-bit FNV-1a hash from serialized JSON data.
+ * Formats Date as HH:MM:SS for Last synced indicator
+ */
+function formatTimeHHMMSS(date: Date | null): string {
+  const d = date || new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+/**
+ * Computes a fast signature from serialized JSON data.
  * Used for change-tracking in loadData to verify if server data has actually updated
  * before triggering a React state update, preventing unnecessary component re-renders and UI lag.
  */
@@ -56,12 +68,11 @@ function computeJsonChangeHash(data: unknown): string {
   if (!Array.isArray(data)) return '0_empty';
   if (data.length === 0) return '0_empty';
   let sig = `${data.length}`;
-  // Fast signature over latest 30 entries without heavy stringification
-  const maxCheck = Math.min(data.length, 30);
+  const maxCheck = Math.min(data.length, 50);
   for (let i = 0; i < maxCheck; i++) {
     const item = data[i];
     if (item) {
-      sig += `|${item.id || ''}:${item.status || ''}:${item.updatedAt || item.date || ''}`;
+      sig += `|${item.id || item.consumerId || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${item.updatedAt || item.date || ''}`;
     }
   }
   return sig;
@@ -175,27 +186,30 @@ export default function App() {
   }, []);
 
   const inFlightRef = useRef(false);
+  const lastOrdersHashRef = useRef<string>('');
   const [syncMode, setSyncMode] = useState<SyncMode>('auto');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   const [isSyncing, setIsSyncing] = useState(false);
+  const [forceRefreshState, setForceRefreshState] = useState<'idle' | 'refreshing' | 'completed' | 'failed'>('idle');
   const [disconnectionInitialTab, setDisconnectionInitialTab] = useState<'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST'>('VIEW_LIST');
 
-  const loadData = async (silent: boolean | unknown = false, forceRefresh = false) => {
+  const loadData = async (silent: boolean | unknown = false, forceRefresh = false, throwOnError = false) => {
     if (!currentUser) return;
-    if (inFlightRef.current && !forceRefresh) return;
+    if (inFlightRef.current) return;
     inFlightRef.current = true;
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent && entries.length === 0) setLoading(true);
       const [data, orders, discRes] = await Promise.all([
-        fetchEntries({ refresh: forceRefresh }).catch(() => []),
-        fetchWorkOrders().catch(() => []),
+        fetchEntries({ refresh: forceRefresh }),
+        fetchWorkOrders(),
         fetchDisconnectionTasks({
           role: currentUser?.role,
           workerId: currentUser?.idNo,
-          workerName: currentUser?.name
-        }).catch(() => ({ tasks: [], stats: null }))
+          workerName: currentUser?.name,
+          refresh: forceRefresh
+        })
       ]);
       const rawEntries = Array.isArray(data) ? data : [];
       const validDiscTasks: DisconnectionTask[] = Array.isArray(discRes)
@@ -203,7 +217,6 @@ export default function App() {
         : Array.isArray((discRes as any)?.tasks)
           ? (discRes as any).tasks
           : [];
-      setDisconnectionTasks(validDiscTasks);
 
       // Ensure every consumer in validDiscTasks is also represented in entries under 'DISCONNECTION'
       const existingDiscIds = new Set(
@@ -252,18 +265,24 @@ export default function App() {
         });
 
       const currentData = [...rawEntries, ...extraDiscEntries];
-      const newHash = `${computeJsonChangeHash(currentData)}_disc:${validDiscTasks.length}`;
+      const newHash = `${computeJsonChangeHash(currentData)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
 
-      if (newHash !== lastDataHashRef.current) {
+      if (forceRefresh || newHash !== lastDataHashRef.current) {
         lastDataHashRef.current = newHash;
+        setDisconnectionTasks(validDiscTasks);
         setEntries(currentData);
       }
       if (Array.isArray(orders)) {
-        setWorkOrders(orders);
+        const ordersHash = computeJsonChangeHash(orders);
+        if (forceRefresh || ordersHash !== lastOrdersHashRef.current) {
+          lastOrdersHashRef.current = ordersHash;
+          setWorkOrders(orders);
+        }
       }
       setLastSyncedAt(new Date());
     } catch (err) {
       console.error('Failed to load power entries:', err);
+      if (throwOnError) throw err;
     } finally {
       inFlightRef.current = false;
       setIsSyncing(false);
@@ -283,16 +302,18 @@ export default function App() {
 
     loadData(false);
 
-    // Continuous 8-second live two-way sync with Backend Google Sheets
+    // Single active 10-second background timer per authenticated app session (POWER APP & SHEETS REFRESH)
     const interval = setInterval(() => {
-      if (!document.hidden) {
+      if (!document.hidden && !inFlightRef.current) {
         loadData(true);
       }
-    }, 8000);
+    }, 10000);
 
-    const onFocus = () => loadData(true);
+    const onFocus = () => {
+      if (!inFlightRef.current) loadData(true);
+    };
     const onVisibilityChange = () => {
-      if (!document.hidden) loadData(true);
+      if (!document.hidden && !inFlightRef.current) loadData(true);
     };
 
     window.addEventListener('focus', onFocus);
@@ -310,11 +331,38 @@ export default function App() {
     try {
       localStorage.setItem('power_sync_mode', 'auto');
     } catch {}
-    loadData(true);
+    if (!inFlightRef.current) {
+      loadData(true);
+    }
   };
 
-  const handleManualSync = () => {
-    loadData(true, true);
+  // Option 1 (Main Module): POWER APP & SHEETS REFRESH
+  const handlePowerAppSheetsRefresh = () => {
+    if (inFlightRef.current) return;
+    loadData(true, false);
+  };
+
+  // Option 2 (App Settings): FORCE SYSTEM REFRESH (Manual emergency/full recovery refresh)
+  const handleForceSystemRefresh = async () => {
+    if (forceRefreshState === 'refreshing' || inFlightRef.current) return;
+    setForceRefreshState('refreshing');
+    try {
+      // 1. Safely invalidate stale app-side cached data while preserving login/session
+      try {
+        localStorage.removeItem('power_entries_local_cache_v1');
+        localStorage.removeItem('power_disconnection_tasks_cache_v2');
+        localStorage.removeItem('power_work_orders_local_v1');
+      } catch {}
+      lastDataHashRef.current = '';
+      lastOrdersHashRef.current = '';
+
+      // 2-5. Request fresh production data from backend Google Sheets & rebuild state
+      await loadData(true, true, true);
+      setForceRefreshState('completed');
+    } catch (err) {
+      console.error('Force system refresh failed:', err);
+      setForceRefreshState('failed');
+    }
   };
 
   // Strict role sync: Workers NEVER have admin privileges
@@ -675,58 +723,57 @@ export default function App() {
             </span>
           </button>
 
-          {/* AUTO-SYNC MODE OPTION INSIDE MAIN MODULES (ALWAYS LIVE 8S TWO-WAY SHEET SYNC) */}
-          <div 
-            id="sidebar-sync-mode-container"
-            className="bg-slate-800/85 border border-emerald-500/30 rounded-lg p-2.5 space-y-2 shadow-xs transition-all"
+          {/* App Settings Option with Settings Icon inside MAIN MODULES */}
+          <button
+            id="sidebar-nav-app-settings-btn"
+            type="button"
+            onClick={() => {
+              setSidebarOpen(false);
+              setCornerModalOption('app_settings');
+            }}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-purple-300 hover:text-white hover:bg-purple-500/10 border border-purple-500/30 transition-all cursor-pointer shadow-xs"
+            title="অ্যাপ সেটিংস (App Settings - Force System Refresh)"
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-500/20 text-emerald-400">
+            <div className="flex items-center gap-3">
+              <Settings className="w-4 h-4 text-purple-400" />
+              <span>{currentLanguage === 'bn' ? 'অ্যাপ সেটিংস (App Settings)' : 'App Settings'}</span>
+            </div>
+            <span className="text-[9px] bg-purple-500/20 text-purple-300 font-bold px-1.5 py-0.5 rounded border border-purple-500/40">
+              Settings
+            </span>
+          </button>
+
+          {/* OPTION 1 — MAIN MODULE: POWER APP & SHEETS REFRESH */}
+          <button
+            id="sidebar-power-app-sheets-refresh-btn"
+            type="button"
+            onClick={handlePowerAppSheetsRefresh}
+            disabled={isSyncing}
+            className="w-full text-left bg-slate-800/85 hover:bg-slate-800 border border-emerald-500/30 rounded-lg p-2.5 space-y-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-90"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-md flex items-center justify-center bg-emerald-500/20 text-emerald-400 shrink-0">
                   <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                 </div>
-                <div>
-                  <span className="text-xs font-bold text-slate-200 leading-none block">{t.syncModeTitle}</span>
-                  <p className="text-[10px] text-emerald-400 mt-0.5 leading-tight font-semibold">
-                    Auto (8s Live Sheet Sync)
-                  </p>
-                </div>
+                <span className="text-[11px] font-extrabold text-white tracking-wide leading-tight">
+                  POWER APP & SHEETS REFRESH
+                </span>
               </div>
-
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                AUTO 8S
-              </span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             </div>
 
-            {/* Active Auto-Sync (8s) Banner */}
-            <div className="bg-emerald-600/20 border border-emerald-500/40 py-1.5 px-2.5 rounded-md flex items-center justify-between text-xs">
-              <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
-                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{t.autoSync}</span>
+            {isSyncing ? (
+              <div className="text-[10px] font-bold text-emerald-300 pl-8">
+                Refreshing...
               </div>
-              <span className="text-[9px] font-bold text-emerald-200">Live & Up-to-Date</span>
-            </div>
-
-            {/* Sync Information & One-click Sync Now */}
-            <div className="flex items-center justify-between pt-1 border-t border-slate-700/50 text-[10px] text-slate-400">
-              <span className="truncate max-w-[130px]">
-                {lastSyncedAt ? `${t.lastSynced}: ${formatTime12Hour(lastSyncedAt, true)}` : 'Synced'}
-              </span>
-
-              <button
-                id="sidebar-manual-sync-now-btn"
-                type="button"
-                onClick={handleManualSync}
-                disabled={isSyncing}
-                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold rounded text-[10px] flex items-center gap-1 shadow-xs transition-all disabled:opacity-50 cursor-pointer shrink-0"
-                title={t.syncNow}
-              >
-                <RefreshCw className={`w-2.5 h-2.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? '...' : t.syncNow}</span>
-              </button>
-            </div>
-          </div>
+            ) : (
+              <div className="text-[10px] text-slate-300 pl-8 space-y-0.5 font-semibold">
+                <div className="text-emerald-400">Auto refresh: ON</div>
+                <div>Last synced: {formatTimeHHMMSS(lastSyncedAt)}</div>
+              </div>
+            )}
+          </button>
 
           {/* Direct Logout Option Right Below Help & Support */}
           <button
@@ -858,6 +905,8 @@ export default function App() {
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           currentLanguage={currentLanguage}
           onOpenLanguageModal={() => setShowLanguageModal(true)}
+          forceRefreshState={forceRefreshState}
+          onForceSystemRefresh={handleForceSystemRefresh}
         />
 
         {/* Content Container */}
@@ -1227,6 +1276,11 @@ export default function App() {
                   setDisconnectionInitialTab(tab || 'VIEW_LIST');
                   setActiveTab('disconnection');
                 }}
+                isSyncing={isSyncing}
+                lastSyncedTimeStr={formatTimeHHMMSS(lastSyncedAt)}
+                onPowerAppSheetsRefresh={handlePowerAppSheetsRefresh}
+                forceRefreshState={forceRefreshState}
+                onForceSystemRefresh={handleForceSystemRefresh}
               />
             </div>
           )}
@@ -1276,13 +1330,14 @@ export default function App() {
                 initialTab={disconnectionInitialTab}
                 onBack={() => setActiveTab('entry')}
                 onTasksChange={() => loadData(true)}
+                externalTasks={disconnectionTasks}
               />
             </div>
           )}
         </section>
       </main>
 
-      {/* Modal for Corner 3 Options */}
+      {/* Modal for Corner Options & App Settings */}
       <CornerOptionsModal
         activeOption={cornerModalOption}
         onClose={() => setCornerModalOption(null)}
@@ -1292,6 +1347,9 @@ export default function App() {
         onSwitchToAdminTab={() => setActiveTab('admin')}
         entries={entries}
         onExportCsv={handleExportCsv}
+        forceRefreshState={forceRefreshState}
+        onForceSystemRefresh={handleForceSystemRefresh}
+        onOpenLanguageModal={() => setShowLanguageModal(true)}
       />
 
       {/* Language Selector Modal */}
@@ -1300,6 +1358,8 @@ export default function App() {
         onClose={() => setShowLanguageModal(false)}
         currentLanguage={currentLanguage}
         onSelectLanguage={handleSelectLanguage}
+        forceRefreshState={forceRefreshState}
+        onForceSystemRefresh={handleForceSystemRefresh}
       />
 
       {/* Android & PWA App Install Modal */}

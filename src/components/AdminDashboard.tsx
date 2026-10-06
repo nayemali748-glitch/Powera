@@ -76,6 +76,11 @@ interface AdminDashboardProps {
   onOpenLanguageModal?: () => void;
   syncMode?: SyncMode;
   onNavigateToDisconnection?: (tab?: 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST') => void;
+  isSyncing?: boolean;
+  lastSyncedTimeStr?: string;
+  onPowerAppSheetsRefresh?: () => void;
+  forceRefreshState?: 'idle' | 'refreshing' | 'completed' | 'failed';
+  onForceSystemRefresh?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -88,6 +93,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onOpenLanguageModal,
   syncMode = 'auto',
   onNavigateToDisconnection,
+  isSyncing = false,
+  lastSyncedTimeStr = '',
+  onPowerAppSheetsRefresh,
+  forceRefreshState = 'idle',
+  onForceSystemRefresh,
 }) => {
   const t = translations[lang] || translations.en;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
@@ -880,260 +890,312 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* ORGANIZED ADMIN OPTIONS COMMAND BAR */}
-        <div className="mt-4 pt-1">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+        {/* ORGANIZED ADMIN OPTIONS COMMAND BAR (Styled like Performance Dashboard NSC & Disconnection Cards) */}
+        <div className="mt-4 pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[11px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-amber-500" />
               <span>{lang === 'bn' ? 'অ্যাডমিন অপারেশন ও ডাটা কন্ট্রোল অপশন' : 'Admin Operations & Data Control Hub'}</span>
             </div>
-            <span className="text-[10px] text-slate-400 font-medium hidden sm:inline">
+            <span className="text-[10px] text-slate-500 font-bold bg-slate-100 border border-slate-200 px-2.5 py-0.5 rounded-full hidden sm:inline">
               {lang === 'bn' ? 'কর্মী আইডি, ক্লাউড ব্যাকআপ, ওয়ার্ক অর্ডার ও এক্সপোর্ট' : 'Worker ID, Cloud Backup, Work Orders & Export'}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {/* 1. Worker & User Management Card */}
-            <div className="p-3 bg-slate-50/80 hover:bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between gap-2 shadow-2xs transition-all">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                    <Users className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-900 leading-tight">
-                      {lang === 'bn' ? 'কর্মী ও ইউজার আইডি' : 'Worker & User Accounts'}
-                    </h3>
-                    <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                      {lang === 'bn' ? 'কর্মী একাউন্ট তৈরি ও ম্যানেজ' : 'Create & manage login IDs'}
-                    </p>
-                  </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {/* 1. Worker & User Accounts (Amber - NSC Card Style) */}
+            <button
+              id="admin-manage-users-btn"
+              type="button"
+              onClick={() => {
+                setUserModalTab('create');
+                setIsUserModalOpen(true);
+              }}
+              className="text-left p-3 rounded-xl border border-amber-300 bg-amber-50 hover:shadow-md hover:border-amber-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98]"
+              title="Create new worker or admin IDs"
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <Users className="w-4 h-4 text-amber-700" />
                 </div>
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-amber-100 text-amber-900 border-amber-300">
+                  {lang === 'bn' ? 'ইউজার তৈরি' : 'Manage IDs'}
+                </span>
               </div>
 
-              <div className="flex items-center gap-1.5 pt-1">
-                <button
-                  id="admin-manage-users-btn"
-                  onClick={() => {
-                    setUserModalTab('create');
-                    setIsUserModalOpen(true);
-                  }}
-                  className="flex-1 py-1.5 px-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
-                  title="Create new worker or admin IDs"
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? 'ইউজার তৈরি' : 'Manage Users'}</span>
-                </button>
-
-                <button
-                  id="admin-change-password-btn"
-                  onClick={() => {
-                    setUserModalTab('change-password');
-                    setIsUserModalOpen(true);
-                  }}
-                  className="py-1.5 px-2.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
-                  title="যেকোনো কর্মী বা এডমিনের পাসওয়ার্ড পরিবর্তন করুন"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span className="hidden xs:inline">{lang === 'bn' ? 'পাসওয়ার্ড' : 'Password'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 2. Google Sheets Live Cloud Backend */}
-            <div className="p-3 bg-emerald-50/50 hover:bg-emerald-50/80 rounded-xl border border-emerald-200 flex flex-col justify-between gap-2 shadow-2xs transition-all">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-xs">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-900 leading-tight flex items-center gap-1">
-                      <span>Google Sheets Backend</span>
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    </h3>
-                    <p className="text-[10px] text-emerald-700 leading-tight mt-0.5">
-                      {lang === 'bn' ? 'অনলাইন লাইভ ডাটাবেস ও ব্যাকআপ' : 'Live cloud spreadsheet backup'}
-                    </p>
-                  </div>
+              <div className="mt-1">
+                <p className="text-[11px] font-bold text-slate-700 truncate">
+                  {lang === 'bn' ? '1. কর্মী ও ইউজার আইডি' : '1. WORKER & USER ID'}
+                </p>
+                <div className="flex items-baseline gap-1.5 mt-0.5">
+                  <span className="text-sm sm:text-base font-black text-amber-700 truncate">
+                    {lang === 'bn' ? 'ইউজার ম্যানেজ' : 'Manage Users'}
+                  </span>
                 </div>
+                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                  {lang === 'bn' ? 'একাউন্ট তৈরি ও লিস্ট' : 'Create & manage login IDs'}
+                </p>
               </div>
 
-              <div className="flex items-center gap-1.5 pt-1">
-                <button
-                  id="admin-sync-google-sheets-btn"
-                  onClick={handleSyncToGoogleSheets}
-                  disabled={isSyncingSheets}
-                  className="flex-1 py-1.5 px-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
-                  title="Google Sheets-এ সম্পূর্ণ ডাটাবেস লাইভ ব্যাকআপ ও সেভ করুন"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isSyncingSheets ? 'animate-spin' : ''}`} />
-                  <span>{isSyncingSheets ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...') : (lang === 'bn' ? 'শীট সিঙ্ক' : 'Sync Sheets')}</span>
-                </button>
-
-                {currentSheetUrl && (
-                  <a
-                    href={currentSheetUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="py-1.5 px-2.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer shadow-xs"
-                    title="Open Live Google Sheet Spreadsheet"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{lang === 'bn' ? 'খুলুন' : 'Open'}</span>
-                  </a>
-                )}
+              <div className="w-full bg-amber-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div className="h-full bg-amber-500 rounded-full w-full" />
               </div>
-            </div>
+            </button>
 
-            {/* 3. Category Excel Export & Reports */}
-            <div className="p-3 bg-slate-50/80 hover:bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between gap-2 shadow-2xs transition-all">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center shrink-0 shadow-xs">
-                    <FileSpreadsheet className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-900 leading-tight">
-                      {lang === 'bn' ? 'এক্সেল ও CSV রিপোর্ট' : 'Excel & CSV Export'}
-                    </h3>
-                    <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                      {selectedCategory === 'ALL' ? 'Master Report' : `${selectedCategory} Data`}
-                    </p>
-                  </div>
+            {/* 2. Password Control (Rose - Disconnection Card Style) */}
+            <button
+              id="admin-change-password-btn"
+              type="button"
+              onClick={() => {
+                setUserModalTab('change-password');
+                setIsUserModalOpen(true);
+              }}
+              className="text-left p-3 rounded-xl border border-rose-300 bg-rose-50 hover:shadow-md hover:border-rose-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98]"
+              title="যেকোনো কর্মী বা এডমিনের পাসওয়ার্ড পরিবর্তন করুন"
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <KeyRound className="w-4 h-4 text-rose-700" />
                 </div>
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-rose-100 text-rose-900 border-rose-300">
+                  {lang === 'bn' ? 'পাসওয়ার্ড' : 'Security'}
+                </span>
               </div>
 
-              <div className="relative pt-1">
-                <div className="inline-flex w-full rounded-lg shadow-xs">
-                  <button
-                    id="admin-export-csv-btn"
-                    onClick={() => handleExportCategoryExcel(selectedCategory)}
-                    className="flex-1 py-1.5 px-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-l-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer truncate"
-                    title={`Download ${selectedCategory === 'ALL' ? 'All' : selectedCategory} Excel / CSV Report`}
-                  >
-                    <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="truncate">Export {selectedCategory === 'ALL' ? 'Master' : selectedCategory}</span>
-                  </button>
+              <div className="mt-1">
+                <p className="text-[11px] font-bold text-slate-700 truncate">
+                  {lang === 'bn' ? '2. পাসওয়ার্ড কন্ট্রোল' : '2. PASSWORD CONTROL'}
+                </p>
+                <div className="flex items-baseline gap-1.5 mt-0.5">
+                  <span className="text-sm sm:text-base font-black text-rose-700 truncate">
+                    {lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন' : 'Change Password'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                  {lang === 'bn' ? 'কর্মী ও এডমিন পাসওয়ার্ড' : 'Reset worker/admin key'}
+                </p>
+              </div>
+
+              <div className="w-full bg-rose-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div className="h-full bg-rose-500 rounded-full w-full" />
+              </div>
+            </button>
+
+            {/* 3. Google Sheets Live Cloud Backend (Sky - Pole Case Card Style) */}
+            <div className="text-left p-3 rounded-xl border border-sky-300 bg-sky-50 hover:shadow-md hover:border-sky-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
                   <button
                     type="button"
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 text-white border-l border-slate-700 rounded-r-lg text-xs transition-colors cursor-pointer"
-                    title="Choose Category to Export"
+                    onClick={handleSyncToGoogleSheets}
+                    disabled={isSyncingSheets}
+                    className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                    title="Sync with Google Sheets"
                   >
-                    ▼
+                    <RefreshCw className={`w-4 h-4 text-sky-700 ${isSyncingSheets ? 'animate-spin' : ''}`} />
+                  </button>
+                  {currentSheetUrl ? (
+                    <a
+                      href={currentSheetUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-sky-100 hover:bg-sky-200 text-sky-900 border-sky-300 flex items-center gap-1 transition-colors"
+                      title="Open Live Google Sheet Spreadsheet"
+                    >
+                      <span>{lang === 'bn' ? 'খুলুন' : 'Open'}</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  ) : (
+                    <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-sky-100 text-sky-900 border-sky-300 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>Live</span>
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  id="admin-sync-google-sheets-btn"
+                  type="button"
+                  onClick={handleSyncToGoogleSheets}
+                  disabled={isSyncingSheets}
+                  className="w-full text-left mt-1 cursor-pointer disabled:opacity-60"
+                  title="Google Sheets-এ সম্পূর্ণ ডাটাবেস লাইভ ব্যাকআপ ও সেভ করুন"
+                >
+                  <p className="text-[11px] font-bold text-slate-700 truncate">
+                    3. GOOGLE SHEETS
+                  </p>
+                  <div className="flex items-baseline gap-1.5 mt-0.5">
+                    <span className="text-sm sm:text-base font-black text-sky-700 truncate">
+                      {isSyncingSheets ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...') : (lang === 'bn' ? 'শীট সিঙ্ক' : 'Sync Sheets')}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                    {lang === 'bn' ? 'অনলাইন লাইভ ডাটাবেস' : 'Live cloud backup'}
+                  </p>
+                </button>
+              </div>
+
+              <div className="w-full bg-sky-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div className="h-full bg-sky-500 rounded-full w-full" />
+              </div>
+            </div>
+
+            {/* 4. Category Excel Export & Reports (Emerald - Meter Replacement Card Style) */}
+            <div className="relative">
+              <div className="w-full h-full text-left p-3 rounded-xl border border-emerald-300 bg-emerald-50 hover:shadow-md hover:border-emerald-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleExportCategoryExcel(selectedCategory)}
+                      className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                      title="Download Excel / CSV"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowExportMenu(!showExportMenu)}
+                      className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-300 flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Choose Category to Export"
+                    >
+                      <span>{selectedCategory === 'ALL' ? `${total} All` : selectedCategory}</span>
+                      <span>▼</span>
+                    </button>
+                  </div>
+
+                  <button
+                    id="admin-export-csv-btn"
+                    type="button"
+                    onClick={() => handleExportCategoryExcel(selectedCategory)}
+                    className="w-full text-left mt-1 cursor-pointer"
+                    title={`Download ${selectedCategory === 'ALL' ? 'All' : selectedCategory} Excel / CSV Report`}
+                  >
+                    <p className="text-[11px] font-bold text-slate-700 truncate">
+                      {lang === 'bn' ? '4. এক্সেল ও CSV রিপোর্ট' : '4. EXCEL & CSV EXPORT'}
+                    </p>
+                    <div className="flex items-baseline gap-1.5 mt-0.5">
+                      <span className="text-sm sm:text-base font-black text-emerald-700 truncate">
+                        Export {selectedCategory === 'ALL' ? 'Master' : selectedCategory}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                      {lang === 'bn' ? 'ক্যাটাগরি এক্সেল ডাউনলোড' : 'Download Excel / CSV'}
+                    </p>
                   </button>
                 </div>
 
-                {/* Category Export Dropdown */}
-                {showExportMenu && (
-                  <div 
-                    className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in"
-                    onClick={() => setShowExportMenu(false)}
-                  >
-                    <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100">
-                      {lang === 'bn' ? 'ক্যাটাগরি ভিত্তিক এক্সেল ডাউনলোড' : 'Category-Specific Excel Export'}
-                    </div>
-                    
-                    <button
-                      onClick={() => handleExportCategoryExcel('NSC')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center justify-between"
-                    >
-                      <span className="flex items-center gap-1.5 text-amber-700">
-                        <Zap className="w-3.5 h-3.5" />
-                        1. NSC Only ({nscCount})
-                      </span>
-                      <Download className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    <button
-                      onClick={() => handleExportCategoryExcel('DISCONNECTION')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-rose-50 text-xs font-bold text-slate-800 flex items-center justify-between"
-                    >
-                      <span className="text-rose-700">2. Disconnection Only ({discCount})</span>
-                      <Download className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    <button
-                      onClick={() => handleExportCategoryExcel('POLE CASE')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-sky-50 text-xs font-bold text-slate-800 flex items-center justify-between"
-                    >
-                      <span className="text-sky-700">3. Pole Case Only ({poleCount})</span>
-                      <Download className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    <button
-                      onClick={() => handleExportCategoryExcel('METER REPLESMENT')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-purple-50 text-xs font-bold text-slate-800 flex items-center justify-between"
-                    >
-                      <span className="text-purple-700">4. Meter Replacement ({meterCount})</span>
-                      <Download className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    <button
-                      onClick={() => handleExportCategoryExcel('DTR REPLESMENT')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center justify-between"
-                    >
-                      <span className="text-emerald-700">5. DTR Replacement ({dtrCount})</span>
-                      <Download className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    <div className="border-t border-slate-100 my-1"></div>
-
-                    <button
-                      onClick={() => handleExportCategoryExcel('ALL')}
-                      className="w-full text-left px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold flex items-center justify-between hover:bg-slate-800"
-                    >
-                      <span>Download All 5 Categories ({total})</span>
-                      <Download className="w-3 h-3 text-emerald-400" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* 4. NSC Work Order & Khata Photo Notice */}
-            <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2 shadow-2xs transition-all ${
-              showWorkOrdersManager 
-                ? 'bg-amber-500/10 border-amber-400 ring-1 ring-amber-400' 
-                : 'bg-slate-50/80 hover:bg-slate-50 border-slate-200'
-            }`}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-xs ${
-                    showWorkOrdersManager ? 'bg-amber-500 text-slate-950' : 'bg-amber-600 text-white'
-                  }`}>
-                    <FileImage className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-900 leading-tight">
-                      {lang === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা ছবি' : 'NSC Work Orders'}
-                    </h3>
-                    <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                      {lang === 'bn' ? 'ফিল্ড কর্মীদের জন্য নোটিশ ছবি' : 'Worker notice dispatch'}
-                    </p>
-                  </div>
+                <div className="w-full bg-emerald-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div className="h-full bg-emerald-500 rounded-full w-full" />
                 </div>
               </div>
 
-              <div className="pt-1">
-                <button
-                  id="admin-work-orders-toggle-btn"
-                  onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
-                  className={`w-full py-1.5 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer ${
-                    showWorkOrdersManager 
-                      ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400' 
-                      : 'bg-amber-600 hover:bg-amber-700 text-white'
-                  }`}
-                  title="Upload and manage NSC Work Orders and Khata Slips for field workers"
+              {/* Category Export Dropdown */}
+              {showExportMenu && (
+                <div 
+                  className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in"
+                  onClick={() => setShowExportMenu(false)}
                 >
-                  <FileImage className="w-3.5 h-3.5" />
-                  <span>{showWorkOrdersManager ? (lang === 'bn' ? 'প্যানেল লুকান' : 'Hide Manager') : (lang === 'bn' ? 'ম্যানেজ ও আপলোড' : 'Manage & Upload')}</span>
-                </button>
-              </div>
+                  <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100">
+                    {lang === 'bn' ? 'ক্যাটাগরি ভিত্তিক এক্সেল ডাউনলোড' : 'Category-Specific Excel Export'}
+                  </div>
+                  
+                  <button
+                    onClick={() => handleExportCategoryExcel('NSC')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="flex items-center gap-1.5 text-amber-700">
+                      <Zap className="w-3.5 h-3.5" />
+                      1. NSC Only ({nscCount})
+                    </span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('DISCONNECTION')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-rose-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-rose-700">2. Disconnection Only ({discCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('POLE CASE')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-sky-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-sky-700">3. Pole Case Only ({poleCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('METER REPLESMENT')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-emerald-700">4. Meter Replacement ({meterCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('DTR REPLESMENT')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-indigo-700">5. DTR Replacement ({dtrCount})</span>
+                    <Download className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  <div className="border-t border-slate-100 my-1"></div>
+
+                  <button
+                    onClick={() => handleExportCategoryExcel('ALL')}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold flex items-center justify-between hover:bg-slate-800 cursor-pointer"
+                  >
+                    <span>Download All 5 Categories ({total})</span>
+                    <Download className="w-3 h-3 text-emerald-400" />
+                  </button>
+                </div>
+              )}
             </div>
+
+            {/* 5. NSC Work Order & Khata Photo Notice (Indigo - DTR Replacement Card Style) */}
+            <button
+              id="admin-work-orders-toggle-btn"
+              type="button"
+              onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
+              className={`text-left p-3 rounded-xl border transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98] ${
+                showWorkOrdersManager
+                  ? 'border-indigo-500 bg-indigo-100/90 ring-2 ring-indigo-400 shadow-md'
+                  : 'border-indigo-300 bg-indigo-50 hover:shadow-md hover:border-indigo-400'
+              }`}
+              title="Upload and manage NSC Work Orders and Khata Slips for field workers"
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <FileImage className="w-4 h-4 text-indigo-700" />
+                </div>
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-indigo-100 text-indigo-900 border-indigo-300">
+                  {showWorkOrdersManager ? (lang === 'bn' ? 'খোলা আছে' : 'Open') : (lang === 'bn' ? 'নোটিশ বোর্ড' : 'Notices')}
+                </span>
+              </div>
+
+              <div className="mt-1">
+                <p className="text-[11px] font-bold text-slate-700 truncate">
+                  {lang === 'bn' ? '5. ওয়ার্ক অর্ডার ও খাতা' : '5. NSC WORK ORDERS'}
+                </p>
+                <div className="flex items-baseline gap-1.5 mt-0.5">
+                  <span className="text-sm sm:text-base font-black text-indigo-700 truncate">
+                    {showWorkOrdersManager ? (lang === 'bn' ? 'প্যানেল লুকান' : 'Hide Manager') : (lang === 'bn' ? 'ম্যানেজ ও আপলোড' : 'Manage & Upload')}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                  {lang === 'bn' ? 'ফিল্ড কর্মীদের নোটিশ ছবি' : 'Worker notice dispatch'}
+                </p>
+              </div>
+
+              <div className="w-full bg-indigo-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full w-full" />
+              </div>
+            </button>
           </div>
         </div>
 

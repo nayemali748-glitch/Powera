@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, Check, X, CheckCircle2 } from 'lucide-react';
+import { Globe, Check, X, CheckCircle2, RefreshCw } from 'lucide-react';
 import { Language, translations } from '../utils/translations';
 
 interface LanguageModalProps {
@@ -7,6 +7,8 @@ interface LanguageModalProps {
   onClose: () => void;
   currentLanguage: Language;
   onSelectLanguage: (lang: Language) => void;
+  forceRefreshState?: 'idle' | 'refreshing' | 'completed' | 'failed';
+  onForceSystemRefresh?: () => void;
 }
 
 const languages: { code: Language; name: string; nativeName: string; flag: string; region: string; scriptExample: string }[] = [
@@ -49,6 +51,8 @@ export const LanguageModal: React.FC<LanguageModalProps> = ({
   onClose,
   currentLanguage,
   onSelectLanguage,
+  forceRefreshState = 'idle',
+  onForceSystemRefresh,
 }) => {
   const [selected, setSelected] = useState<Language>(currentLanguage);
   
@@ -125,6 +129,42 @@ export const LanguageModal: React.FC<LanguageModalProps> = ({
             );
           })}
         </div>
+
+        {/* App Settings: FORCE SYSTEM REFRESH */}
+        {onForceSystemRefresh && (
+          <div className="px-5 py-3 bg-slate-50 border-t border-slate-200">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+              App Settings
+            </div>
+            <button
+              id="lang-modal-force-system-refresh-btn"
+              type="button"
+              onClick={onForceSystemRefresh}
+              disabled={forceRefreshState === 'refreshing'}
+              className={`w-full py-2 px-3 rounded-xl text-xs font-extrabold flex items-center justify-between transition-all cursor-pointer border ${
+                forceRefreshState === 'failed'
+                  ? 'bg-rose-50 border-rose-200 text-rose-800'
+                  : forceRefreshState === 'completed'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-900'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <RefreshCw className={`w-3.5 h-3.5 ${forceRefreshState === 'refreshing' ? 'animate-spin' : ''}`} />
+                <span>FORCE SYSTEM REFRESH</span>
+              </span>
+              <span className="text-[10px] font-semibold">
+                {forceRefreshState === 'refreshing'
+                  ? 'Refreshing system...'
+                  : forceRefreshState === 'completed'
+                    ? 'Refresh completed'
+                    : forceRefreshState === 'failed'
+                      ? 'Refresh failed — tap to retry'
+                      : 'Manual Refresh'}
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* Footer with Big Done Button */}
         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">

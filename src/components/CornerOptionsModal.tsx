@@ -17,7 +17,9 @@ import {
   Zap,
   KeyRound,
   CheckCircle2,
-  HardHat
+  HardHat,
+  RefreshCw,
+  Settings
 } from 'lucide-react';
 import { CornerOptionKey, PowerEntry } from '../types';
 import { syncAllEntriesToGoogleSheet, getSavedSpreadsheetUrl } from '../services/googleSheets';
@@ -32,6 +34,9 @@ interface CornerOptionsModalProps {
   onSwitchToAdminTab: () => void;
   entries: PowerEntry[];
   onExportCsv: () => void;
+  forceRefreshState?: 'idle' | 'refreshing' | 'completed' | 'failed';
+  onForceSystemRefresh?: () => void;
+  onOpenLanguageModal?: () => void;
 }
 
 export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
@@ -43,6 +48,9 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
   onSwitchToAdminTab,
   entries,
   onExportCsv,
+  forceRefreshState = 'idle',
+  onForceSystemRefresh,
+  onOpenLanguageModal,
 }) => {
   const [adminPin, setAdminPin] = useState('');
   const [pinError, setPinError] = useState(false);
@@ -174,6 +182,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
                 {activeOption === 'admin_portal' && '1. Admin Portal & Security Console'}
                 {activeOption === 'emergency_safety' && '2. Emergency Helpline & Safety Protocol'}
                 {activeOption === 'export_reports' && '3. Data Export & Daily Sheets'}
+                {activeOption === 'app_settings' && 'App Settings'}
               </div>
             </div>
           </div>
@@ -440,6 +449,88 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
                 <CheckCircle2 className="w-3.5 h-3.5" /> Cloud Server Sync Active
               </span>
             </div>
+
+            <button
+              onClick={onClose}
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-bold rounded-lg text-xs cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        )}
+
+        {/* Option 4: App Settings (Includes FORCE SYSTEM REFRESH) */}
+        {activeOption === 'app_settings' && (
+          <div className="p-5 space-y-4">
+            <div className="text-xs text-slate-600 leading-relaxed">
+              Manage application settings, language preferences, and manual emergency system recovery refresh.
+            </div>
+
+            {/* FORCE SYSTEM REFRESH Option */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-bold shrink-0 shadow-xs">
+                    <RefreshCw className={`w-4 h-4 ${forceRefreshState === 'refreshing' ? 'animate-spin' : ''}`} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-slate-900 uppercase tracking-wide">
+                      FORCE SYSTEM REFRESH
+                    </div>
+                    <div className="text-[11px] text-slate-600 mt-0.5 font-medium">
+                      {forceRefreshState === 'refreshing' && 'Refreshing system...'}
+                      {forceRefreshState === 'completed' && 'Refresh completed'}
+                      {forceRefreshState === 'failed' && 'Refresh failed — tap to retry'}
+                      {forceRefreshState === 'idle' && 'Manual emergency/full recovery refresh from Google Sheets'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                id="modal-app-settings-force-system-refresh-btn"
+                type="button"
+                onClick={() => {
+                  if (onForceSystemRefresh) onForceSystemRefresh();
+                }}
+                disabled={forceRefreshState === 'refreshing'}
+                className={`w-full py-2.5 px-4 rounded-lg text-xs font-extrabold flex flex-col items-center justify-center gap-0.5 transition-all shadow-xs cursor-pointer active:scale-98 disabled:opacity-60 ${
+                  forceRefreshState === 'failed'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                    : forceRefreshState === 'completed'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-slate-900 hover:bg-slate-800 text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <RefreshCw className={`w-3.5 h-3.5 ${forceRefreshState === 'refreshing' ? 'animate-spin' : ''}`} />
+                  <span>FORCE SYSTEM REFRESH</span>
+                </div>
+                <span className="text-[10px] font-semibold opacity-90">
+                  {forceRefreshState === 'refreshing'
+                    ? 'Refreshing system...'
+                    : forceRefreshState === 'completed'
+                      ? 'Refresh completed'
+                      : forceRefreshState === 'failed'
+                        ? 'Refresh failed — tap to retry'
+                        : 'Tap to run full recovery refresh'}
+                </span>
+              </button>
+            </div>
+
+            {onOpenLanguageModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenLanguageModal();
+                }}
+                className="w-full p-3.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between text-xs font-bold text-slate-800 transition-colors cursor-pointer"
+              >
+                <span>Language Settings</span>
+                <span className="text-blue-600">Change →</span>
+              </button>
+            )}
 
             <button
               onClick={onClose}

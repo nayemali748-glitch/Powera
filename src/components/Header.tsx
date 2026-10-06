@@ -18,7 +18,9 @@ import {
   Globe,
   BarChart3,
   PowerOff,
-  Calendar
+  Calendar,
+  Settings,
+  RefreshCw
 } from 'lucide-react';
 import { CornerOptionKey, UserSession, ActiveTab } from '../types';
 import { Language, translations } from '../utils/translations';
@@ -39,6 +41,8 @@ interface HeaderProps {
   onToggleSidebar?: () => void;
   currentLanguage?: Language;
   onOpenLanguageModal?: () => void;
+  forceRefreshState?: 'idle' | 'refreshing' | 'completed' | 'failed';
+  onForceSystemRefresh?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -55,6 +59,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar,
   currentLanguage = 'en',
   onOpenLanguageModal,
+  forceRefreshState = 'idle',
+  onForceSystemRefresh,
 }) => {
   const t = translations[currentLanguage] || translations.en;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -293,7 +299,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-amber-600" />
                   <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    POWER • Options & Tools
+                    POWER • App Settings & Tools
                   </span>
                 </div>
                 <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-mono font-bold">
@@ -302,6 +308,46 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
 
               <div className="py-1">
+                {/* APP SETTINGS: FORCE SYSTEM REFRESH */}
+                <div className="px-3 py-2 border-b border-slate-100">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1 mb-1.5">
+                    App Settings
+                  </div>
+                  <button
+                    id="header-menu-force-system-refresh-btn"
+                    type="button"
+                    onClick={() => {
+                      if (onForceSystemRefresh) onForceSystemRefresh();
+                    }}
+                    disabled={forceRefreshState === 'refreshing'}
+                    className={`w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between transition-all cursor-pointer border ${
+                      forceRefreshState === 'failed'
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : forceRefreshState === 'completed'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-slate-900 hover:bg-slate-800 border-slate-900 text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <RefreshCw className={`w-4 h-4 shrink-0 ${forceRefreshState === 'refreshing' ? 'animate-spin' : ''}`} />
+                      <div>
+                        <div className="text-xs font-extrabold tracking-wide">
+                          FORCE SYSTEM REFRESH
+                        </div>
+                        <div className="text-[10px] opacity-90 font-semibold">
+                          {forceRefreshState === 'refreshing'
+                            ? 'Refreshing system...'
+                            : forceRefreshState === 'completed'
+                              ? 'Refresh completed'
+                              : forceRefreshState === 'failed'
+                                ? 'Refresh failed — tap to retry'
+                                : 'Manual emergency/full recovery refresh'}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+
                 {/* Language Option */}
                 {onOpenLanguageModal && (
                   <button

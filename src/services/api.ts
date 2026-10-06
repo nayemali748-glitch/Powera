@@ -313,8 +313,7 @@ export async function fetchEntries(filters?: {
               catUp !== 'CHAT_MESSAGES' &&
               catUp !== 'SETTINGS' &&
               catUp !== 'SYSTEM LOGS' &&
-              catUp !== 'DISCONNECTION_HISTORY' &&
-              catUp !== 'CALL CASE'
+              catUp !== 'DISCONNECTION_HISTORY'
             );
           });
           const uniqueEntries = deduplicateEntries(filteredFast.map((e: any) => normalizeEntry(e)));
@@ -349,8 +348,7 @@ export async function fetchEntries(filters?: {
         catUp !== 'CHAT_MESSAGES' &&
         catUp !== 'SETTINGS' &&
         catUp !== 'SYSTEM LOGS' &&
-        catUp !== 'DISCONNECTION_HISTORY' &&
-        catUp !== 'CALL CASE'
+        catUp !== 'DISCONNECTION_HISTORY'
       );
     });
     const uniqueEntries = deduplicateEntries(filteredList.map((e: any) => normalizeEntry(e)));
@@ -1807,30 +1805,14 @@ export function isValidDisconnectionTaskOrRow(r: any): boolean {
 
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
-    const raw = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
-    if (!Array.isArray(raw)) return [];
-    const valid = raw.filter(isValidDisconnectionTaskOrRow);
-    if (valid.length !== raw.length) {
-      writeCache(DISCONNECTION_TASKS_CACHE_KEY, valid);
-    }
-    return valid;
-  } catch {
-    return [];
-  }
+    localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+  } catch {}
+  return [];
 }
 
-export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
+export function setCachedDisconnectionTasksSync(_tasks: DisconnectionTask[]) {
   try {
-    const validTasks = (Array.isArray(tasks) ? tasks : []).filter(isValidDisconnectionTaskOrRow);
-    // Strip heavy base64 images before writing to localStorage so we never exceed quota
-    const lightTasks = validTasks.map(t => {
-      const copy: any = { ...t };
-      if (copy.photoUrl && copy.photoUrl.length > 5000) copy.photoUrl = '';
-      if (copy.Image && copy.Image.length > 5000) copy.Image = '';
-      if (copy.image && copy.image.length > 5000) copy.image = '';
-      return copy;
-    });
-    writeCache(DISCONNECTION_TASKS_CACHE_KEY, lightTasks);
+    localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
   } catch {}
 }
 
@@ -1963,10 +1945,14 @@ export async function fetchDisconnectionTasks(params: {
           const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
           const name = String(e['Name'] || e['Consumer Name'] || e.consumerName || e.name || '').trim();
           const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
-          const bClassPhase = String(e['BClass/Phase'] || e.bClassPhase || e.deviceType || 'I').trim();
-          const consumerClass = String(e['Class'] || e.baseClass || e.class || 'Domestic').trim();
-          const govNonGov = String(e['Gov/Non-Gov'] || e.govNonGov || 'Non-Gov').trim();
-          const meter = String(e['Number'] || e['Meter'] || e.meterNumber || e.meterNo || '').trim();
+          const rawBaseClass = String(e['Base Class'] ?? e.baseClass ?? '').trim();
+          const consumerClass = String(e['Class'] ?? e.class ?? '').trim();
+          const rawDevice = String(e['Device'] ?? e.device ?? '').trim();
+          const govNonGov = String(e['Gov/Non-Gov'] ?? e.govNonGov ?? '').trim();
+          const meter = String(
+            (rawDevice && rawDevice.toUpperCase() !== 'I' && rawDevice.toUpperCase() !== 'III' ? rawDevice : '') ||
+            e['Number'] || e['Meter'] || e.meterNumber || e.meterNo || ''
+          ).trim();
           const dueDateRange = String(e['O/S Duedate Range'] || e['O/S Due date Range'] || e.dueDateRange || '').trim();
           const d2NetOs = String(e['D2 Net O/S'] || e.outstandingDue || e.arrearAmount || '').trim();
           const disconStatus = (String(e['Discon Status'] || e.disconStatus || e.status || 'PENDING').trim().toUpperCase() || 'PENDING') as DisconnectionTaskStatus;
@@ -1980,13 +1966,12 @@ export async function fetchDisconnectionTasks(params: {
             'Consumer Id': cId,
             Name: name,
             Address: address,
-            'Base Class': String(e['Base Class'] || consumerClass).trim(),
+            'Base Class': rawBaseClass,
             Class: consumerClass,
-            Device: String(e['Device'] || bClassPhase).trim(),
-            'BClass/Phase': bClassPhase,
+            Device: rawDevice,
             'Gov/Non-Gov': govNonGov,
-            Number: meter,
-            Meter: meter,
+            Number: String(e['Number'] || '').trim(),
+            Meter: String(e['Meter'] || '').trim(),
             'O/S Duedate Range': dueDateRange,
             'O/S Due date Range': dueDateRange,
             'D2 Net O/S': d2NetOs,
@@ -2020,14 +2005,16 @@ export async function fetchDisconnectionTasks(params: {
             cccFeeder: mru,
             outstandingDue: d2NetOs,
             dueDateRange: dueDateRange,
-            baseClass: consumerClass,
-            deviceType: bClassPhase,
+            baseClass: rawBaseClass,
+            classType: consumerClass,
+            deviceType: rawDevice,
+            device: rawDevice,
             priority: parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000 ? 'URGENT' : 'NORMAL',
             assignedAgency: String(e['Agency'] || e['Agency Name'] || e.assignedAgency || '').trim(),
             paidAmount: String(e['Paid Amount'] || e.paidAmount || (disconStatus === 'PAID' ? d2NetOs : '')).trim(),
             paymentDate: String(e['Paid Date'] || e['Payment Date'] || e.paymentDate || (disconStatus === 'PAID' ? disconDate : '')).trim(),
             paymentReference: String(e['Paid Type'] || e['Payment Reference'] || e.paymentReference || '').trim(),
-            meterReading: String(e['Reading'] || meter).trim(),
+            meterReading: String(e['Reading'] || '').trim(),
             statusHistory: []
           });
         });
@@ -2057,11 +2044,10 @@ export async function fetchDisconnectionTasks(params: {
     console.warn('[Disconnection] Google Sheet fallback read notice:', err?.message || err);
   }
 
-  // Fallback to cached disconnection tasks if offline
-  const cached = getCachedDisconnectionTasksSync();
+  // Return empty state if backend is unreachable (never show stale cached records)
   return {
-    tasks: cached,
-    stats: computeStats(cached)
+    tasks: [],
+    stats: computeStats([])
   };
 }
 
@@ -2117,26 +2103,26 @@ export async function uploadDisconnectionTasks(
       t.accountNumber ||
       ''
     ).trim();
-    const meter = String((t as any)['Number'] || (t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || t.reading || t.meterReading || '').trim();
-    const offCode = String((t as any)['off_code'] || t.offCode || t.area || '5233100').trim();
-    const mru = String((t as any)['MRU'] || (t as any).mru || t.mruSection || '').trim();
+    const meter = String((t as any)['Number'] || (t as any)['Meter'] || t.meterNumber || (t as any)['Meter No'] || '').trim();
+    const offCode = String((t as any)['off_code'] ?? t.offCode ?? t.area ?? '').trim();
+    const mru = String((t as any)['MRU'] ?? (t as any).mru ?? t.mruSection ?? '').trim();
     const name = String((t as any)['Name'] || (t as any)['Consumer Name'] || t.consumerName || (t as any)['Customer Name'] || '').trim();
     const address = String((t as any)['Address'] || t.consumerAddress || '').trim();
-    const baseClass = String((t as any)['Base Class'] || t.baseClass || 'Domestic').trim();
-    const consumerClass = String((t as any)['Class'] || t.classType || t.baseClass || 'Domestic').trim();
-    const device = String((t as any)['Device'] || (t as any)['BClass/Phase'] || (t as any).bClassPhase || t.deviceType || 'I').trim();
+    const baseClass = String((t as any)['Base Class'] ?? t.baseClass ?? '').trim();
+    const consumerClass = String((t as any)['Class'] ?? t.classType ?? '').trim();
+    const device = String((t as any)['Device'] ?? (t as any).device ?? '').trim();
     const dueDateRange = String((t as any)['O/S Duedate Range'] || (t as any)['O/S Due date Range'] || t.dueDateRange || '').trim();
     const d2NetOs = String((t as any)['D2 Net O/S'] || t.outstandingDue || '').trim();
     const mobile = String((t as any)['Mobile'] || (t as any)['Mobile Number'] || t.phoneNumber || t.mobileNumber || '').trim();
     const latitude = String((t as any)['Latitude'] || t.latitude || '').trim();
     const longitude = String((t as any)['Longitude'] || t.longitude || '').trim();
     const natureOfConn = String((t as any)['Nature of Conn'] || t.natureOfConn || '').trim();
-    const govNonGov = String((t as any)['Gov/Non-Gov'] || (t as any)['govNonGov'] || 'Non-Gov').trim();
+    const govNonGov = String((t as any)['Gov/Non-Gov'] ?? (t as any)['govNonGov'] ?? '').trim();
     const disconStatus = String((t as any)['Discon Status'] || t.disconStatus || t.taskStatus || 'PENDING').trim().toUpperCase();
     const disconDate = String((t as any)['Discon Date'] || t.disconDate || t.reportDate || '').trim();
     const image = String((t as any)['Image'] || t.photoUrl || t.imageUrl || '').trim();
-    const reading = String((t as any)['Reading'] || t.meterReading || meter || '').trim();
-    const paymentStatus = String((t as any)['Payment Status'] || t.paymentStatus || (disconStatus === 'PAID' ? 'PAID' : 'UNPAID')).trim();
+    const reading = String((t as any)['Reading'] || t.meterReading || '').trim();
+    const paymentStatus = String((t as any)['Payment Status'] || t.paymentStatus || '').trim();
     const gisPole = String((t as any)['Gis Pole'] || t.gisPole || '').trim();
     const agency = String((t as any)['Agency'] || t.assignedAgency || t.assignedWorkerName || '').trim();
     const notes = String((t as any)['Notes'] || t.workerRemarks || t.workerReport || '').trim();
@@ -2144,7 +2130,7 @@ export async function uploadDisconnectionTasks(
     const paidAmount = String((t as any)['Paid Amount'] || t.paidAmount || '').trim();
     const paidDate = String((t as any)['Paid Date'] || t.paidDate || t.paymentDate || '').trim();
     const paidType = String((t as any)['Paid Type'] || t.paidType || t.paymentReference || '').trim();
-    const outstandingAfter = String((t as any)['Outstanding After'] || t.outstandingAfter || d2NetOs).trim();
+    const outstandingAfter = String((t as any)['Outstanding After'] || t.outstandingAfter || '').trim();
     const nextPaymentDate = String((t as any)['Next Payment Date'] || t.nextPaymentDate || '').trim();
     const paymentSource = String((t as any)['Payment Source'] || t.paymentSource || '').trim();
     const uploadTimestamp = new Date().toISOString();
@@ -2191,7 +2177,7 @@ export async function uploadDisconnectionTasks(
       consumerId: cId,
       consumerName: name,
       accountNumber: cId,
-      meterNumber: meter,
+      meterNumber: (device && device.toUpperCase() !== 'I' && device.toUpperCase() !== 'III' ? device : '') || meter,
       phoneNumber: mobile,
       mobileNumber: mobile,
       outstandingDue: d2NetOs,
@@ -2206,7 +2192,7 @@ export async function uploadDisconnectionTasks(
       baseClass: baseClass,
       classType: consumerClass,
       deviceType: device,
-      bClassPhase: device,
+      device: device,
       govNonGov: govNonGov,
       workerRemarks: notes,
       workerReport: notes,
@@ -2240,19 +2226,17 @@ export async function uploadDisconnectionTasks(
   for (let i = 0; i < standardizedTasks.length; i++) {
     const row = standardizedTasks[i];
     const cId = String(row.consumerId || '').trim();
-    const submissionId = `TASK-DISC-${cId}`;
+    const submissionId = `PWR-DIS-${cId}`;
     const entryPayload = {
       ...row,
       id: submissionId,
       submissionId,
       category: 'Disconnection',
-      Category: 'Disconnection',
-      workerName: adminInfo?.adminName || 'Admin Upload',
-      'Worker Name': adminInfo?.adminName || 'Admin Upload'
+      Category: 'Disconnection'
     };
     try {
       const updRes = await callGasApi<any>('updateEntry', {
-        id: cId,
+        id: submissionId,
         submissionId,
         consumerId: cId,
         category: 'Disconnection',
@@ -2342,128 +2326,52 @@ export async function submitDisconnectionTaskReport(report: {
   [key: string]: any;
 }): Promise<{ success: boolean; message: string; taskId?: string; status?: string; imageUrl?: string }> {
   const reqId = report.submissionId || `REQ-SUB-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-  const cId = String(report.consumerId || report.taskId || '').replace('TASK-DISC-', '').trim();
-  const dateStr = formatDateDDMMYYYY(report.disconDate || report.reportDate) || getNowDateDDMMYYYY();
-  const timeStr = formatTime12Hour((report as any).reportTime) || getNowTime12Hour();
-  const newStatus = String(report.taskStatus || (report as any).disconStatus || 'COMPLETED').toUpperCase();
-  const remarksStr = String(report.workerRemarks ?? report.workerReport ?? (report as any).notes ?? '').trim();
+  const cId = String(report.consumerId || report['Consumer Id'] || report.taskId || '').replace(/^TASK-DISC-|^PWR-DIS-/i, '').trim();
+  const newStatus = String(report.taskStatus || (report as any).disconStatus || (report as any).status || 'COMPLETED').toUpperCase();
+  const remarksStr = String(report.workerRemarks ?? report.workerReport ?? (report as any).notes ?? (report as any)['Notes'] ?? (report as any)['Remark'] ?? '').trim();
 
+  // Send ONLY Consumer ID, Status, and Remark/Notes so no other consumer columns (Meter/Device, Base Class, Class, etc.) are modified
   const payload: Record<string, any> = {
-    ...report,
-    taskId: report.taskId,
+    taskId: report.taskId || `TASK-DISC-${cId}`,
     consumerId: cId,
     'Consumer Id': cId,
     taskStatus: newStatus,
     disconStatus: newStatus,
+    status: newStatus,
     'Discon Status': newStatus,
-    disconDate: dateStr,
-    reportDate: dateStr,
-    reportTime: timeStr,
-    'Discon Date': dateStr,
+    'Status': newStatus,
     workerRemarks: remarksStr,
     workerReport: remarksStr,
     notes: remarksStr,
     'Notes': remarksStr,
     remarks: remarksStr,
+    'Remark': remarksStr,
     'Remarks': remarksStr,
-    photoUrl: report.photoUrl || (report as any).image || '',
-    image: report.photoUrl || (report as any).image || '',
-    'Image': report.photoUrl || (report as any).image || '',
-    meterReading: report.meterReading || (report as any).reading || '',
-    reading: report.meterReading || (report as any).reading || '',
-    'Reading': report.meterReading || (report as any).reading || '',
-    paymentStatus: newStatus === 'PAID' ? 'PAID' : ((report as any).paymentStatus || 'UNPAID'),
-    'Payment Status': newStatus === 'PAID' ? 'PAID' : ((report as any).paymentStatus || 'UNPAID'),
-    gisPole: (report as any).gisPole || '',
-    'Gis Pole': (report as any).gisPole || '',
-    assignedAgency: report.assignedAgency || (report as any).agency || report.workerName || '',
-    agency: report.assignedAgency || (report as any).agency || report.workerName || '',
-    'Agency': report.assignedAgency || (report as any).agency || report.workerName || '',
-    priority: report.priority || 'NORMAL',
-    'Priority': report.priority || 'NORMAL',
     workerId: report.workerId,
     workerName: report.workerName,
     requestId: reqId
   };
 
-  if (newStatus === 'PAID') {
-    payload.paidAmount = report.paidAmount || '';
-    payload['Paid Amount'] = report.paidAmount || '';
-    payload.paidDate = (report as any).paidDate || report.paymentDate || dateStr;
-    payload['Paid Date'] = (report as any).paidDate || report.paymentDate || dateStr;
-    payload.paidType = (report as any).paidType || report.paymentReference || '';
-    payload['Paid Type'] = (report as any).paidType || report.paymentReference || '';
-    payload.outstandingAfter = (report as any).outstandingAfter || '';
-    payload['Outstanding After'] = (report as any).outstandingAfter || '';
-    payload.nextPaymentDate = (report as any).nextPaymentDate || '';
-    payload['Next Payment Date'] = (report as any).nextPaymentDate || '';
-    payload.paymentSource = (report as any).paymentSource || '';
-    payload['Payment Source'] = (report as any).paymentSource || '';
-  }
-
-  // Update local cache immediately for 0ms UI update
-  try {
-    const cached = getCachedDisconnectionTasksSync();
-    if (cached.length > 0) {
-      const updatedCache = cached.map(t => {
-        if (String(t.consumerId) === cId || String(t.taskId) === String(report.taskId)) {
-          return { ...t, ...payload } as DisconnectionTask;
-        }
-        return t;
+  let lastError = 'Failed to save Disconnection status & remark to Google Sheets';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch('/api/disconnection-tasks/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
-      setCachedDisconnectionTasksSync(updatedCache);
-    }
-  } catch {}
-
-  // 1. Primary: Call ultra-fast /api/disconnection-tasks/report (saves remark & status to Disconnection tab in Google Sheets)
-  try {
-    const res = await fetch('/api/disconnection-tasks/report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (res.ok) {
       const data = await res.json().catch(() => null);
-      if (data && data.success) {
+      if (res.ok && data && data.success) {
         return data;
       }
+      if (data && data.error) {
+        lastError = typeof data.error === 'string' ? data.error : (data.error.message || lastError);
+      }
+    } catch (proxyErr: any) {
+      lastError = proxyErr?.message || lastError;
     }
-  } catch (proxyErr) {
-    // Continue to direct GAS
   }
-
-  // 2. Fallback: Directly update the row in Google Sheet 'Disconnection' tab via updateEntry
-  try {
-    const submissionId = report.taskId || `TASK-DISC-${cId}`;
-    const entryPayload = {
-      ...payload,
-      id: submissionId,
-      submissionId,
-      category: 'Disconnection',
-      Category: 'Disconnection',
-      status: newStatus,
-      'Status': newStatus,
-      'Update': remarksStr ? `${newStatus} - ${remarksStr}` : newStatus
-    };
-    const updRes = await callGasApi<any>('updateEntry', {
-      id: cId,
-      submissionId,
-      consumerId: cId,
-      category: 'Disconnection',
-      entry: entryPayload
-    }, 'POST');
-    if (updRes && updRes.success) {
-      return {
-        success: true,
-        message: 'Disconnection status & remarks saved to Google Sheets Disconnection tab',
-        taskId: report.taskId,
-        status: newStatus
-      };
-    }
-    throw new Error(updRes?.error || 'Failed to update Disconnection sheet');
-  } catch (err: any) {
-    throw new Error(err.message || 'Failed to update disconnection remark in Google Sheets');
-  }
+  throw new Error(lastError);
 }
 
 export async function assignDisconnectionTask(
