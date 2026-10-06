@@ -13,7 +13,16 @@ import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
 import { DisconnectionTaskManagement } from './components/DisconnectionTaskManagement';
 import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode, DisconnectionTask } from './types';
-import { fetchEntries, fetchStats, fetchWorkOrders, logoutUser, fetchDisconnectionTasks } from './services/api';
+import {
+  fetchEntries,
+  fetchStats,
+  fetchWorkOrders,
+  logoutUser,
+  fetchDisconnectionTasks,
+  getCachedEntriesSync,
+  getCachedDisconnectionTasksSync,
+  getCachedWorkOrdersSync
+} from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
 import { formatDateTime12Hour, formatTime12Hour, getNowDateDDMMYYYY } from './utils/dateTimeFormat';
@@ -131,10 +140,10 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>('NSC');
   const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
-  const [entries, setEntries] = useState<PowerEntry[]>([]);
-  const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>([]);
-  const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [entries, setEntries] = useState<PowerEntry[]>(() => getCachedEntriesSync());
+  const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
+  const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>(() => getCachedWorkOrdersSync());
+  const [loading, setLoading] = useState<boolean>(() => getCachedEntriesSync().length === 0 && getCachedDisconnectionTasksSync().length === 0);
   const lastDataHashRef = useRef<string>('');
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
@@ -195,12 +204,12 @@ export default function App() {
 
   const loadData = async (silent: boolean | unknown = false, forceRefresh = false, throwOnError = false) => {
     if (!currentUser) return;
-    if (inFlightRef.current) return;
+    if (inFlightRef.current && !forceRefresh) return;
     inFlightRef.current = true;
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
-      if (!isSilent && entries.length === 0) setLoading(true);
+      if (!isSilent && entries.length === 0 && disconnectionTasks.length === 0) setLoading(true);
       const [data, orders, discRes] = await Promise.all([
         fetchEntries({ refresh: forceRefresh }),
         fetchWorkOrders(),
@@ -338,8 +347,13 @@ export default function App() {
 
   // Option 1 (Main Module): POWER APP & SHEETS REFRESH
   const handlePowerAppSheetsRefresh = () => {
-    if (inFlightRef.current) return;
-    loadData(true, false);
+    inFlightRef.current = false;
+    lastDataHashRef.current = '';
+    lastOrdersHashRef.current = '';
+    try {
+      window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+    } catch {}
+    loadData(true, true);
   };
 
   // Option 2 (App Settings): FORCE SYSTEM REFRESH (Manual emergency/full recovery refresh)

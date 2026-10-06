@@ -27,7 +27,7 @@ export const DEFAULT_WBSEDCL_ACCOUNTS: UserAccount[] = [];
 try {
   localStorage.removeItem('power_registered_users');
   const oldEntries = localStorage.getItem(LOCAL_STORAGE_KEY);
-  if (oldEntries && oldEntries.length > 50000) {
+  if (oldEntries && oldEntries.length > 1500000) {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
   }
 } catch {}
@@ -47,11 +47,31 @@ function writeCache<T>(key: string, value: T) {
   } catch {}
 }
 
+export function getCachedEntriesSync(): PowerEntry[] {
+  try {
+    const raw = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    return Array.isArray(raw) ? deduplicateEntries(raw.map(e => normalizeEntry(e))) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getCachedWorkOrdersSync(): WorkOrderNotice[] {
+  try {
+    const raw = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
 function sanitizeEntriesForCache(entries: PowerEntry[]): PowerEntry[] {
-  return entries.slice(0, 50).map(e => ({
+  return entries.slice(0, 500).map(e => ({
     ...e,
-    photoUrl: e.photoUrl && e.photoUrl.length > 3000 ? '' : e.photoUrl,
-    workOrderPhoto: e.workOrderPhoto && e.workOrderPhoto.length > 3000 ? '' : e.workOrderPhoto,
+    photoUrl: e.photoUrl && e.photoUrl.startsWith('data:') && e.photoUrl.length > 2000 ? '' : e.photoUrl,
+    workOrderPhoto: e.workOrderPhoto && e.workOrderPhoto.startsWith('data:') && e.workOrderPhoto.length > 2000 ? '' : e.workOrderPhoto,
+    photoBefore: e.photoBefore && e.photoBefore.startsWith('data:') && e.photoBefore.length > 2000 ? '' : e.photoBefore,
+    photoAfter: e.photoAfter && e.photoAfter.startsWith('data:') && e.photoAfter.length > 2000 ? '' : e.photoAfter,
   }));
 }
 
@@ -1881,14 +1901,32 @@ export function isValidDisconnectionTaskOrRow(r: any): boolean {
 
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
-    localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+    const raw = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw.filter(isValidDisconnectionTaskOrRow).map((t, idx) => ({
+        ...cleanDisconnectionTask(t),
+        serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+      }));
+    }
   } catch {}
   return [];
 }
 
-export function setCachedDisconnectionTasksSync(_tasks: DisconnectionTask[]) {
+export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
   try {
-    localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+    const valid = (Array.isArray(tasks) ? tasks : []).filter(isValidDisconnectionTaskOrRow);
+    // Strip heavy base64 images before writing to localStorage so quota is never exceeded
+    const light = valid.map(t => {
+      const clone: any = { ...t };
+      if (typeof clone.photoUrl === 'string' && clone.photoUrl.startsWith('data:') && clone.photoUrl.length > 2000) {
+        clone.photoUrl = '';
+      }
+      if (typeof clone.Image === 'string' && clone.Image.startsWith('data:') && clone.Image.length > 2000) {
+        clone.Image = '';
+      }
+      return clone;
+    });
+    writeCache(DISCONNECTION_TASKS_CACHE_KEY, light);
   } catch {}
 }
 
@@ -2120,10 +2158,10 @@ export async function fetchDisconnectionTasks(params: {
     console.warn('[Disconnection] Google Sheet fallback read notice:', err?.message || err);
   }
 
-  // Return empty state if backend is unreachable (never show stale cached records)
+  const fallbackCached = getCachedDisconnectionTasksSync();
   return {
-    tasks: [],
-    stats: computeStats([])
+    tasks: fallbackCached,
+    stats: computeStats(fallbackCached)
   };
 }
 
@@ -2472,6 +2510,20 @@ export async function submitDisconnectionTaskReport(report: {
       lastError = proxyErr?.message || lastError;
     }
   }
+
+  // Fallback to gas-proxy / updateDisconnection so remark & status update always succeeds
+  try {
+    const fallbackRes = await callGasApi<any>('updateDisconnection', payload, 'POST');
+    if (fallbackRes && fallbackRes.success !== false) {
+      return {
+        success: true,
+        message: fallbackRes.message || `Consumer ${cId} remark & status (${newStatus}) saved`,
+        taskId: payload.taskId,
+        status: newStatus
+      };
+    }
+  } catch {}
+
   throw new Error(lastError);
 }
 

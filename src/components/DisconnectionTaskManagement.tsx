@@ -265,10 +265,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       .catch(() => {});
   }, []);
 
-  // Initial load when component mounts (ongoing 10s sync is centrally managed by App.tsx)
+  // Initial load when component mounts + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
     loadData(false);
-  }, []);
+    const onGlobalRefresh = () => {
+      inFlightRef.current = false;
+      loadData(true);
+    };
+    window.addEventListener('power-app-sheets-refresh', onGlobalRefresh);
+    return () => {
+      window.removeEventListener('power-app-sheets-refresh', onGlobalRefresh);
+    };
+  }, [loadData]);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {

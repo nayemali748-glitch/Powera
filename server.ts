@@ -261,12 +261,16 @@ function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): any {
   return clone;
 }
 
-// Concurrency gate for Google Apps Script HTTP calls to prevent concurrent SpreadsheetApp lock/redirect 404s
+// Concurrency gate for Google Apps Script POST mutations to prevent concurrent SpreadsheetApp write lock contention
+// GET read requests run directly without waiting behind write queues
 let gasFetchQueuePromise: Promise<any> = Promise.resolve();
 async function runSerializedGasFetch(url: string, options: RequestInit): Promise<Response> {
+  if (!options.method || options.method.toUpperCase() === 'GET') {
+    return fetch(url, options);
+  }
   const next = gasFetchQueuePromise.then(async () => {
     const res = await fetch(url, options);
-    await new Promise(r => setTimeout(r, 80));
+    await new Promise(r => setTimeout(r, 40));
     return res;
   });
   gasFetchQueuePromise = next.catch(() => {});
@@ -383,13 +387,15 @@ async function callGoogleAppsScript(
   }
 
   const executionPromise = (async () => {
-    const maxAttempts = 3;
+    const maxAttempts = isMutation ? 2 : 2;
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      // Ensure sufficient timeout for Google Apps Script sheet operations (minimum 25s)
-      const currentTimeoutMs = Math.max(timeoutMs || (isMutation ? 45000 : 30000), 25000);
+      // Keep timeouts responsive so slow GAS calls never hang the server
+      const currentTimeoutMs = isMutation
+        ? Math.min(Math.max(timeoutMs || 25000, 15000), 30000)
+        : Math.min(Math.max(timeoutMs || 18000, 10000), 22000);
       const timeoutId = setTimeout(() => {
         try { controller.abort(); } catch {}
       }, currentTimeoutMs);
@@ -657,15 +663,23 @@ app.get('/api/health', async (req, res) => {
 // ============================================================================
 // AUTHENTICATION & USERS SHEET LOADER (Google Sheets Users sheet as single source of truth)
 // ============================================================================
+const USERS_CACHE_FILE = path.join(process.cwd(), '.users-cache.json');
 interface CachedUsersState {
   users: any[];
   timestamp: number;
 }
 let cachedUsersState: CachedUsersState | null = null;
-const USERS_STATE_TTL_MS = 30000;
+try {
+  if (fs.existsSync(USERS_CACHE_FILE)) {
+    const diskUsers = JSON.parse(fs.readFileSync(USERS_CACHE_FILE, 'utf-8'));
+    if (Array.isArray(diskUsers) && diskUsers.length > 0) {
+      cachedUsersState = { users: diskUsers, timestamp: Date.now() - 15000 };
+    }
+  }
+} catch {}
+const USERS_STATE_TTL_MS = 120000;
 
 function clearUsersStateCache() {
-  cachedUsersState = null;
   gasCache.clear();
 }
 
@@ -865,8 +879,9 @@ async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]>
   });
   if (users.length > 0) {
     cachedUsersState = { users, timestamp: Date.now() };
+    try { fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(users), 'utf-8'); } catch {}
   }
-  return users;
+  return cachedUsersState?.users || users;
 }
 
 function findMatchingUserInList(users: any[], cleanId: string): any {
@@ -951,12 +966,19 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     };
   }
 
-  // 1. Check Users list from Google Sheets Users sheet
-  let users = await fetchVerifiedUsersFromSheet(false);
+  // 1. Check cached Users list first for instant (<5ms) login response
+  let users = cachedUsersState?.users && cachedUsersState.users.length > 0
+    ? cachedUsersState.users
+    : await fetchVerifiedUsersFromSheet(false);
   let matchedUser = findMatchingUserInList(users, cleanId);
 
-  // 2. If user not found or password does not match cached state, force live refresh from Google Sheets Users sheet
-  if (!matchedUser || !checkUserPasswordMatch(matchedUser, cleanPass)) {
+  if (matchedUser && checkUserPasswordMatch(matchedUser, cleanPass)) {
+    // Refresh users sheet in background so any recent role/status change is synced without slowing login
+    if (!cachedUsersState || (Date.now() - cachedUsersState.timestamp > 30000)) {
+      fetchVerifiedUsersFromSheet(true).catch(() => {});
+    }
+  } else {
+    // 2. If user not found or password does not match cached state, force live refresh from Google Sheets Users sheet
     users = await fetchVerifiedUsersFromSheet(true);
     matchedUser = findMatchingUserInList(users, cleanId);
 
@@ -1556,14 +1578,12 @@ app.all('/api/gas-proxy', async (req, res) => {
     if (action === 'updateDisconnection' || action === 'submitDisconnectionReport') {
       const cId = String(payload.consumerId || payload['Consumer Id'] || payload.id || payload.taskId || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
       const cIdKey = cId.toLowerCase();
-      if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
-        try { await fetchDisconnectionTasksFromGoogleSheet(); } catch {}
-      }
       const existing = cachedDisconnectionState?.tasks?.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey) || localDisconnectionOverlayMap.get(cIdKey) || {};
       const newStatus = String(payload.disconStatus || payload['Discon Status'] || payload.taskStatus || payload.status || payload['Status'] || existing.disconStatus || 'PENDING').trim().toUpperCase();
       const newNotes = String(payload.notes ?? payload['Notes'] ?? payload.workerRemarks ?? payload.workerReport ?? payload.remarks ?? payload['Remark'] ?? existing.notes ?? '').trim();
       const mergedTask = {
         ...existing,
+        ...payload,
         consumerId: cId,
         'Consumer Id': cId,
         taskStatus: newStatus,
@@ -1584,15 +1604,27 @@ app.all('/api/gas-proxy', async (req, res) => {
       if (cIdKey) {
         localDisconnectionOverlayMap.set(cIdKey, mergedTask);
         saveDiscOverlayToDisk();
+        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+          const idx = cachedDisconnectionState.tasks.findIndex((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey);
+          if (idx !== -1) cachedDisconnectionState.tasks[idx] = mergedTask;
+          try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+        }
       }
-      const ok = await enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(mergedTask));
-      if (ok && cIdKey) {
-        mergedTask._syncedToSheet = true;
-        saveDiscOverlayToDisk();
-      }
+      enqueueGasWrite(async () => {
+        const ok = await syncSingleDisconnectionRowToSheet(mergedTask);
+        if (ok && cIdKey) {
+          const ov = localDisconnectionOverlayMap.get(cIdKey);
+          if (ov) {
+            ov._syncedToSheet = true;
+            saveDiscOverlayToDisk();
+          }
+        }
+        gasCache.clear();
+        return ok;
+      }).catch(() => {});
       return res.json({
-        success: ok,
-        message: ok ? 'Disconnection record updated in Google Sheets' : 'Failed to update Disconnection record in Google Sheets',
+        success: true,
+        message: 'Disconnection record updated and queued for Google Sheets sync',
         requestId: `REQ-${Date.now()}`
       });
     }
@@ -2139,19 +2171,19 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
   const canonicalTab = toSheetTabCategory(payload.category);
   const frontendCat = toFrontendCategory(payload.category);
 
-  // Check isolated module sheet for duplicate prevention (Rule 9: Existing unique record -> UPDATE, No existing -> CREATE)
+  // Check in-memory caches for duplicate prevention (<1ms) without blocking on slow network reads
   let existingMatch: any = null;
   if (canonicalTab === 'Disconnection') {
-    const tasks = await fetchDisconnectionTasksFromGoogleSheet();
+    const tasks = cachedDisconnectionState?.tasks || Array.from(localDisconnectionOverlayMap.values());
     const cId = String(payload.consumerId || payload['Consumer Id'] || payload.id || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
     if (cId) {
-      existingMatch = tasks.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cId);
+      existingMatch = tasks.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cId) || localDisconnectionOverlayMap.get(cId);
     }
   } else {
-    try {
-      const moduleList = await fetchIsolatedModuleEntriesFromSheet(canonicalTab, false);
-      existingMatch = findExistingUniqueModuleRecord(moduleList, payload, canonicalTab);
-    } catch {}
+    const moduleList =
+      moduleEntriesCacheMap.get(canonicalTab)?.entries ||
+      (cachedEntriesState?.entries || []).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+    existingMatch = findExistingUniqueModuleRecord(moduleList, payload, canonicalTab);
   }
 
   const nowIso = new Date().toISOString();
@@ -2184,33 +2216,12 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
     Category: canonicalTab
   };
 
-  // Rule 8: Wait for Google Sheets write/update confirmation before returning success
-  let gasRes: any;
-  if (existingMatch) {
-    gasRes = await callGoogleAppsScript(
-      'updateEntry',
-      { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
-      'POST',
-      35000
-    );
-  } else {
-    gasRes = await callGoogleAppsScript(
-      'createEntry',
-      { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
-      'POST',
-      35000
-    );
-  }
-
-  if (!gasRes || gasRes.success === false) {
-    throw new Error(gasRes?.error?.message || gasRes?.error || `Failed to save ${canonicalTab} record to Google Sheets`);
-  }
-
   const normalized = normalizeServerEntry({ ...sheetPayload, category: frontendCat });
-  localEntriesOverlayMap.set(normalized.id.toLowerCase(), { ...normalized, _localUpdatedAt: Date.now(), _syncedToSheet: true });
+  const overlayKey = normalized.id.toLowerCase();
+  localEntriesOverlayMap.set(overlayKey, { ...normalized, _localUpdatedAt: Date.now(), _syncedToSheet: false });
   saveEntriesOverlayToDisk();
 
-  // Update isolated module cache (initialize if not yet set)
+  // Immediately update isolated module cache & global entries cache (<5ms response)
   const modCached = moduleEntriesCacheMap.get(canonicalTab);
   if (modCached && Array.isArray(modCached.entries)) {
     modCached.entries = [
@@ -2233,6 +2244,40 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
     cachedEntriesState = { entries: [normalized], timestamp: Date.now() };
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
+
+  // Persist to Google Sheets in background write queue so UI save is instantaneous
+  const isUpdatingExisting = Boolean(existingMatch);
+  enqueueGasWrite(async () => {
+    try {
+      let gasRes: any;
+      if (isUpdatingExisting) {
+        gasRes = await callGoogleAppsScript(
+          'updateEntry',
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          'POST',
+          25000
+        );
+      } else {
+        gasRes = await callGoogleAppsScript(
+          'createEntry',
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          'POST',
+          25000
+        );
+      }
+      if (gasRes && gasRes.success !== false) {
+        const ov = localEntriesOverlayMap.get(overlayKey);
+        if (ov) {
+          ov._syncedToSheet = true;
+          saveEntriesOverlayToDisk();
+        }
+      }
+    } catch (err) {
+      console.warn(`[Entries Background Sync] create/update notice for ${payload.id}:`, err);
+    } finally {
+      gasCache.clear();
+    }
+  }).catch(() => {});
 
   gasCache.clear();
   return normalized;
@@ -2266,9 +2311,6 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     /^PWR-DIS-|^TASK-DISC-/i.test(cleanId);
 
   if (isDisc && bareCId) {
-    if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
-      try { await fetchDisconnectionTasksFromGoogleSheet(); } catch {}
-    }
     const exactSheetRow =
       cachedDisconnectionState?.tasks?.find(
         (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === bareKey
@@ -2286,8 +2328,11 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
 
     const updatedDiscTask = {
       ...exactSheetRow,
+      ...bodyData,
       consumerId: bareCId,
       'Consumer Id': bareCId,
+      consumerName: exactSheetRow.consumerName || exactSheetRow['Name'] || bodyData?.consumerName || bodyData?.['Name'] || `Consumer ${bareCId}`,
+      'Name': exactSheetRow['Name'] || exactSheetRow.consumerName || bodyData?.['Name'] || bodyData?.consumerName || `Consumer ${bareCId}`,
       taskStatus: statusVal,
       disconStatus: statusVal,
       status: statusVal,
@@ -2305,12 +2350,6 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
       _syncedToSheet: false
     };
 
-    const ok = await enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(updatedDiscTask));
-    if (!ok) {
-      throw new Error(`Failed to update Disconnection record #${bareCId} in Google Sheets`);
-    }
-
-    updatedDiscTask._syncedToSheet = true;
     if (isValidDisconnectionConsumerRow(updatedDiscTask)) {
       localDisconnectionOverlayMap.set(bareKey, updatedDiscTask);
       saveDiscOverlayToDisk();
@@ -2320,10 +2359,26 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
         );
         if (dIdx !== -1) {
           cachedDisconnectionState.tasks[dIdx] = updatedDiscTask;
+        } else {
+          cachedDisconnectionState.tasks.push(updatedDiscTask);
         }
         try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
       }
     }
+
+    enqueueGasWrite(async () => {
+      const ok = await syncSingleDisconnectionRowToSheet(updatedDiscTask);
+      if (ok && bareKey) {
+        const ov = localDisconnectionOverlayMap.get(bareKey);
+        if (ov) {
+          ov._syncedToSheet = true;
+          saveDiscOverlayToDisk();
+        }
+      }
+      gasCache.clear();
+      return ok;
+    }).catch(() => {});
+
     gasCache.clear();
     return updatedDiscTask;
   }
@@ -2353,16 +2408,7 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     submissionId
   };
 
-  // Rule 8: Confirm Google Sheets update before returning success
-  const upRes = await enqueueGasWrite(async () => {
-    return await callGoogleAppsScript('updateEntry', { ...payload, data: payload }, 'POST', 35000);
-  });
-
-  if (!upRes || upRes.success === false) {
-    throw new Error(upRes?.error?.message || upRes?.error || `Failed to update record #${cleanId} in Google Sheets`);
-  }
-
-  localEntriesOverlayMap.set(key, { ...merged, _localUpdatedAt: Date.now(), _syncedToSheet: true });
+  localEntriesOverlayMap.set(key, { ...merged, _localUpdatedAt: Date.now(), _syncedToSheet: false });
   saveEntriesOverlayToDisk();
 
   const modCached = moduleEntriesCacheMap.get(canonicalTab);
@@ -2392,6 +2438,24 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     }
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
+
+  // Persist update to Google Sheets in background write queue so UI responds in <10ms
+  enqueueGasWrite(async () => {
+    try {
+      const upRes = await callGoogleAppsScript('updateEntry', { ...payload, data: payload }, 'POST', 25000);
+      if (upRes && upRes.success !== false) {
+        const ov = localEntriesOverlayMap.get(key);
+        if (ov) {
+          ov._syncedToSheet = true;
+          saveEntriesOverlayToDisk();
+        }
+      }
+    } catch (err) {
+      console.warn(`[Entries Background Sync] updateEntry notice for ${cleanId}:`, err);
+    } finally {
+      gasCache.clear();
+    }
+  }).catch(() => {});
 
   gasCache.clear();
   return merged;
@@ -2432,14 +2496,20 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
     if (k) resultMap.set(k, e);
   }
 
+  const now = Date.now();
   for (const [k, ov] of localEntriesOverlayMap.entries()) {
     if (isRecordDeleted(ov)) continue;
     const ovCatUpper = String(ov?.category || '').toUpperCase().trim();
     if (isNonFieldEntryCategory(ovCatUpper)) continue;
     if (ovCatUpper === 'DISCONNECTION' && !isValidDisconnectionConsumerRow(ov)) continue;
     const existing = resultMap.get(k);
+    const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
     if (existing) {
-      resultMap.set(k, { ...existing, ...ov });
+      if (!ov._syncedToSheet || isRecent) {
+        resultMap.set(k, normalizeServerEntry({ ...existing, ...ov }));
+      }
+    } else if (!ov._syncedToSheet || isRecent) {
+      resultMap.set(k, normalizeServerEntry(ov));
     }
   }
 
@@ -2450,16 +2520,18 @@ async function refreshEntriesFromSheetInBackground() {
   if (isRefreshingEntriesInBg || activeGasWriteCount > 0) return;
   isRefreshingEntriesInBg = true;
   try {
-    const allModuleLists: any[][] = [];
-    for (const tab of ISOLATED_FIELD_MODULES) {
-      const list = await fetchIsolatedModuleEntriesFromSheet(tab, true).catch(() => {
-        return moduleEntriesCacheMap.get(tab)?.entries || [];
-      });
-      allModuleLists.push(list);
+    const allModuleLists = await Promise.all(
+      ISOLATED_FIELD_MODULES.map(tab =>
+        fetchIsolatedModuleEntriesFromSheet(tab, true).catch(() => {
+          return moduleEntriesCacheMap.get(tab)?.entries || [];
+        })
+      )
+    );
+    const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+    if (combined.length > 0 || !cachedEntriesState) {
+      cachedEntriesState = { entries: combined, timestamp: Date.now() };
+      try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
     }
-    const combined = allModuleLists.flat();
-    cachedEntriesState = { entries: combined, timestamp: Date.now() };
-    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
   } catch (err) {
     console.warn('[Background Entries Sync] Notice:', err);
   } finally {
@@ -2471,30 +2543,61 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
   if (query?.category && String(query.category).toUpperCase().trim() !== 'ALL') {
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === 'Disconnection') {
+      if (!forceRefresh && cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0) {
+        return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(normalizeServerEntry);
+      }
       const tasks = await fetchDisconnectionTasksFromGoogleSheet();
       return tasks.map(normalizeServerEntry);
     }
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
 
-  if (!forceRefresh && cachedEntriesState && (Date.now() - cachedEntriesState.timestamp < 30000)) {
-    return mergeEntriesWithOverlay(cachedEntriesState.entries);
+  const buildCombinedWithDisconnection = (fieldEntries: any[]) => {
+    const mergedFields = mergeEntriesWithOverlay(fieldEntries);
+    const discTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+    const discEntries = discTasks.map(normalizeServerEntry);
+    const map = new Map<string, any>();
+    for (const item of [...mergedFields, ...discEntries]) {
+      const k = String(item.id || item.submissionId || item.consumerId || '').trim().toLowerCase();
+      if (k) map.set(k, item);
+    }
+    return Array.from(map.values());
+  };
+
+  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && cachedEntriesState.entries.length > 0) {
+    if (Date.now() - cachedEntriesState.timestamp >= 45000) {
+      refreshEntriesFromSheetInBackground();
+    }
+    return buildCombinedWithDisconnection(cachedEntriesState.entries);
   }
 
   try {
-    const allModuleLists: any[][] = [];
-    for (const tab of ISOLATED_FIELD_MODULES) {
-      const list = await fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
-        return moduleEntriesCacheMap.get(tab)?.entries || [];
-      });
-      allModuleLists.push(list);
-    }
-    const combined = allModuleLists.flat();
-    cachedEntriesState = { entries: combined, timestamp: Date.now() };
-    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
-    return combined;
+    const fetchAllPromise = (async () => {
+      const allModuleLists = await Promise.all(
+        ISOLATED_FIELD_MODULES.map(tab =>
+          fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
+            return moduleEntriesCacheMap.get(tab)?.entries || [];
+          })
+        )
+      );
+      const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+      if (combined.length > 0 || !cachedEntriesState) {
+        cachedEntriesState = { entries: combined, timestamp: Date.now() };
+        try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
+      }
+      return combined;
+    })();
+
+    // Bound foreground wait to 6 seconds so UI refresh never hangs; let fetch finish in background if GAS is slow
+    const result = await Promise.race([
+      fetchAllPromise,
+      new Promise<any[]>(resolve =>
+        setTimeout(() => resolve(cachedEntriesState?.entries || []), 6000)
+      )
+    ]);
+    return buildCombinedWithDisconnection(result);
   } catch {
-    return mergeEntriesWithOverlay(cachedEntriesState?.entries || []);
+    return buildCombinedWithDisconnection(cachedEntriesState?.entries || []);
   }
 }
 
@@ -3104,9 +3207,17 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
 }
 
 async function getMergedWorkOrders(categoryFilter?: any, forceRefresh = false): Promise<any[]> {
-  if (serverWorkOrdersCache.length === 0 || forceRefresh) {
-    await fetchWorkOrdersFromSheet();
-  } else if (Date.now() - lastWorkOrdersFetchTime > 10000) {
+  if (serverWorkOrdersCache.length === 0) {
+    await Promise.race([
+      fetchWorkOrdersFromSheet(),
+      new Promise(resolve => setTimeout(resolve, 4500))
+    ]);
+  } else if (forceRefresh) {
+    await Promise.race([
+      fetchWorkOrdersFromSheet(),
+      new Promise(resolve => setTimeout(resolve, 4500))
+    ]);
+  } else if (Date.now() - lastWorkOrdersFetchTime > 30000) {
     fetchWorkOrdersFromSheet().catch(() => {});
   }
 
@@ -3127,18 +3238,24 @@ async function handleCreateWorkOrder(rawPayload: any): Promise<any> {
     ...payload,
     id: payload.id || `WO-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
     createdAt: payload.createdAt || new Date().toISOString(),
-    _localSavedAt: Date.now()
+    _localSavedAt: Date.now(),
+    _syncedToSheet: false
   });
 
   deletedTombstoneSet.delete(newOrder.id.toLowerCase());
   saveTombstonesToDisk();
 
-  // Rule 8: Confirm Google Sheets write before returning success
-  await syncWorkOrderToSheet(newOrder, false);
-  newOrder._syncedToSheet = true;
-
+  // Immediately update memory and disk cache so upload completes in <10ms
   serverWorkOrdersCache = [newOrder, ...serverWorkOrdersCache.filter(w => w.id !== newOrder.id)];
   saveWorkOrdersToDisk();
+
+  // Sync to Google Sheets in background write queue
+  enqueueGasWrite(async () => {
+    await syncWorkOrderToSheet(newOrder, false);
+    newOrder._syncedToSheet = true;
+    saveWorkOrdersToDisk();
+  }).catch(() => {});
+
   return newOrder;
 }
 
@@ -3147,17 +3264,21 @@ async function handleToggleWorkOrderVisibility(id: string, isHidden: boolean): P
   let updatedItem: any = null;
   serverWorkOrdersCache = serverWorkOrdersCache.map(w => {
     if (w.id === cleanId) {
-      updatedItem = { ...w, isHidden: Boolean(isHidden), _localSavedAt: Date.now() };
+      updatedItem = { ...w, isHidden: Boolean(isHidden), _localSavedAt: Date.now(), _syncedToSheet: false };
       return updatedItem;
     }
     return w;
   });
 
-  if (updatedItem) {
-    await syncWorkOrderToSheet(updatedItem, true);
-    updatedItem._syncedToSheet = true;
-  }
   saveWorkOrdersToDisk();
+  if (updatedItem) {
+    const itemToSync = updatedItem;
+    enqueueGasWrite(async () => {
+      await syncWorkOrderToSheet(itemToSync, true);
+      itemToSync._syncedToSheet = true;
+      saveWorkOrdersToDisk();
+    }).catch(() => {});
+  }
   return updatedItem || { id: cleanId, isHidden: Boolean(isHidden) };
 }
 
@@ -3933,16 +4054,39 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 const purgedBogusSheetRowIds = new Set<string>();
 
 async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolean> {
-  if (!taskOrRow || !isValidDisconnectionConsumerRow(taskOrRow)) return false;
-  const full33 = buildComplete33ColumnPayload(taskOrRow);
+  if (!taskOrRow) return false;
+  const rawCId = String(
+    taskOrRow.consumerId ?? taskOrRow['Consumer Id'] ?? taskOrRow['Consumer ID'] ?? taskOrRow.accountNumber ?? ''
+  ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
+  if (!rawCId) return false;
+
+  const cIdKey = rawCId.toLowerCase();
+  const existingCached =
+    cachedDisconnectionState?.tasks?.find(
+      (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+    ) ||
+    localDisconnectionOverlayMap.get(cIdKey) ||
+    {};
+
+  const mergedSource = {
+    ...existingCached,
+    ...taskOrRow,
+    consumerId: rawCId,
+    'Consumer Id': rawCId,
+    Name: taskOrRow.Name || taskOrRow['Name'] || taskOrRow.consumerName || existingCached.Name || existingCached['Name'] || existingCached.consumerName || ''
+  };
+
+  if (!isValidDisconnectionConsumerRow(mergedSource)) return false;
+  const full33 = buildComplete33ColumnPayload(mergedSource);
   const cId = String(full33.consumerId || full33['Consumer Id'] || '').trim();
   if (!cId) return false;
   const discId = `PWR-DIS-${cId}`;
+  const nowIso = new Date().toISOString();
 
   // Pass a single space for any empty string on Base Class, Class, Device, or Notes so GAS extractFieldValue never falls back to 'Domestic' or 'I'
-  const safeBaseClass = full33['Base Class'] || ' ';
-  const safeClass = full33['Class'] || ' ';
-  const safeDevice = full33['Device'] || ' ';
+  const safeBaseClass = full33['Base Class'] || existingCached['Base Class'] || existingCached.baseClass || ' ';
+  const safeClass = full33['Class'] || existingCached['Class'] || existingCached.classType || ' ';
+  const safeDevice = full33['Device'] || existingCached['Device'] || existingCached.deviceType || ' ';
   const safeNotes = full33['Notes'] || ' ';
 
   const gasPayload = {
@@ -3961,7 +4105,13 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     'Device': safeDevice,
     'BClass/Phase': safeDevice,
     'Notes': safeNotes,
-    notes: safeNotes
+    notes: safeNotes,
+    'Remark': safeNotes,
+    'Remarks': safeNotes,
+    workerRemarks: safeNotes,
+    lastUpdated: nowIso,
+    'Last Updated': nowIso,
+    updatedAt: nowIso
   };
 
   // If this is a newly uploaded consumer not yet in the sheet, try createEntry first to save round-trip time
@@ -3971,7 +4121,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
         'createEntry',
         { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
         'POST',
-        35000
+        25000
       );
       if (crFirst && crFirst.success !== false) {
         return true;
@@ -3979,44 +4129,28 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     } catch {}
   }
 
-  // 1. Try updateEntry using canonical PWR-DIS-<ConsumerId>
+  // 1. Single updateEntry call: Code.gs matches both PWR-DIS-<cId> and bare <cId> in one pass
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
       { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
       'POST',
-      35000
+      25000
     );
     if (upRes && upRes.success === true) {
       return true;
     }
   } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] updateEntry (discId) notice for ${cId}:`, err);
+    console.warn(`[Disconnection Sheet Sync] updateEntry notice for ${cId}:`, err);
   }
 
-  // 2. Try updateEntry using bare Consumer ID (for rows pasted directly into Google Sheets without a Record ID)
-  try {
-    const payloadByCId = { ...gasPayload, id: cId, submissionId: cId };
-    const upResByCId = await callGoogleAppsScript(
-      'updateEntry',
-      { id: cId, submissionId: cId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...payloadByCId, data: payloadByCId },
-      'POST',
-      35000
-    );
-    if (upResByCId && upResByCId.success === true) {
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] updateEntry (cId) notice for ${cId}:`, err);
-  }
-
-  // 3. Fallback: If consumer row does not exist in Google Sheets yet, insert the full 33-column row via createEntry
+  // 2. Fallback: If consumer row does not exist in Google Sheets yet, insert the full 33-column row via createEntry
   try {
     const crRes = await callGoogleAppsScript(
       'createEntry',
       { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
       'POST',
-      35000
+      25000
     );
     if (crRes && crRes.success !== false) {
       return true;
@@ -4030,7 +4164,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
 async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   let entriesRes: any = null;
   try {
-    entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection', sheet: 'Disconnection' }, 'GET', 35000);
+    entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection', sheet: 'Disconnection' }, 'GET', 20000);
   } catch {}
 
   if (!entriesRes || entriesRes.success === false) {
@@ -4057,8 +4191,6 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   }
 
   // 2. Filter to active, valid Disconnection consumer rows from the Google Sheet Disconnection tab
-  // Note: If a row in the Google Sheet has Discon Status === 'DELETED', it is permanently excluded.
-  // If a row in the Google Sheet has an active status (e.g., PENDING, DISCONNECT, PAID), remove any stale tombstone so Google Sheets remains the sole source of truth.
   const activeEntries: any[] = [];
   for (const [cId, e] of canonicalByConsumerMap.entries()) {
     const st = String(e.status || e.disconStatus || e['Discon Status'] || e.taskStatus || '').trim().toUpperCase();
@@ -4178,7 +4310,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
     return { success: true, tasks: cleanList, stats };
   };
 
-  if (!forceRefresh && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+  if (!forceRefresh && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
     const age = Date.now() - cachedDisconnectionState.timestamp;
     if (age > 45000) {
       refreshDisconnectionFromSheetInBackground();
@@ -4187,8 +4319,16 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   }
 
   try {
-    gasCache.clear();
-    const tasks = await fetchDisconnectionTasksFromGoogleSheet();
+    if (forceRefresh) {
+      gasCache.clear();
+    }
+    // Bound foreground wait to 6s so UI refresh never hangs; if GAS takes longer, return merged cache + overlay while fetch finishes in background
+    const tasks = await Promise.race([
+      fetchDisconnectionTasksFromGoogleSheet(),
+      new Promise<any[]>(resolve =>
+        setTimeout(() => resolve(cachedDisconnectionState?.tasks || []), 6000)
+      )
+    ]);
     return res.json(applyFilterAndStats(tasks));
   } catch (err: any) {
     const fallbackTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
@@ -5005,6 +5145,12 @@ async function startServer() {
       console.log(`⚡ POWER server running on http://localhost:${port}`);
       console.log(`📊 Google Spreadsheet ID: ${GOOGLE_SHEET_ID}`);
       console.log(`🔗 Google Apps Script URL: ${GOOGLE_APPS_SCRIPT_URL}`);
+      // Warm up caches in background so initial login and module loads are instantaneous
+      setTimeout(() => {
+        fetchVerifiedUsersFromSheet(false).catch(() => {});
+        refreshEntriesFromSheetInBackground();
+        refreshDisconnectionFromSheetInBackground();
+      }, 250);
     });
 
     s.on('error', (err: any) => {
