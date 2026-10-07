@@ -4,3 +4,72 @@ html, body, #root {
   overflow-x: hidden;
   max-width: 100%;
 }
+
+.print-only-report {
+  display: none;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm 14mm;
+}
+
+@media print {
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide all application UI, navigation, sidebars, modals, and buttons when printing */
+  body > *:not(.print-only-report) {
+    display: none !important;
+  }
+
+  /* Print ONLY the dedicated A4 Daily Disconnection Report */
+  body > .print-only-report {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  .print-only-report table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+  }
+
+  .print-only-report thead {
+    display: table-header-group !important;
+  }
+
+  .print-only-report tfoot {
+    display: table-footer-group !important;
+  }
+
+  .print-only-report tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .print-only-report .report-summary-block,
+  .print-only-report .report-footer-block {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}

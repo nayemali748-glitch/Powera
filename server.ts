@@ -112,7 +112,15 @@ function normalizeServerEntry(entry: any): any {
 
   raw.submissionId = raw.submissionId || raw['Submission ID'] || raw['SubmissionID'] || raw['submission_id'] || '';
   raw.id = raw.id || raw['Record ID'] || raw['RecordID'] || raw['record_id'] || raw['ID'] || raw.submissionId || '';
-  raw.category = toFrontendCategory(raw.category || raw['Category'] || 'NSC');
+  const looksLikeDiscRow =
+    raw['Discon Status'] !== undefined ||
+    raw.disconStatus !== undefined ||
+    raw.taskStatus !== undefined ||
+    String(raw.id || '').toUpperCase().startsWith('TASK-DISC-') ||
+    String(raw.id || '').toUpperCase().startsWith('PWR-DIS-');
+  raw.category = toFrontendCategory(
+    raw.category || raw['Category'] || (looksLikeDiscRow ? 'DISCONNECTION' : 'NSC')
+  );
   if (raw.category === 'DISCONNECTION') {
     raw.status = raw['Discon Status'] || raw.disconStatus || raw.taskStatus || raw.status || raw['Status'] || 'PENDING';
     raw.id = raw.id || String(raw['Consumer Id'] || raw['Consumer ID'] || raw.consumerId || raw.taskId || '').trim();
@@ -1553,17 +1561,9 @@ app.all('/api/gas-proxy', async (req, res) => {
       const allTasks = cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0
         ? mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks)
         : await fetchDisconnectionTasksFromGoogleSheet();
-      const role = String(payload?.role || '').toLowerCase();
       const workerId = String(payload?.workerId || '').toLowerCase().trim();
       const workerName = String(payload?.workerName || '').toLowerCase().trim();
-      let filtered = allTasks;
-      if (role === 'worker' && (workerId || workerName)) {
-        filtered = allTasks.filter((t: any) => {
-          const aId = String(t.assignedWorkerId || '').toLowerCase().trim();
-          const aNm = String(t.assignedWorkerName || '').toLowerCase().trim();
-          return (!aId && !aNm) || (workerId && aId === workerId) || (workerName && aNm === workerName);
-        });
-      }
+      const filtered = allTasks;
       const stats = computeLocalStats(filtered, workerId, workerName);
       return res.json({
         success: true,
@@ -1734,7 +1734,12 @@ function loadDiskPersistence() {
     if (fs.existsSync(ENTRIES_CACHE_FILE)) {
       const arr = JSON.parse(fs.readFileSync(ENTRIES_CACHE_FILE, 'utf-8'));
       if (Array.isArray(arr) && arr.length > 0) {
-        cachedEntriesState = { entries: arr, timestamp: Date.now() - 10000 };
+        const cleaned = arr.filter((e: any) => {
+          const catUp = String(e?.category || e?.Category || '').toUpperCase().trim();
+          const idUp = String(e?.id || '').toUpperCase().trim();
+          return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
+        });
+        cachedEntriesState = { entries: cleaned, timestamp: Date.now() - 10000 };
       }
     }
   } catch {}
@@ -2088,9 +2093,10 @@ function buildNscSheetPayloadFields(payload: any): Record<string, any> {
 
 async function fetchIsolatedModuleEntriesFromSheet(sheetTabName: string, forceRefresh = false): Promise<any[]> {
   const canonicalTab = toSheetTabCategory(sheetTabName);
+  const expectedFrontendCat = toFrontendCategory(canonicalTab);
   const cached = moduleEntriesCacheMap.get(canonicalTab);
   if (!forceRefresh && cached && (Date.now() - cached.timestamp < 30000)) {
-    return mergeEntriesWithOverlay(cached.entries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+    return mergeEntriesWithOverlay(cached.entries).filter(e => e.category === expectedFrontendCat);
   }
   if (forceRefresh) {
     gasCache.clear();
@@ -2098,18 +2104,29 @@ async function fetchIsolatedModuleEntriesFromSheet(sheetTabName: string, forceRe
   const result = await callGoogleAppsScript('entries', { category: canonicalTab }, 'GET', 25000);
   if (!result || result.success === false) {
     if (cached) {
-      return mergeEntriesWithOverlay(cached.entries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+      return mergeEntriesWithOverlay(cached.entries).filter(e => e.category === expectedFrontendCat);
     }
     if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-      return mergeEntriesWithOverlay(cachedEntriesState.entries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+      return mergeEntriesWithOverlay(cachedEntriesState.entries).filter(e => e.category === expectedFrontendCat);
     }
     throw new Error(result?.error?.message || result?.error || `Failed to read ${canonicalTab} tab from Google Sheets`);
   }
-  const rawEntries = extractEntriesArray(result).map((r: any) => ({
-    ...r,
-    category: toFrontendCategory(r.category || r['Category'] || canonicalTab)
-  }));
-  const merged = mergeEntriesWithOverlay(rawEntries).filter(e => toSheetTabCategory(e.category) === canonicalTab);
+  const rawEntries = extractEntriesArray(result)
+    .filter((r: any) => {
+      if (!r || typeof r !== 'object') return false;
+      const rawCat = String(r.category || r['Category'] || '').trim();
+      if (rawCat && toSheetTabCategory(rawCat) !== canonicalTab) return false;
+      const idStr = String(r.id || r['Record ID'] || r.taskId || '').toUpperCase().trim();
+      if (canonicalTab !== 'Disconnection' && (idStr.startsWith('TASK-DISC-') || idStr.startsWith('PWR-DIS-'))) {
+        return false;
+      }
+      return true;
+    })
+    .map((r: any) => ({
+      ...r,
+      category: expectedFrontendCat
+    }));
+  const merged = mergeEntriesWithOverlay(rawEntries).filter(e => e.category === expectedFrontendCat);
   moduleEntriesCacheMap.set(canonicalTab, { entries: merged, timestamp: Date.now() });
   return merged;
 }
@@ -2485,8 +2502,10 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
     .filter((e: any) => {
       if (!e || isRecordDeleted(e)) return false;
       const catUpper = String(e.category || '').toUpperCase().trim();
-      if (isNonFieldEntryCategory(catUpper)) return false;
-      if (catUpper === 'DISCONNECTION' && !isValidDisconnectionConsumerRow(e)) return false;
+      const idUpper = String(e.id || '').toUpperCase().trim();
+      if (isNonFieldEntryCategory(catUpper) || catUpper === 'DISCONNECTION' || idUpper.startsWith('TASK-DISC-') || idUpper.startsWith('PWR-DIS-')) {
+        return false;
+      }
       return true;
     });
 
@@ -2500,8 +2519,10 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
   for (const [k, ov] of localEntriesOverlayMap.entries()) {
     if (isRecordDeleted(ov)) continue;
     const ovCatUpper = String(ov?.category || '').toUpperCase().trim();
-    if (isNonFieldEntryCategory(ovCatUpper)) continue;
-    if (ovCatUpper === 'DISCONNECTION' && !isValidDisconnectionConsumerRow(ov)) continue;
+    const ovIdUpper = String(ov?.id || '').toUpperCase().trim();
+    if (isNonFieldEntryCategory(ovCatUpper) || ovCatUpper === 'DISCONNECTION' || ovIdUpper.startsWith('TASK-DISC-') || ovIdUpper.startsWith('PWR-DIS-')) {
+      continue;
+    }
     const existing = resultMap.get(k);
     const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
     if (existing) {
@@ -2544,31 +2565,21 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === 'Disconnection') {
       if (!forceRefresh && cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0) {
-        return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(normalizeServerEntry);
+        return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(t =>
+          normalizeServerEntry({ ...t, category: 'DISCONNECTION' })
+        );
       }
       const tasks = await fetchDisconnectionTasksFromGoogleSheet();
-      return tasks.map(normalizeServerEntry);
+      return tasks.map(t => normalizeServerEntry({ ...t, category: 'DISCONNECTION' }));
     }
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
-
-  const buildCombinedWithDisconnection = (fieldEntries: any[]) => {
-    const mergedFields = mergeEntriesWithOverlay(fieldEntries);
-    const discTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
-    const discEntries = discTasks.map(normalizeServerEntry);
-    const map = new Map<string, any>();
-    for (const item of [...mergedFields, ...discEntries]) {
-      const k = String(item.id || item.submissionId || item.consumerId || '').trim().toLowerCase();
-      if (k) map.set(k, item);
-    }
-    return Array.from(map.values());
-  };
 
   if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && cachedEntriesState.entries.length > 0) {
     if (Date.now() - cachedEntriesState.timestamp >= 45000) {
       refreshEntriesFromSheetInBackground();
     }
-    return buildCombinedWithDisconnection(cachedEntriesState.entries);
+    return mergeEntriesWithOverlay(cachedEntriesState.entries);
   }
 
   try {
@@ -2595,9 +2606,9 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
         setTimeout(() => resolve(cachedEntriesState?.entries || []), 6000)
       )
     ]);
-    return buildCombinedWithDisconnection(result);
+    return mergeEntriesWithOverlay(result);
   } catch {
-    return buildCombinedWithDisconnection(cachedEntriesState?.entries || []);
+    return mergeEntriesWithOverlay(cachedEntriesState?.entries || []);
   }
 }
 
@@ -5102,7 +5113,7 @@ async function startServer() {
       try {
         const { createServer: createViteServer } = await import('vite');
         const vite = await createViteServer({
-          server: { middlewareMode: true },
+          server: { middlewareMode: true, hmr: false },
           appType: 'spa',
         });
         viteMiddleware = vite.middlewares;

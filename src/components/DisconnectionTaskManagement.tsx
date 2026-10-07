@@ -21,7 +21,18 @@ import {
   Sparkles,
   MoreVertical,
   MessageSquareWarning,
-  RotateCcw
+  RotateCcw,
+  FileText,
+  Download,
+  List,
+  Calendar,
+  BarChart2,
+  Settings,
+  Bell,
+  MessageSquarePlus,
+  Palette,
+  KeyRound,
+  LogOut
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
@@ -57,6 +68,12 @@ import { DisconnectionUpload } from './disconnection/DisconnectionUpload';
 import { DisconnectionReport } from './disconnection/DisconnectionReport';
 import { DisconnectionConsumerCard } from './disconnection/DisconnectionConsumerCard';
 import { DisconnectionUpdateModal } from './disconnection/DisconnectionUpdateModal';
+import {
+  DisconnectionDailyReportModal,
+  downloadDailyDisconnectionReportPdf,
+  formatYMDToDotDate,
+  getTaskReportYMD
+} from './disconnection/DisconnectionDailyReportModal';
 
 export type DisconnectionTab = 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST';
 
@@ -123,6 +140,53 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [sortBy, setSortBy] = useState<'SERIAL_ASC' | 'DUE_DESC' | 'DUE_ASC' | 'NAME_ASC' | 'URGENT_FIRST' | 'NEWEST'>('SERIAL_ASC');
   const [workerOnlyFilter, setWorkerOnlyFilter] = useState<boolean>(false);
   const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
+  const [showHeaderThreeDotMenu, setShowHeaderThreeDotMenu] = useState<boolean>(false);
+  const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState<boolean>(false);
+
+  const triggerDailyReportPdfDownload = () => {
+    const ymds = filteredTasks.map(getTaskReportYMD).filter(Boolean).sort();
+    const now = new Date();
+    const todayDot = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
+    const fromDot = ymds.length > 0 ? formatYMDToDotDate(ymds[0]) : todayDot;
+    const toDot = ymds.length > 0 ? formatYMDToDotDate(ymds[ymds.length - 1]) : todayDot;
+    downloadDailyDisconnectionReportPdf(filteredTasks, fromDot, toDot);
+  };
+
+  const triggerDailyReportPrint = () => {
+    setIsDailyReportModalOpen(true);
+    setTimeout(() => {
+      try {
+        window.print();
+      } catch {
+        // ignore if print is blocked
+      }
+    }, 150);
+  };
+
+  const handleExportDCListCsv = (filenamePrefix = 'DC_List') => {
+    const headers = ['SL No', 'Consumer ID', 'Consumer Name', 'Address', 'Mobile', 'MRU', 'Phase', 'Class', 'Outstanding Due', 'Status', 'Agency', 'Remarks'];
+    const rows = filteredTasks.map((t, idx) => [
+      `"${t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`}"`,
+      `"${t.consumerId || (t as any)['Consumer Id'] || ''}"`,
+      `"${String(t.consumerName || '').replace(/"/g, '""')}"`,
+      `"${String(t.consumerAddress || '').replace(/"/g, '""')}"`,
+      `"${t.phoneNumber || ''}"`,
+      `"${t.mru || t.mruSection || ''}"`,
+      `"${getTaskPhase(t)}"`,
+      `"${t.classType || t.baseClass || getTaskConnectionClass(t) || ''}"`,
+      `"${t.outstandingDue || 0}"`,
+      `"${t.disconStatus || t.taskStatus || 'PENDING'}"`,
+      `"${cleanWorkerOrAgencyName(t.assignedAgency || t.assignedWorkerName || '')}"`,
+      `"${String(cleanDisconnectionNotes(t.workerRemarks || t.notes || '')).replace(/"/g, '""')}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const link = document.createElement('a');
+    link.setAttribute('href', encodeURI(csvContent));
+    link.setAttribute('download', `${filenamePrefix}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Update Status Modal
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
@@ -655,10 +719,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       else phase1++;
 
       const cls = getTaskConnectionClass(t);
-      if (cls === 'COMMERCIAL') commercial++;
+      if (cls === 'DOMESTIC') domestic++;
+      else if (cls === 'COMMERCIAL') commercial++;
       else if (cls === 'INDUSTRIAL') industrial++;
       else if (cls === 'STW') stw++;
-      else domestic++;
     });
 
     return {
@@ -716,6 +780,251 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-black whitespace-nowrap">
             {tasks.length} Records
           </span>
+
+          {/* Highlighted Three-Dot Menu next to Records */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              id="disconnection-header-three-dot-btn"
+              onClick={() => setShowHeaderThreeDotMenu(prev => !prev)}
+              className="p-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 border-2 border-amber-300 ring-2 ring-amber-400/50 shadow-md transition-all cursor-pointer active:scale-95 flex items-center justify-center relative"
+              title="More Options"
+            >
+              <MoreVertical className="w-4 h-4 stroke-[2.5]" />
+            </button>
+
+            {showHeaderThreeDotMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-40 bg-slate-900/20"
+                  onClick={() => setShowHeaderThreeDotMenu(false)}
+                />
+                <div className="fixed right-3 sm:right-6 top-16 sm:top-20 w-[min(88vw,280px)] max-h-[82vh] overflow-y-auto bg-white text-slate-900 border border-slate-200 rounded-2xl shadow-2xl z-50 py-1 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Downloads Section */}
+                  <div className="px-4 py-2.5 border-b border-slate-100">
+                    <span className="text-sm font-bold text-slate-900">Downloads</span>
+                  </div>
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        triggerDailyReportPdfDownload();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-red-500 shrink-0" />
+                      <span>Download DC List (PDF)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        handleExportDCListCsv('DC_List_Excel');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Download DC List (Excel)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        triggerDailyReportPrint();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Download className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Daily Report (Print)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        handleExportDCListCsv('Disconnection_Report');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Download className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Download Report</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        if (isAdmin) setActiveTab('REPORT');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Clock className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>History Report</span>
+                    </button>
+                  </div>
+
+                  {/* Updates Section */}
+                  <div className="px-4 py-2.5 border-y border-slate-100">
+                    <span className="text-sm font-bold text-slate-900">Updates</span>
+                  </div>
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        setSortBy('NEWEST');
+                        setActiveTab('VIEW_LIST');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <List className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Agency Last Updates</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        if (isAdmin) setActiveTab('REPORT');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Agency Updates Report</span>
+                    </button>
+                  </div>
+
+                  {/* Analysis Section */}
+                  <div className="px-4 py-2.5 border-y border-slate-100">
+                    <span className="text-sm font-bold text-slate-900">Analysis</span>
+                  </div>
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        if (isAdmin) {
+                          setActiveTab('DASHBOARD');
+                          setIsDashboardExpanded(true);
+                        }
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <BarChart2 className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Analysis Dashboard</span>
+                    </button>
+                  </div>
+
+                  {/* Admin Section */}
+                  <div className="px-4 py-2.5 border-y border-slate-100">
+                    <span className="text-sm font-bold text-slate-900">Admin</span>
+                  </div>
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        if (isAdmin) setActiveTab('UPLOAD');
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Edit DC List</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Settings className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Admin Settings</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-emerald-700 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Bell className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Broadcast Push Alert</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        loadData(true);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <RefreshCw className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Sync Fresh Data</span>
+                    </button>
+                  </div>
+
+                  {/* General / Preferences Section */}
+                  <div className="py-1 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <MessageSquarePlus className="w-4 h-4 text-amber-500 shrink-0" />
+                      <span>My Feedback & Rating</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <Palette className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span>Home Card Theme</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <KeyRound className="w-4 h-4 text-slate-800 shrink-0" />
+                      <span>Change Password</span>
+                    </button>
+                  </div>
+
+                  {/* Logout Section */}
+                  <div className="py-1 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        if (onBack) onBack();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-red-600 hover:bg-red-50 flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <LogOut className="w-4 h-4 text-red-600 shrink-0" />
+                      <span>Logout</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
           <button
             id="global-refresh-btn"
             onClick={() => loadData(true)}
@@ -1488,24 +1797,46 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
                               {lang === 'bn' ? 'ক্লাস ফিল্টার (Class)' : 'Class Filter'}
                             </span>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              {(['ALL', 'DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(cls => (
-                                <button
-                                  key={cls}
-                                  type="button"
-                                  onClick={() => {
-                                    setClassFilter(cls);
-                                    setShowThreeDotMenu(false);
-                                  }}
-                                  className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold text-left cursor-pointer ${
-                                    classFilter === cls
-                                      ? 'bg-slate-900 text-white'
-                                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  {cls === 'ALL' ? 'All Class' : cls}
-                                </button>
-                              ))}
+                            <div className="flex items-center justify-between gap-1 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setClassFilter('ALL');
+                                  setShowThreeDotMenu(false);
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer transition-all shrink-0 ${
+                                  classFilter === 'ALL'
+                                    ? 'bg-slate-900 text-white shadow-2xs'
+                                    : 'text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                All Class
+                              </button>
+                              <div className="flex items-center gap-1">
+                                {(['DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(cls => (
+                                  <button
+                                    key={cls}
+                                    type="button"
+                                    onClick={() => {
+                                      setClassFilter(cls);
+                                      setShowThreeDotMenu(false);
+                                    }}
+                                    className={`w-7 h-7 rounded-lg text-[11px] font-black flex items-center justify-center cursor-pointer transition-all ${
+                                      classFilter === cls
+                                        ? 'bg-slate-900 text-white shadow-2xs'
+                                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    {cls === 'DOMESTIC'
+                                      ? 'D'
+                                      : cls === 'COMMERCIAL'
+                                      ? 'C'
+                                      : cls === 'INDUSTRIAL'
+                                      ? 'I'
+                                      : 'S'}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1584,6 +1915,16 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           lang={lang}
         />
       )}
+
+      {/* DAILY DISCONNECTION REPORT SHEET MODAL (WITH DATE RANGE & PDF DOWNLOAD) */}
+      <DisconnectionDailyReportModal
+        isOpen={isDailyReportModalOpen}
+        onClose={() => setIsDailyReportModalOpen(false)}
+        tasks={tasks}
+        activeClassFilter={classFilter}
+        onClassFilterChange={setClassFilter}
+        activeStatusFilter={statusFilter}
+      />
     </div>
   );
 };

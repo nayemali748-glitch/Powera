@@ -177,9 +177,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Category-specific Excel/CSV Export handler
   const handleExportCategoryExcel = (targetCategory: string = selectedCategory) => {
-    let targetEntries = entries;
-    if (targetCategory !== 'ALL') {
-      targetEntries = entries.filter((e) => e.category === targetCategory);
+    let targetEntries = activeEntries;
+    if (targetCategory === 'DISCONNECTION') {
+      targetEntries = discEntriesFromTasks;
+    } else if (targetCategory !== 'ALL') {
+      targetEntries = activeEntries.filter((e) => e.category === targetCategory);
     }
 
     if (targetEntries.length === 0) {
@@ -543,13 +545,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return false;
   }, [locallyDeletedIds]);
 
-  const activeEntries = React.useMemo(() => entries.filter(e => !isDeletedLocally(e)), [entries, isDeletedLocally]);
+  const activeEntries = React.useMemo(
+    () =>
+      entries.filter((e) => {
+        if (isDeletedLocally(e)) return false;
+        const catUp = String(e.category || '').toUpperCase().trim();
+        const idUp = String(e.id || '').toUpperCase().trim();
+        return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
+      }),
+    [entries, isDeletedLocally]
+  );
 
-  // Filter calculations
-  const filteredEntries = activeEntries.filter((item) => {
-    if (selectedCategory !== 'ALL' && item.category !== selectedCategory) {
-      return false;
-    }
+  const effectiveDiscTasks: DisconnectionTask[] = React.useMemo(() => {
+    return (disconnectionTasks || []).filter(t => !isDeletedLocally(t));
+  }, [disconnectionTasks, isDeletedLocally]);
+
+  const discEntriesFromTasks: PowerEntry[] = React.useMemo(() => {
+    return effectiveDiscTasks.map((t) => {
+      const raw: any = t;
+      const cid = String(t.consumerId || raw['Consumer Id'] || raw.id || '').replace(/^TASK-DISC-/i, '').trim();
+      const st = String(t.disconStatus || t.taskStatus || raw['Discon Status'] || 'PENDING').toUpperCase();
+      return {
+        id: t.taskId || raw.id || `TASK-DISC-${cid}`,
+        submissionId: cid || t.taskId || raw.id,
+        category: 'DISCONNECTION' as CategoryType,
+        workerName: raw.updatedBy || t.assignedWorkerName || raw.agencyName || t.assignedAgency || raw['Agency'] || 'Field Team',
+        feederName: t.mruSection || raw['MRU'] || '',
+        substation: '',
+        date: t.disconDate || t.reportDate || t.updatedAt || t.createdAt || '',
+        createdAt: t.createdAt || t.disconDate || t.reportDate || new Date().toISOString(),
+        status:
+          st.includes('PAID') || st.includes('DISCONNECT') || st.includes('COMPLETE')
+            ? 'Completed'
+            : 'Pending',
+        notes: raw.remarks || t.workerRemarks || t.workerReport || raw['Notes'] || '',
+        reason: raw.remarks || t.workerRemarks || raw['Notes'] || 'Non-Payment of Electricity Dues',
+        consumerId: cid,
+        consumerName: t.consumerName || raw['Name'] || '',
+        mobile: t.mobile || t.phoneNumber || raw['Mobile'] || '',
+        address: raw.address || t.consumerAddress || raw['Address'] || '',
+        meterNo: raw.meterNo || t.meterNumber || raw['Number'] || '',
+        poleNo: raw.poleNo || t.gisPole || raw['Gis Pole'] || '',
+        arrearAmount: raw.arrearAmount || t.outstandingDue || raw['D2 Net O/S'] || '0',
+        finalReading: t.meterReading || raw['Reading'] || '0',
+        disconStatus: st,
+        baseClass: t.baseClass || raw['Base Class'] || raw['Class'] || '',
+        device: t.device || t.deviceType || raw['Device'] || '',
+        phase: t.device || t.deviceType || raw['Device'] || '',
+        tariffCategory: t.baseClass || raw['Class'] || '',
+        agencyName: raw.agencyName || t.assignedAgency || raw['Agency'] || '',
+      };
+    });
+  }, [effectiveDiscTasks]);
+
+  // Filter calculations strictly isolated per category tab
+  const sourceEntriesForSelectedCategory =
+    selectedCategory === 'DISCONNECTION'
+      ? discEntriesFromTasks
+      : selectedCategory === 'ALL'
+        ? activeEntries
+        : activeEntries.filter((item) => item.category === selectedCategory);
+
+  const filteredEntries = sourceEntriesForSelectedCategory.filter((item) => {
     if (selectedStatus !== 'ALL' && item.status !== selectedStatus) {
       return false;
     }
@@ -561,39 +618,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return true;
   });
 
-  const effectiveDiscTasks: DisconnectionTask[] = React.useMemo(() => {
-    if (disconnectionTasks && disconnectionTasks.length > 0) {
-      return disconnectionTasks.filter(t => !isDeletedLocally(t));
-    }
-    return activeEntries
-      .filter((e) => e.category === 'DISCONNECTION')
-      .map((e) => ({
-        id: e.id || `TASK-DISC-${e.consumerId}`,
-        consumerId: e.consumerId || e.id,
-        consumerName: e.consumerName || 'N/A',
-        address: e.address || '',
-        mobile: e.mobile || '',
-        meterNo: e.meterNo || '',
-        poleNo: e.poleNo || '',
-        arrearAmount: e.arrearAmount || '0',
-        disconStatus: e.disconStatus || e.status || 'CONNECTED',
-        agencyName: e.agencyName || '',
-        updatedBy: e.workerName || '',
-        updatedAt: e.date || '',
-        remarks: e.notes || e.reason || '',
-        baseClass: e.baseClass || e.tariffCategory || '',
-        device: e.device || e.phase || '',
-        category: e.tariffCategory || e.baseClass || '',
-      }));
-  }, [disconnectionTasks, activeEntries, isDeletedLocally]);
-
-  // Metrics summary
+  // Metrics summary (strictly 1-to-1 with Backend Google Sheet tabs)
   const nscCount = activeEntries.filter(e => e.category === 'NSC').length;
-  const discCount = Math.max(activeEntries.filter(e => e.category === 'DISCONNECTION').length, effectiveDiscTasks.length);
+  const discCount = effectiveDiscTasks.length;
   const poleCount = activeEntries.filter(e => e.category === 'POLE CASE').length;
   const meterCount = activeEntries.filter(e => e.category === 'METER REPLESMENT').length;
   const dtrCount = activeEntries.filter(e => e.category === 'DTR REPLESMENT').length;
-  const total = Math.max(activeEntries.length, nscCount + discCount + poleCount + meterCount + dtrCount);
+  const total = nscCount + discCount + poleCount + meterCount + dtrCount;
   
   const pendingCount = activeEntries.filter(e => e.status === 'Pending').length;
   const completedCount = activeEntries.filter(e => e.status === 'Completed').length;

@@ -220,66 +220,23 @@ export default function App() {
           refresh: forceRefresh
         })
       ]);
-      const rawEntries = Array.isArray(data) ? data : [];
+      const rawEntries = (Array.isArray(data) ? data : []).filter((e) => {
+        const catUp = String(e?.category || '').toUpperCase().trim();
+        const idUp = String(e?.id || '').toUpperCase().trim();
+        return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
+      });
       const validDiscTasks: DisconnectionTask[] = Array.isArray(discRes)
         ? discRes
         : Array.isArray((discRes as any)?.tasks)
           ? (discRes as any).tasks
           : [];
 
-      // Ensure every consumer in validDiscTasks is also represented in entries under 'DISCONNECTION'
-      const existingDiscIds = new Set(
-        rawEntries
-          .filter((e) => String(e.category || '').toUpperCase() === 'DISCONNECTION')
-          .map((e) => String(e.consumerId || e.id || '').replace(/^TASK-DISC-/i, '').trim())
-          .filter(Boolean)
-      );
-
-      const extraDiscEntries: PowerEntry[] = validDiscTasks
-        .filter((t) => {
-          const cid = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '').replace(/^TASK-DISC-/i, '').trim();
-          return cid && !existingDiscIds.has(cid);
-        })
-        .map((t) => {
-          const cid = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
-          const st = String(t.taskStatus || t.disconStatus || (t as any)['Discon Status'] || 'PENDING').toUpperCase();
-          return {
-            id: t.taskId || `TASK-DISC-${cid}`,
-            submissionId: cid || t.taskId,
-            category: 'DISCONNECTION' as CategoryType,
-            workerName: t.assignedWorkerName || t.assignedAgency || (t as any)['Agency'] || 'Field Team',
-            feederName: t.mruSection || (t as any)['MRU'] || '',
-            substation: '',
-            date: t.disconDate || t.reportDate || t.updatedAt || t.createdAt || '',
-            createdAt: t.createdAt || t.disconDate || t.reportDate || new Date().toISOString(),
-            status:
-              st.includes('PAID') || st.includes('DISCONNECT') || st.includes('COMPLETE')
-                ? 'Completed'
-                : 'Pending',
-            notes: t.workerRemarks || t.workerReport || (t as any)['Notes'] || '',
-            consumerId: cid,
-            consumerName: t.consumerName || (t as any)['Name'] || '',
-            mobile: t.phoneNumber || (t as any)['Mobile'] || '',
-            address: t.consumerAddress || (t as any)['Address'] || '',
-            meterNo: t.meterNumber || (t as any)['Number'] || '',
-            poleNo: t.gisPole || (t as any)['Gis Pole'] || '',
-            arrearAmount: t.outstandingDue || (t as any)['D2 Net O/S'] || '0',
-            disconStatus: st,
-            baseClass: t.baseClass || (t as any)['Base Class'] || (t as any)['Class'] || '',
-            device: t.deviceType || (t as any)['Device'] || '',
-            phase: t.deviceType || (t as any)['Device'] || '',
-            tariffCategory: t.baseClass || (t as any)['Class'] || '',
-            agencyName: t.assignedAgency || (t as any)['Agency'] || '',
-          };
-        });
-
-      const currentData = [...rawEntries, ...extraDiscEntries];
-      const newHash = `${computeJsonChangeHash(currentData)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
+      const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
 
       if (forceRefresh || newHash !== lastDataHashRef.current) {
         lastDataHashRef.current = newHash;
         setDisconnectionTasks(validDiscTasks);
-        setEntries(currentData);
+        setEntries(rawEntries);
       }
       if (Array.isArray(orders)) {
         const ordersHash = computeJsonChangeHash(orders);
@@ -533,13 +490,10 @@ export default function App() {
     setSidebarOpen(false);
   };
 
-  // Helper count badges
+  // Helper count badges (strictly 1-to-1 per backend Google Sheet tab)
   const categoryCounts: Record<CategoryType, number> = {
     'NSC': entries.filter(e => e.category === 'NSC').length,
-    'DISCONNECTION': Math.max(
-      entries.filter(e => e.category === 'DISCONNECTION').length,
-      disconnectionTasks.length
-    ),
+    'DISCONNECTION': disconnectionTasks.length,
     'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
     'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
     'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
@@ -1178,6 +1132,33 @@ export default function App() {
                     onDataUpdated={() => loadData(false)}
                     lang={currentLanguage}
                   />
+
+                  {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
+                  {activeFormCategory !== 'DISCONNECTION' && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-600" />
+                          <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                            {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
+                          </h4>
+                        </div>
+                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                          Live {activeFormCategory} Sheet Data
+                        </span>
+                      </div>
+                      <WorkerRecentSubmissions
+                        entries={entries.filter(e => e.category === activeFormCategory)}
+                        workerName={workerName}
+                        currentUser={currentUser}
+                        onSelectEntry={(entry) => setPreviewEntry(entry)}
+                        onNewEntry={() => {
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        lang={currentLanguage}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

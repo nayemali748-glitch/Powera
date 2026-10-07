@@ -137,10 +137,10 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
       if (getTaskPhase(t) === '3PH') ph3++;
       else ph1++;
       const c = getTaskConnectionClass(t);
-      if (c === 'COMMERCIAL') com++;
+      if (c === 'DOMESTIC') dom++;
+      else if (c === 'COMMERCIAL') com++;
       else if (c === 'INDUSTRIAL') ind++;
       else if (c === 'STW') stw++;
-      else dom++;
     });
     return { ph1, ph3, dom, com, ind, stw };
   }, [tasks]);
@@ -684,21 +684,40 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
 
                         <div className="space-y-1.5">
                           <span className="text-[10px] font-black uppercase text-slate-400 block">Class</span>
-                          <div className="grid grid-cols-2 gap-1.5">
-                            {(['ALL', 'DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(clsKey => (
-                              <button
-                                key={clsKey}
-                                type="button"
-                                onClick={() => setSelectedConnClass(clsKey)}
-                                className={`px-2 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border ${
-                                  selectedConnClass === clsKey
-                                    ? 'bg-amber-500 text-slate-950 border-amber-500'
-                                    : 'bg-slate-50 text-slate-700 border-slate-200'
-                                }`}
-                              >
-                                {clsKey === 'ALL' ? 'All Class' : clsKey}
-                              </button>
-                            ))}
+                          <div className="flex items-center justify-between gap-1 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedConnClass('ALL')}
+                              className={`px-2 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer transition-all shrink-0 ${
+                                selectedConnClass === 'ALL'
+                                  ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                                  : 'text-slate-700 hover:bg-slate-200'
+                              }`}
+                            >
+                              All Class
+                            </button>
+                            <div className="flex items-center gap-1">
+                              {(['DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(clsKey => (
+                                <button
+                                  key={clsKey}
+                                  type="button"
+                                  onClick={() => setSelectedConnClass(clsKey)}
+                                  className={`w-7 h-7 rounded-lg text-[11px] font-black flex items-center justify-center cursor-pointer border transition-all ${
+                                    selectedConnClass === clsKey
+                                      ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-2xs'
+                                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  {clsKey === 'DOMESTIC'
+                                    ? 'D'
+                                    : clsKey === 'COMMERCIAL'
+                                    ? 'C'
+                                    : clsKey === 'INDUSTRIAL'
+                                    ? 'I'
+                                    : 'S'}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>

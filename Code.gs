@@ -2391,13 +2391,31 @@ function handleSubmitDisconnectionReport(body) {
     const targetMru = String(body['MRU'] || body.mru || body.mruSection || '').trim();
     const targetOffCode = String(body['off_code'] || body.off_code || body.offCode || '').trim();
 
-    const status = String(body['Discon Status'] || body.taskStatus || body.disconStatus || body.status || 'COMPLETED').trim().toUpperCase();
-    const reportDate = String(body['Discon Date'] || body.disconDate || body.reportDate || body.date || now()).trim();
-    const reading = String(body['Reading'] || body.reading || body.meterReading || body['Meter'] || '').trim();
-    const paymentStatus = String(body['Payment Status'] || body.paymentStatus || (status === 'PAID' ? 'PAID' : '')).trim();
+    const status = String(body['Discon Status'] || body['Status'] || body.disconStatus || body.status || body.taskStatus || 'COMPLETED').trim();
+    const reportDate = String(body['Discon Date'] || body['Disconnection Date'] || body.disconDate || body.disconnectionDate || body.reportDate || body.date || now()).trim();
+    const reading = String(body['Reading'] || body['Meter Reading'] || body.reading || body.meterReading || body['Meter'] || '').trim();
+    const paymentStatus = String(body['Payment Status'] || body.paymentStatus || (status.toUpperCase() === 'PAID' ? 'PAID' : '')).trim();
     const gisPole = String(body['Gis Pole'] || body.gisPole || body.poleNo || '').trim();
     const agency = String(body['Agency'] || body.agency || body.assignedAgency || body.workerName || '').trim();
-    const notes = String(body['Notes'] || body.notes || body.remarks || body.workerRemarks || body.workerReport || '').trim();
+    const rawRemark = String(body['Remarks'] || body['Remark'] || body.remarks || body.remark || '').trim();
+    const rawAdditionalNotes = String(body['Additional Notes'] || body.additionalNotes || '').trim();
+    const rawDirectNotes = String(body['Notes'] || body.notes || body.workerRemarks || body.workerReport || '').trim();
+    let combinedNotes = rawDirectNotes;
+    if (rawRemark && rawAdditionalNotes) {
+      if (rawRemark.toLowerCase() === rawAdditionalNotes.toLowerCase()) {
+        combinedNotes = rawRemark;
+      } else if (rawAdditionalNotes.toLowerCase().indexOf(rawRemark.toLowerCase()) !== -1) {
+        combinedNotes = rawAdditionalNotes;
+      } else {
+        combinedNotes = rawRemark + ' - ' + rawAdditionalNotes;
+      }
+    } else if (rawAdditionalNotes && rawDirectNotes && rawAdditionalNotes.toLowerCase() !== rawDirectNotes.toLowerCase()) {
+      if (rawDirectNotes.toLowerCase().indexOf(rawAdditionalNotes.toLowerCase()) === -1) {
+        combinedNotes = rawDirectNotes + ' - ' + rawAdditionalNotes;
+      }
+    } else if (!combinedNotes) {
+      combinedNotes = rawRemark || rawAdditionalNotes;
+    }
     const priority = String(body['Priority'] || body.priority || 'NORMAL').trim().toUpperCase();
     const paidAmount = String(body['Paid Amount'] || body.paidAmount || '').trim();
     const paidDate = String(body['Paid Date'] || body.paidDate || body.paymentDate || '').trim();
@@ -2441,6 +2459,9 @@ function handleSubmitDisconnectionReport(body) {
 
     const data = s.getDataRange().getValues();
     const headers = data.length > 0 ? data[0].map(function(h) { return String(h || '').trim(); }) : DISCONNECTION_HEADERS;
+    const hasSeparateRemarksCol = headers.indexOf('Remarks') !== -1 || headers.indexOf('Remark') !== -1;
+    const notes = hasSeparateRemarksCol ? (rawAdditionalNotes || rawDirectNotes || combinedNotes) : combinedNotes;
+    const remarksColVal = rawRemark || combinedNotes;
 
     const cIdIdx = headers.indexOf('Consumer Id');
     const mruIdx = headers.indexOf('MRU');
@@ -2499,6 +2520,7 @@ function handleSubmitDisconnectionReport(body) {
     // Worker CANNOT modify A:N source data or AG Upload Date!
     const operationalUpdateMap = {
       'Discon Status': status,
+      'Status': status,
       'Discon Date': reportDate,
       'Image': finalImageUrl,
       'Reading': reading,
@@ -2506,6 +2528,8 @@ function handleSubmitDisconnectionReport(body) {
       'Gis Pole': gisPole,
       'Agency': agency,
       'Notes': notes,
+      'Remarks': remarksColVal,
+      'Remark': remarksColVal,
       'Last Updated': nowTimestamp,
       'Priority': priority,
       'Paid Amount': paidAmount,

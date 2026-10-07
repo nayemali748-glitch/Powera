@@ -50,7 +50,13 @@ function writeCache<T>(key: string, value: T) {
 export function getCachedEntriesSync(): PowerEntry[] {
   try {
     const raw = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
-    return Array.isArray(raw) ? deduplicateEntries(raw.map(e => normalizeEntry(e))) : [];
+    if (!Array.isArray(raw)) return [];
+    const cleaned = raw.filter((e: any) => {
+      const catUp = String(e?.category || '').toUpperCase().trim();
+      const idUp = String(e?.id || '').toUpperCase().trim();
+      return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
+    });
+    return deduplicateEntries(cleaned.map(e => normalizeEntry(e)));
   } catch {
     return [];
   }
@@ -70,8 +76,8 @@ function sanitizeEntriesForCache(entries: PowerEntry[]): PowerEntry[] {
     ...e,
     photoUrl: e.photoUrl && e.photoUrl.startsWith('data:') && e.photoUrl.length > 2000 ? '' : e.photoUrl,
     workOrderPhoto: e.workOrderPhoto && e.workOrderPhoto.startsWith('data:') && e.workOrderPhoto.length > 2000 ? '' : e.workOrderPhoto,
-    photoBefore: e.photoBefore && e.photoBefore.startsWith('data:') && e.photoBefore.length > 2000 ? '' : e.photoBefore,
-    photoAfter: e.photoAfter && e.photoAfter.startsWith('data:') && e.photoAfter.length > 2000 ? '' : e.photoAfter,
+    photoBeforeUrl: e.photoBeforeUrl && e.photoBeforeUrl.startsWith('data:') && e.photoBeforeUrl.length > 2000 ? '' : e.photoBeforeUrl,
+    photoAfterUrl: e.photoAfterUrl && e.photoAfterUrl.startsWith('data:') && e.photoAfterUrl.length > 2000 ? '' : e.photoAfterUrl,
   }));
 }
 
@@ -322,8 +328,13 @@ export async function fetchEntries(filters?: {
           ? fastData
           : (Array.isArray(fastData?.entries) ? fastData.entries : (Array.isArray(fastData?.data) ? fastData.data : null));
         if (Array.isArray(fastArr)) {
+          const wantDisc = String(filters?.category || '').toUpperCase().trim() === 'DISCONNECTION';
           const filteredFast = fastArr.filter((e: any) => {
             const catUp = String(e?.category || '').toUpperCase().trim();
+            const idUp = String(e?.id || '').toUpperCase().trim();
+            if (!wantDisc && (catUp === 'DISCONNECTION' || idUp.startsWith('TASK-DISC-') || idUp.startsWith('PWR-DIS-'))) {
+              return false;
+            }
             return (
               catUp !== 'USERS' &&
               catUp !== 'USERS_AUTH' &&

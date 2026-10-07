@@ -136,10 +136,10 @@ export const DisconnectionDashboard: React.FC<DisconnectionDashboardProps> = ({
       else phase1Count++;
 
       const cls = getTaskConnectionClass(t);
-      if (cls === 'COMMERCIAL') commercialCount++;
+      if (cls === 'DOMESTIC') domesticCount++;
+      else if (cls === 'COMMERCIAL') commercialCount++;
       else if (cls === 'INDUSTRIAL') industrialCount++;
       else if (cls === 'STW') stwCount++;
-      else domesticCount++;
 
       // Group workers (Name only, no ID)
       const wName = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '') || 'Unassigned';

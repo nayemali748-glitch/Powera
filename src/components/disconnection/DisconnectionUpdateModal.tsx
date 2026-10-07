@@ -111,23 +111,30 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   // Sync state when task changes
   useEffect(() => {
     if (task) {
-      const initialSt = (task.taskStatus as DisconnectionTaskStatus) || 'DISCONNECT';
-      setSelectedStatus(initialSt === 'PENDING' ? 'DISCONNECT' : initialSt);
+      const rawSt = String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || (task as any)['Status'] || 'DISCONNECT').trim().toUpperCase();
+      const normalizedSt: DisconnectionTaskStatus =
+        rawSt === 'DISCONNECTED' || rawSt === 'COMPLETED' || rawSt === 'DISCONNECT'
+          ? 'DISCONNECT'
+          : (rawSt as DisconnectionTaskStatus);
+      setSelectedStatus(normalizedSt);
       setIsUrgent(String(task.priority || '').toUpperCase() === 'URGENT');
       setAssignedAgency(cleanWorkerOrAgencyName(task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || ''));
       setPhotoDataUrl(task.photoUrl || (task as any)['Image'] || '');
-      setMeterReading(task.meterReading || (task as any)['Reading'] || '');
-      setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || ''));
-      setPaidAmount(initialSt === 'PAID' ? (task.paidAmount || (task as any)['Paid Amount'] || '') : '');
-      setPaymentDate(task.paymentDate || (task as any)['Paid Date'] || new Date().toISOString().split('T')[0]);
-      setPaymentReference(task.paymentReference || (task as any)['Paid Type'] || '');
-      setDisconDate(task.disconDate || task.reportDate || (task as any)['Discon Date'] || new Date().toISOString().split('T')[0]);
-      setGisPole(task.gisPole || (task as any)['Gis Pole'] || '');
-      setPaymentStatus(task.paymentStatus || (task as any)['Payment Status'] || (initialSt === 'PAID' ? 'PAID' : 'UNPAID'));
-      setPaidType(task.paidType || (task as any)['Paid Type'] || task.paymentReference || '');
-      setOutstandingAfter(task.outstandingAfter || (task as any)['Outstanding After'] || '');
-      setNextPaymentDate(task.nextPaymentDate || (task as any)['Next Payment Date'] || '');
-      setPaymentSource(task.paymentSource || (task as any)['Payment Source'] || '');
+      setMeterReading(String(task.meterReading ?? (task as any)['Reading'] ?? '').trim());
+      setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || (task as any)['Remarks'] || ''));
+      setPaidAmount(String(task.paidAmount ?? (task as any)['Paid Amount'] ?? '').trim());
+      const rawPaidDate = String(task.paymentDate || task.paidDate || (task as any)['Paid Date'] || '').trim();
+      setPaymentDate((rawPaidDate ? rawPaidDate.split('T')[0] : '') || new Date().toISOString().split('T')[0]);
+      setPaymentReference(String(task.paymentReference || task.paidType || (task as any)['Paid Type'] || '').trim());
+      const rawDisconDate = String(task.disconDate || task.reportDate || (task as any)['Discon Date'] || '').trim();
+      setDisconDate((rawDisconDate ? rawDisconDate.split('T')[0] : '') || new Date().toISOString().split('T')[0]);
+      setGisPole(String(task.gisPole ?? (task as any)['Gis Pole'] ?? '').trim());
+      const rawPayStatus = String(task.paymentStatus || (task as any)['Payment Status'] || (normalizedSt === 'PAID' ? 'PAID' : 'UNPAID')).trim().toUpperCase();
+      setPaymentStatus(rawPayStatus || 'UNPAID');
+      setPaidType(String(task.paidType || (task as any)['Paid Type'] || task.paymentReference || '').trim());
+      setOutstandingAfter(String(task.outstandingAfter ?? (task as any)['Outstanding After'] ?? '').trim());
+      setNextPaymentDate(String(task.nextPaymentDate ?? (task as any)['Next Payment Date'] ?? '').trim());
+      setPaymentSource(String(task.paymentSource ?? (task as any)['Payment Source'] ?? '').trim());
       setConditionalReason('');
       setErrorMessage(null);
       setShowRoundSavePopup(false);
@@ -333,8 +340,19 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       }
 
       const targetConsumerId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
+      const sheetStatusVal = selectedStatus === 'DISCONNECT' ? 'Disconnected' : selectedStatus;
+      const finalPaymentStatus = paymentStatus || (selectedStatus === 'PAID' ? 'PAID' : 'UNPAID');
+      const finalPaidType = paidType || paymentReference || '';
+      const finalPaidDate = paymentDate || '';
+      const finalDisconDate = disconDate || '';
+      const finalMeterReading = meterReading.trim();
+      const finalPaidAmount = paidAmount.trim();
+      const finalPaymentSource = paymentSource.trim();
+      const finalGisPole = gisPole.trim();
+      const finalAgency = cleanWorkerOrAgencyName(assignedAgency || task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || '');
+      const finalPhotoUrl = photoDataUrl || task.photoUrl || (task as any)['Image'] || '';
 
-      // Include existing consumer snapshot so backend can always reconstruct & sync even if not yet in cache
+      // Include existing consumer snapshot + all updated fields so backend & Google Sheets update the exact row
       const reportPayload = {
         ...task,
         taskId: task.taskId,
@@ -343,22 +361,57 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         workerId,
         workerName,
         taskStatus: selectedStatus,
-        disconStatus: selectedStatus,
-        status: selectedStatus,
-        'Discon Status': selectedStatus,
-        'Status': selectedStatus,
+        disconStatus: sheetStatusVal,
+        status: sheetStatusVal,
+        'Discon Status': sheetStatusVal,
+        'Status': sheetStatusVal,
         workerReport: combinedRemarks,
         workerRemarks: combinedRemarks,
         notes: combinedRemarks,
         'Notes': combinedRemarks,
+        remarks: combinedRemarks,
         'Remark': combinedRemarks,
-        'Remarks': combinedRemarks
+        'Remarks': combinedRemarks,
+        paymentStatus: finalPaymentStatus,
+        'Payment Status': finalPaymentStatus,
+        paymentSource: finalPaymentSource,
+        'Payment Source': finalPaymentSource,
+        meterReading: finalMeterReading,
+        reading: finalMeterReading,
+        'Reading': finalMeterReading,
+        'Meter Reading': finalMeterReading,
+        paidAmount: finalPaidAmount,
+        'Paid Amount': finalPaidAmount,
+        paidDate: finalPaidDate,
+        paymentDate: finalPaidDate,
+        'Paid Date': finalPaidDate,
+        paidType: finalPaidType,
+        paymentReference: finalPaidType,
+        'Paid Type': finalPaidType,
+        disconDate: finalDisconDate,
+        reportDate: finalDisconDate,
+        'Discon Date': finalDisconDate,
+        'Disconnection Date': finalDisconDate,
+        gisPole: finalGisPole,
+        'Gis Pole': finalGisPole,
+        outstandingAfter: outstandingAfter.trim(),
+        'Outstanding After': outstandingAfter.trim(),
+        nextPaymentDate: nextPaymentDate.trim(),
+        'Next Payment Date': nextPaymentDate.trim(),
+        agency: finalAgency,
+        assignedAgency: finalAgency,
+        assignedWorkerName: finalAgency,
+        'Agency': finalAgency,
+        photoDataUrl: finalPhotoUrl,
+        photoUrl: finalPhotoUrl,
+        image: finalPhotoUrl,
+        'Image': finalPhotoUrl
       };
 
       const res = await submitDisconnectionTaskReport(reportPayload);
 
       if (res && res.success) {
-        const finalImgUrl = task.photoUrl || (task as any)['Image'];
+        const finalImgUrl = res.imageUrl || finalPhotoUrl;
         const newHistoryItem = {
           date: dateNow,
           time: timeNow,
@@ -366,23 +419,52 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
           previousStatus: task.taskStatus,
           newStatus: selectedStatus,
           remarks: cleanDisconnectionNotes(combinedRemarks),
-          paidAmount: selectedStatus === 'PAID' ? paidAmount : undefined,
-          meterReading: meterReading || undefined,
+          paidAmount: finalPaidAmount || undefined,
+          meterReading: finalMeterReading || undefined,
           photoUrl: finalImgUrl || undefined
         };
 
         const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
 
-        // Keep ALL consumer details in the Disconnection module completely unchanged; ONLY update status and remarks
+        // Preserve all existing consumer fields while reflecting all saved updates immediately
         const updatedTaskObj: DisconnectionTask = {
           ...task,
           taskStatus: selectedStatus,
-          disconStatus: selectedStatus,
-          'Discon Status': selectedStatus,
+          disconStatus: sheetStatusVal,
+          'Discon Status': sheetStatusVal,
+          'Status': sheetStatusVal,
           workerRemarks: combinedRemarks,
           workerReport: combinedRemarks,
           'Notes': combinedRemarks,
           notes: combinedRemarks,
+          paymentStatus: finalPaymentStatus,
+          'Payment Status': finalPaymentStatus,
+          paymentSource: finalPaymentSource,
+          'Payment Source': finalPaymentSource,
+          meterReading: finalMeterReading,
+          'Reading': finalMeterReading,
+          paidAmount: finalPaidAmount,
+          'Paid Amount': finalPaidAmount,
+          paidDate: finalPaidDate,
+          paymentDate: finalPaidDate,
+          'Paid Date': finalPaidDate,
+          paidType: finalPaidType,
+          paymentReference: finalPaidType,
+          'Paid Type': finalPaidType,
+          disconDate: finalDisconDate,
+          reportDate: finalDisconDate,
+          'Discon Date': finalDisconDate,
+          gisPole: finalGisPole,
+          'Gis Pole': finalGisPole,
+          outstandingAfter: outstandingAfter.trim(),
+          'Outstanding After': outstandingAfter.trim(),
+          nextPaymentDate: nextPaymentDate.trim(),
+          'Next Payment Date': nextPaymentDate.trim(),
+          assignedAgency: finalAgency,
+          assignedWorkerName: finalAgency,
+          'Agency': finalAgency,
+          photoUrl: finalImgUrl,
+          'Image': finalImgUrl,
           reissueRequested: false,
           reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
           statusHistory: [newHistoryItem, ...existingHistory]

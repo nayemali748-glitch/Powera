@@ -3,24 +3,20 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
-// Register Service Worker and purge any stale cached bundles so login & UI always run latest code
+// Unregister any stale Service Workers and purge old caches so requests are never intercepted with invalid fetch options
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    if ('caches' in window) {
-      caches.keys().then((names) => {
-        for (const name of names) {
-          if (name !== 'power-field-app-v5') {
-            caches.delete(name).catch(() => {});
-          }
-        }
-      }).catch(() => {});
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (const registration of registrations) {
+      registration.unregister().catch(() => {});
     }
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
-      reg.update().catch(() => {});
-    }).catch((err) => {
-      console.log('SW registration note:', err);
-    });
-  });
+  }).catch(() => {});
+  if ('caches' in window) {
+    caches.keys().then((names) => {
+      for (const name of names) {
+        caches.delete(name).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

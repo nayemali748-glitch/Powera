@@ -83,97 +83,96 @@ export function getTaskPhase(task: DisconnectionTask): '1PH' | '3PH' {
   return '1PH';
 }
 
-/**
- * Classifies a DisconnectionTask into WBSEDCL standard consumer classes:
- * - DOMESTIC
- * - COMMERCIAL
- * - INDUSTRIAL
- * - STW (Shallow Tube Well / Agriculture / Irrigation)
- */
-export function getTaskConnectionClass(task: DisconnectionTask): 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW' {
-  const baseClassRaw = String(
-    task.baseClass ||
-    (task as any)['Base Class'] ||
-    (task as any)['Class'] ||
-    task.classType ||
-    (task as any).consumerCategory ||
-    ''
-  ).trim().toUpperCase();
+function normalizeDisconnectionClassValue(rawVal: unknown): 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW' | '' {
+  if (rawVal === null || rawVal === undefined) return '';
+  const normalized = String(rawVal).trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!normalized) return '';
 
-  const natureRaw = String(
-    task.natureOfConn ||
-    (task as any)['Nature of Conn'] ||
-    ''
-  ).trim().toUpperCase();
-
-  const combined = `${baseClassRaw} ${natureRaw}`.trim();
-
-  // 1. STW / Agriculture / Shallow Tube Well
+  // Exact normalized logical matching (including Rural/Urban suffixes and WBSEDCL Base Class codes in Google Sheets)
   if (
-    combined.includes('STW') ||
-    combined.includes('SHALLOW') ||
-    combined.includes('TUBE') ||
-    combined.includes('AGRI') ||
-    combined.includes('PUMP') ||
-    combined.includes('IRRIG') ||
-    combined.includes('C(T)') ||
-    combined.includes('S(T)') ||
-    combined.includes('A(T)') ||
-    combined.includes('KRISHI') ||
-    combined.includes('কৃষি') ||
-    baseClassRaw === 'A' ||
-    baseClassRaw === 'AG' ||
-    baseClassRaw === 'ST'
+    normalized === 'domestic' ||
+    normalized === 'domestic rural' ||
+    normalized === 'domestic urban' ||
+    /^d\s*-\s*[13]\s*phase$/.test(normalized)
   ) {
-    return 'STW';
+    return 'DOMESTIC';
   }
 
-  // 2. Industrial
   if (
-    combined.includes('IND') ||
-    combined.includes('FACT') ||
-    combined.includes('MILL') ||
-    combined.includes('WORKSHOP') ||
-    combined.includes('COLD STORAGE') ||
-    combined.includes('I(I)') ||
-    combined.includes('I(R)') ||
-    combined.includes('I(U)') ||
-    combined.includes('A(I)') ||
-    combined.includes('B(I)') ||
-    combined.includes('শিল্প') ||
-    baseClassRaw === 'I' ||
-    baseClassRaw === 'IN' ||
-    baseClassRaw.startsWith('I(') ||
-    baseClassRaw.startsWith('IND')
-  ) {
-    return 'INDUSTRIAL';
-  }
-
-  // 3. Commercial
-  if (
-    combined.includes('COM') ||
-    combined.includes('SHOP') ||
-    combined.includes('MARKET') ||
-    combined.includes('BUSINESS') ||
-    combined.includes('HOTEL') ||
-    combined.includes('C(I)') ||
-    combined.includes('C(R)') ||
-    combined.includes('C(U)') ||
-    combined.includes('A(CM)') ||
-    combined.includes('বাণিজ্যিক') ||
-    baseClassRaw === 'C' ||
-    baseClassRaw === 'CM' ||
-    baseClassRaw.startsWith('C(') ||
-    baseClassRaw.startsWith('COM')
+    normalized === 'commercial' ||
+    normalized === 'commercial rural' ||
+    normalized === 'commercial urban' ||
+    /^c\s*-\s*[13]\s*phase$/.test(normalized)
   ) {
     return 'COMMERCIAL';
   }
 
-  // 4. Default / Domestic
-  return 'DOMESTIC';
+  if (
+    normalized === 'industrial' ||
+    normalized === 'industrial rural' ||
+    normalized === 'industrial urban' ||
+    /^i\s*-\s*[13]\s*phase$/.test(normalized)
+  ) {
+    return 'INDUSTRIAL';
+  }
+
+  if (
+    normalized === 'agriculture' ||
+    normalized === 'agriculture rural' ||
+    normalized === 'agriculture urban' ||
+    normalized === 'stw' ||
+    /^a\s*-\s*[13]\s*phase$/.test(normalized)
+  ) {
+    return 'STW';
+  }
+
+  // Whole-word exact token match (never partial substring match)
+  const words = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.includes('agriculture') || words.includes('stw')) return 'STW';
+  if (words.includes('industrial')) return 'INDUSTRIAL';
+  if (words.includes('commercial')) return 'COMMERCIAL';
+  if (words.includes('domestic')) return 'DOMESTIC';
+
+  return '';
 }
 
-export function getConnectionClassLabel(cls: 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW', lang: 'en' | 'bn' = 'en'): string {
+/**
+ * Classifies a DisconnectionTask using ONLY the actual Google Sheets Class / Base Class fields:
+ * - DOMESTIC   <- Domestic
+ * - COMMERCIAL <- Commercial
+ * - INDUSTRIAL <- Industrial
+ * - STW        <- Agriculture (or STW)
+ * - ''         <- Empty / unknown class (never falsely assigned to Domestic/Commercial/Industrial/STW)
+ */
+export function getTaskConnectionClass(task: DisconnectionTask): 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW' | '' {
+  if (!task || typeof task !== 'object') return '';
+
+  // 1. Check actual Google Sheets 'Class' field first
+  const classCandidates = [
+    (task as any)['Class'],
+    task.classType,
+    (task as any).class
+  ];
+  for (const candidate of classCandidates) {
+    const mapped = normalizeDisconnectionClassValue(candidate);
+    if (mapped) return mapped;
+  }
+
+  // 2. Check actual Google Sheets 'Base Class' field
+  const baseClassCandidates = [
+    (task as any)['Base Class'],
+    task.baseClass
+  ];
+  for (const candidate of baseClassCandidates) {
+    const mapped = normalizeDisconnectionClassValue(candidate);
+    if (mapped) return mapped;
+  }
+
+  // 3. Empty / unknown class: do not assign to Domestic, Commercial, Industrial, or STW
+  return '';
+}
+
+export function getConnectionClassLabel(cls: 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW' | '', lang: 'en' | 'bn' = 'en'): string {
   switch (cls) {
     case 'DOMESTIC':
       return lang === 'bn' ? 'Domestic (গৃহস্থালি)' : 'Domestic';
@@ -183,6 +182,8 @@ export function getConnectionClassLabel(cls: 'DOMESTIC' | 'COMMERCIAL' | 'INDUST
       return lang === 'bn' ? 'Industrial (শিল্প)' : 'Industrial';
     case 'STW':
       return lang === 'bn' ? 'STW (কৃষি / শ্যালো)' : 'STW';
+    default:
+      return '';
   }
 }
 
