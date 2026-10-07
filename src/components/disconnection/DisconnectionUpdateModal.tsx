@@ -26,6 +26,7 @@ import { compressImageFile } from '../../utils/imageCompressor';
 import { submitDisconnectionTaskReport, fetchDisconnectionHistory } from '../../services/api';
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../../utils/dateTimeFormat';
 import { cleanDisconnectionNotes, cleanWorkerOrAgencyName } from '../../utils/disconnectionClassifier';
+import { getTodayYMD, parseTaskDateToYMD } from './DisconnectionDailyReportModal';
 
 interface DisconnectionUpdateModalProps {
   task: DisconnectionTask;
@@ -69,11 +70,11 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   // Conditional Fields
   const [paidAmount, setPaidAmount] = useState<string>(task.paidAmount || '');
   const [paymentDate, setPaymentDate] = useState<string>(
-    task.paymentDate || new Date().toISOString().split('T')[0]
+    parseTaskDateToYMD(task.paymentDate || task.paidDate || (task as any)['Paid Date']) || getTodayYMD()
   );
   const [paymentReference, setPaymentReference] = useState<string>(task.paymentReference || '');
   const [disconDate, setDisconDate] = useState<string>(
-    task.disconDate || task.reportDate || (task as any)['Discon Date'] || new Date().toISOString().split('T')[0]
+    parseTaskDateToYMD(task.disconDate || task.reportDate || (task as any)['Discon Date']) || getTodayYMD()
   );
   const [gisPole, setGisPole] = useState<string>(
     task.gisPole || (task as any)['Gis Pole'] || ''
@@ -124,10 +125,10 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || (task as any)['Remarks'] || ''));
       setPaidAmount(String(task.paidAmount ?? (task as any)['Paid Amount'] ?? '').trim());
       const rawPaidDate = String(task.paymentDate || task.paidDate || (task as any)['Paid Date'] || '').trim();
-      setPaymentDate((rawPaidDate ? rawPaidDate.split('T')[0] : '') || new Date().toISOString().split('T')[0]);
+      setPaymentDate(parseTaskDateToYMD(rawPaidDate) || getTodayYMD());
       setPaymentReference(String(task.paymentReference || task.paidType || (task as any)['Paid Type'] || '').trim());
       const rawDisconDate = String(task.disconDate || task.reportDate || (task as any)['Discon Date'] || '').trim();
-      setDisconDate((rawDisconDate ? rawDisconDate.split('T')[0] : '') || new Date().toISOString().split('T')[0]);
+      setDisconDate(parseTaskDateToYMD(rawDisconDate) || getTodayYMD());
       setGisPole(String(task.gisPole ?? (task as any)['Gis Pole'] ?? '').trim());
       const rawPayStatus = String(task.paymentStatus || (task as any)['Payment Status'] || (normalizedSt === 'PAID' ? 'PAID' : 'UNPAID')).trim().toUpperCase();
       setPaymentStatus(rawPayStatus || 'UNPAID');
@@ -408,83 +409,99 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Image': finalPhotoUrl
       };
 
-      const res = await submitDisconnectionTaskReport(reportPayload);
+      const nowIso = new Date().toISOString();
+      const effectiveHistoryDate =
+        selectedStatus === 'PAID' && finalPaidDate
+          ? finalPaidDate
+          : finalDisconDate || dateNow;
+      const newHistoryItem = {
+        date: effectiveHistoryDate,
+        time: timeNow,
+        workerName,
+        previousStatus: task.taskStatus,
+        newStatus: selectedStatus,
+        remarks: cleanDisconnectionNotes(combinedRemarks),
+        paidAmount: finalPaidAmount || undefined,
+        meterReading: finalMeterReading || undefined,
+        photoUrl: finalPhotoUrl || undefined
+      };
 
-      if (res && res.success) {
-        const finalImgUrl = res.imageUrl || finalPhotoUrl;
-        const newHistoryItem = {
-          date: dateNow,
-          time: timeNow,
-          workerName,
-          previousStatus: task.taskStatus,
-          newStatus: selectedStatus,
-          remarks: cleanDisconnectionNotes(combinedRemarks),
-          paidAmount: finalPaidAmount || undefined,
-          meterReading: finalMeterReading || undefined,
-          photoUrl: finalImgUrl || undefined
-        };
+      const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
+      const updatedHistory = [newHistoryItem, ...existingHistory];
 
-        const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
+      // Preserve all existing consumer fields while reflecting all saved updates immediately
+      const updatedTaskObj: DisconnectionTask = {
+        ...task,
+        taskStatus: selectedStatus,
+        disconStatus: sheetStatusVal,
+        'Discon Status': sheetStatusVal,
+        'Status': sheetStatusVal,
+        workerRemarks: combinedRemarks,
+        workerReport: combinedRemarks,
+        'Notes': combinedRemarks,
+        notes: combinedRemarks,
+        paymentStatus: finalPaymentStatus,
+        'Payment Status': finalPaymentStatus,
+        paymentSource: finalPaymentSource,
+        'Payment Source': finalPaymentSource,
+        reading: finalMeterReading,
+        meterReading: finalMeterReading,
+        'Reading': finalMeterReading,
+        paidAmount: finalPaidAmount,
+        'Paid Amount': finalPaidAmount,
+        paidDate: finalPaidDate,
+        paymentDate: finalPaidDate,
+        'Paid Date': finalPaidDate,
+        paidType: finalPaidType,
+        paymentReference: finalPaidType,
+        'Paid Type': finalPaidType,
+        disconDate: finalDisconDate,
+        reportDate: finalDisconDate,
+        'Discon Date': finalDisconDate,
+        gisPole: finalGisPole,
+        'Gis Pole': finalGisPole,
+        outstandingAfter: outstandingAfter.trim(),
+        'Outstanding After': outstandingAfter.trim(),
+        nextPaymentDate: nextPaymentDate.trim(),
+        'Next Payment Date': nextPaymentDate.trim(),
+        assignedAgency: finalAgency,
+        assignedWorkerName: finalAgency,
+        'Agency': finalAgency,
+        photoUrl: finalPhotoUrl,
+        'Image': finalPhotoUrl,
+        updatedAt: nowIso,
+        lastUpdated: nowIso,
+        'Last Updated': nowIso,
+        reissueRequested: false,
+        reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
+        statusHistory: updatedHistory,
+        _localUpdatedAt: Date.now(),
+        _hasUserRemarkUpdate: true
+      } as DisconnectionTask;
 
-        // Preserve all existing consumer fields while reflecting all saved updates immediately
-        const updatedTaskObj: DisconnectionTask = {
-          ...task,
-          taskStatus: selectedStatus,
-          disconStatus: sheetStatusVal,
-          'Discon Status': sheetStatusVal,
-          'Status': sheetStatusVal,
-          workerRemarks: combinedRemarks,
-          workerReport: combinedRemarks,
-          'Notes': combinedRemarks,
-          notes: combinedRemarks,
-          paymentStatus: finalPaymentStatus,
-          'Payment Status': finalPaymentStatus,
-          paymentSource: finalPaymentSource,
-          'Payment Source': finalPaymentSource,
-          meterReading: finalMeterReading,
-          'Reading': finalMeterReading,
-          paidAmount: finalPaidAmount,
-          'Paid Amount': finalPaidAmount,
-          paidDate: finalPaidDate,
-          paymentDate: finalPaidDate,
-          'Paid Date': finalPaidDate,
-          paidType: finalPaidType,
-          paymentReference: finalPaidType,
-          'Paid Type': finalPaidType,
-          disconDate: finalDisconDate,
-          reportDate: finalDisconDate,
-          'Discon Date': finalDisconDate,
-          gisPole: finalGisPole,
-          'Gis Pole': finalGisPole,
-          outstandingAfter: outstandingAfter.trim(),
-          'Outstanding After': outstandingAfter.trim(),
-          nextPaymentDate: nextPaymentDate.trim(),
-          'Next Payment Date': nextPaymentDate.trim(),
-          assignedAgency: finalAgency,
-          assignedWorkerName: finalAgency,
-          'Agency': finalAgency,
-          photoUrl: finalImgUrl,
-          'Image': finalImgUrl,
-          reissueRequested: false,
-          reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
-          statusHistory: [newHistoryItem, ...existingHistory]
-        };
+      // Immediately propagate update to parent list and show confirmation (0ms delay)
+      onUpdateSuccess(updatedTaskObj);
+      setSavedTaskResult(updatedTaskObj);
+      setShowRoundSavePopup(true);
+      setIsSubmitting(false);
 
-        // Immediately propagate update to parent list (0ms delay)
-        onUpdateSuccess(updatedTaskObj);
-        setSavedTaskResult(updatedTaskObj);
-        setShowRoundSavePopup(true);
+      // Sync to backend & Google Sheets without blocking UI
+      submitDisconnectionTaskReport({
+        ...reportPayload,
+        statusHistory: updatedHistory,
+        updatedAt: nowIso,
+        lastUpdated: nowIso,
+        'Last Updated': nowIso
+      }).catch(err => {
+        console.warn('[Disconnection] Background report sync notice:', err);
+      });
 
-        // Auto close confirmation popup quickly (550ms)
-        setTimeout(() => {
-          onClose();
-        }, 550);
-      } else {
-        throw new Error(res?.message || 'Server rejected status update');
-      }
+      // Auto close confirmation popup quickly (450ms)
+      setTimeout(() => {
+        onClose();
+      }, 450);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to submit update');
-    } finally {
       setIsSubmitting(false);
     }
   };

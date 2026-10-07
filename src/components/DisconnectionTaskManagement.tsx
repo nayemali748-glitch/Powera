@@ -72,7 +72,9 @@ import {
   DisconnectionDailyReportModal,
   downloadDailyDisconnectionReportPdf,
   formatYMDToDotDate,
-  getTaskReportYMD
+  getTaskReportYMD,
+  getDeduplicatedUpdatedTasks,
+  getTodayYMD
 } from './disconnection/DisconnectionDailyReportModal';
 
 export type DisconnectionTab = 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST';
@@ -142,25 +144,37 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
   const [showHeaderThreeDotMenu, setShowHeaderThreeDotMenu] = useState<boolean>(false);
   const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState<boolean>(false);
+  const [dailyReportFromDate, setDailyReportFromDate] = useState<string>('');
+  const [dailyReportToDate, setDailyReportToDate] = useState<string>('');
 
   const triggerDailyReportPdfDownload = () => {
-    const ymds = filteredTasks.map(getTaskReportYMD).filter(Boolean).sort();
-    const now = new Date();
-    const todayDot = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
-    const fromDot = ymds.length > 0 ? formatYMDToDotDate(ymds[0]) : todayDot;
-    const toDot = ymds.length > 0 ? formatYMDToDotDate(ymds[ymds.length - 1]) : todayDot;
-    downloadDailyDisconnectionReportPdf(filteredTasks, fromDot, toDot);
+    const updatedOnly = getDeduplicatedUpdatedTasks(filteredTasks);
+    const todayYMD = getTodayYMD();
+    const allYmds = updatedOnly.map(getTaskReportYMD).filter(Boolean).sort();
+    const defaultYmd = allYmds.includes(todayYMD)
+      ? todayYMD
+      : allYmds.length > 0
+      ? allYmds[allYmds.length - 1]
+      : todayYMD;
+
+    const effectiveFrom = dailyReportFromDate || defaultYmd;
+    const effectiveTo = dailyReportToDate || effectiveFrom;
+
+    const rangeFiltered = updatedOnly.filter(t => {
+      const ymd = getTaskReportYMD(t);
+      if (!ymd) return false;
+      if (effectiveFrom && ymd < effectiveFrom) return false;
+      if (effectiveTo && ymd > effectiveTo) return false;
+      return true;
+    });
+
+    const fromDot = formatYMDToDotDate(effectiveFrom);
+    const toDot = formatYMDToDotDate(effectiveTo);
+    downloadDailyDisconnectionReportPdf(rangeFiltered, fromDot, toDot);
   };
 
   const triggerDailyReportPrint = () => {
     setIsDailyReportModalOpen(true);
-    setTimeout(() => {
-      try {
-        window.print();
-      } catch {
-        // ignore if print is blocked
-      }
-    }, 150);
   };
 
   const handleExportDCListCsv = (filenamePrefix = 'DC_List') => {
@@ -1924,6 +1938,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         activeClassFilter={classFilter}
         onClassFilterChange={setClassFilter}
         activeStatusFilter={statusFilter}
+        fromDate={dailyReportFromDate || undefined}
+        toDate={dailyReportToDate || undefined}
+        onFromDateChange={setDailyReportFromDate}
+        onToDateChange={setDailyReportToDate}
       />
     </div>
   );

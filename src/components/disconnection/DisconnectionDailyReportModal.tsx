@@ -17,33 +17,58 @@ interface DisconnectionDailyReportModalProps {
   activeClassFilter?: ConnectionClassFilterType;
   onClassFilterChange?: (cls: ConnectionClassFilterType) => void;
   activeStatusFilter?: string;
+  fromDate?: string;
+  toDate?: string;
+  onFromDateChange?: (date: string) => void;
+  onToDateChange?: (date: string) => void;
 }
 
 export function parseTaskDateToYMD(rawDate: unknown): string {
   if (rawDate === null || rawDate === undefined) return '';
   const str = String(rawDate).trim();
-  if (!str || str === 'undefined' || str === 'null' || str === 'NaN') return '';
+  if (!str || str === 'undefined' || str === 'null' || str === 'NaN' || str === '-') return '';
 
-  // Match DD.MM.YYYY, DD/MM/YYYY, or DD-MM-YYYY
-  const dmyMatch = str.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+  // 1. YYYY-MM-DD (without UTC 'T...Z' suffix, e.g. "2026-10-07" or "2026-10-07 14:30:00")
+  if (!str.includes('T') && !str.endsWith('Z')) {
+    const pureYmd = str.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:[\s,]|$)/);
+    if (pureYmd) {
+      const yyyy = pureYmd[1];
+      const mm = pureYmd[2].padStart(2, '0');
+      const dd = pureYmd[3].padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  // 2. DD.MM.YYYY, DD/MM/YYYY, or DD-MM-YYYY (with optional time or comma after year)
+  const dmyMatch = str.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?:[\s,T]|$)/);
   if (dmyMatch) {
-    const dd = dmyMatch[1].padStart(2, '0');
-    const mm = dmyMatch[2].padStart(2, '0');
+    const p1 = parseInt(dmyMatch[1], 10);
+    const p2 = parseInt(dmyMatch[2], 10);
     const yyyy = dmyMatch[3];
+    const dd = String(p2 > 12 && p1 <= 12 ? p2 : p1).padStart(2, '0');
+    const mm = String(p2 > 12 && p1 <= 12 ? p1 : p2).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  // Match YYYY-MM-DD or ISO
-  const ymdMatch = str.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
-  if (ymdMatch) {
-    const yyyy = ymdMatch[1];
-    const mm = ymdMatch[2].padStart(2, '0');
-    const dd = ymdMatch[3].padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }
-
+  // 3. ISO timestamp or full date string -> convert in Asia/Kolkata local time so IST updates get the exact local date
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(parsed);
+      const yyyy = parts.find(p => p.type === 'year')?.value;
+      const mm = parts.find(p => p.type === 'month')?.value;
+      const dd = parts.find(p => p.type === 'day')?.value;
+      if (yyyy && mm && dd) {
+        return `${yyyy}-${mm}-${dd}`;
+      }
+    } catch {
+      // fallback to local browser timezone
+    }
     const yyyy = parsed.getFullYear();
     const mm = String(parsed.getMonth() + 1).padStart(2, '0');
     const dd = String(parsed.getDate()).padStart(2, '0');
@@ -63,25 +88,174 @@ export function formatYMDToDotDate(ymd: string): string {
 }
 
 export function getTodayYMD(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return parseTaskDateToYMD(new Date().toISOString());
 }
 
-export function getTaskReportYMD(task: DisconnectionTask): string {
-  const candidates = [
-    (task as any)['Discon Date'],
-    task.disconDate,
-    (task as any)['Paid Date'],
-    (task as any).paidDate,
-    task.reportDate,
-    Array.isArray(task.statusHistory) && task.statusHistory.length > 0 ? task.statusHistory[0]?.date : '',
-    (task as any)['Last Updated'],
-    task.updatedAt,
-    (task as any)['Upload Date'],
-    task.createdAt
-  ];
+/**
+ * Checks whether a Disconnection record has actually been updated
+ * (Status changed from default PENDING, or Remark/Notes added, or Payment updated, or Reading entered).
+ * Untouched records from the raw uploaded list return false and NEVER appear in the Daily Report.
+ */
+export function isUpdatedDisconnectionRecord(task: DisconnectionTask): boolean {
+  if (!task || typeof task !== 'object') return false;
 
-  for (const c of candidates) {
+  const rawStatus = String(
+    (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? ''
+  ).trim().toUpperCase();
+
+  if (rawStatus === 'DELETED' || rawStatus === '[DELETED_BY_ADMIN]' || rawStatus === 'ARCHIVED') {
+    return false;
+  }
+
+  const hasStatusUpdate =
+    rawStatus !== '' &&
+    rawStatus !== 'PENDING' &&
+    rawStatus !== 'IN PROGRESS' &&
+    rawStatus !== 'CONNECTED' &&
+    rawStatus !== 'UNASSIGNED' &&
+    rawStatus !== 'NEW' &&
+    rawStatus !== '-';
+
+  const cleanedNotes = cleanDisconnectionNotes(
+    (task as any)['Notes'] ??
+      task.notes ??
+      task.workerRemarks ??
+      task.workerReport ??
+      (task as any)['Remark'] ??
+      (task as any)['Remarks'] ??
+      ''
+  ).trim();
+  const hasRemarkUpdate =
+    cleanedNotes !== '' &&
+    cleanedNotes !== '-' &&
+    cleanedNotes.toLowerCase() !== 'null' &&
+    cleanedNotes.toLowerCase() !== 'undefined';
+
+  const rawPaymentStatus = String(
+    (task as any)['Payment Status'] ?? task.paymentStatus ?? ''
+  ).trim().toUpperCase();
+  const hasPaymentStatusUpdate =
+    rawPaymentStatus !== '' &&
+    rawPaymentStatus !== 'UNPAID' &&
+    rawPaymentStatus !== 'PENDING' &&
+    rawPaymentStatus !== 'NONE' &&
+    rawPaymentStatus !== '-';
+
+  const rawPaidAmt = String((task as any)['Paid Amount'] ?? task.paidAmount ?? '').replace(/[^0-9.-]/g, '');
+  const paidAmtNum = parseFloat(rawPaidAmt);
+  const hasPaidAmountUpdate = !isNaN(paidAmtNum) && paidAmtNum > 0;
+
+  const rawPaidDate = String(
+    (task as any)['Paid Date'] ?? task.paidDate ?? task.paymentDate ?? ''
+  ).trim();
+  const hasPaidDateUpdate = rawPaidDate !== '' && rawPaidDate !== '-';
+
+  const rawReading = String(
+    (task as any)['Reading'] ?? task.reading ?? task.meterReading ?? ''
+  ).trim();
+  const hasReadingUpdate =
+    rawReading !== '' &&
+    rawReading !== '-' &&
+    rawReading !== '0' &&
+    rawReading.toLowerCase() !== 'null' &&
+    rawReading.toLowerCase() !== 'undefined';
+
+  const rawDisconDate = String(
+    (task as any)['Discon Date'] ?? task.disconDate ?? task.reportDate ?? ''
+  ).trim();
+  const hasDisconDateUpdate = rawDisconDate !== '' && rawDisconDate !== '-';
+
+  const hasHistoryUpdate = Array.isArray(task.statusHistory) && task.statusHistory.length > 0;
+  const hasLocalFlag = Boolean((task as any)._hasUserRemarkUpdate);
+
+  return (
+    hasStatusUpdate ||
+    hasRemarkUpdate ||
+    hasPaymentStatusUpdate ||
+    hasPaidAmountUpdate ||
+    hasPaidDateUpdate ||
+    hasReadingUpdate ||
+    hasDisconDateUpdate ||
+    hasHistoryUpdate ||
+    hasLocalFlag
+  );
+}
+
+/**
+ * Extracts the actual update/remark date (YYYY-MM-DD) for an updated Disconnection record.
+ * Prioritizes explicit update/disconnection/payment/history dates over generic timestamps.
+ */
+export function getTaskReportYMD(task: DisconnectionTask): string {
+  if (!task || typeof task !== 'object') return '';
+
+  const rawStatus = String(
+    (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? ''
+  ).trim().toUpperCase();
+
+  // 1. Explicit Discon Date / Report Date / Paid Date (prioritize Paid Date when status is PAID)
+  const explicitDateCandidates =
+    rawStatus === 'PAID' || rawStatus === 'AGENCY PAID'
+      ? [
+          (task as any)['Paid Date'],
+          task.paidDate,
+          task.paymentDate,
+          (task as any)['Discon Date'],
+          task.disconDate,
+          task.reportDate
+        ]
+      : [
+          (task as any)['Discon Date'],
+          task.disconDate,
+          task.reportDate,
+          (task as any)['Paid Date'],
+          task.paidDate,
+          task.paymentDate
+        ];
+
+  for (const c of explicitDateCandidates) {
+    if (c !== null && c !== undefined && String(c).trim() !== '') {
+      const ymd = parseTaskDateToYMD(c);
+      if (ymd) return ymd;
+    }
+  }
+
+  // 2. Latest statusHistory entry date
+  if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
+    for (const h of task.statusHistory) {
+      const ymd = parseTaskDateToYMD(h?.date);
+      if (ymd) return ymd;
+    }
+  }
+
+  // 3. Date embedded inside Notes / workerRemarks (if any DD/MM/YYYY or DD.MM.YYYY or YYYY-MM-DD token exists)
+  const rawNotes = String(
+    (task as any)['Notes'] ?? task.notes ?? task.workerRemarks ?? task.workerReport ?? ''
+  );
+  const embeddedDmy = rawNotes.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/);
+  if (embeddedDmy) {
+    const dd = embeddedDmy[1].padStart(2, '0');
+    const mm = embeddedDmy[2].padStart(2, '0');
+    const yyyy = embeddedDmy[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const embeddedYmd = rawNotes.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (embeddedYmd) {
+    return `${embeddedYmd[1]}-${embeddedYmd[2]}-${embeddedYmd[3]}`;
+  }
+
+  // 4. Local update timestamp from current session
+  if (typeof (task as any)._localUpdatedAt === 'number' && (task as any)._localUpdatedAt > 0) {
+    const ymd = parseTaskDateToYMD(new Date((task as any)._localUpdatedAt).toISOString());
+    if (ymd) return ymd;
+  }
+
+  // 5. Last Updated / updatedAt from Google Sheets backend
+  const lastUpdatedCandidates = [
+    (task as any)['Last Updated'],
+    task.lastUpdated,
+    task.updatedAt
+  ];
+  for (const c of lastUpdatedCandidates) {
     if (c !== null && c !== undefined && String(c).trim() !== '') {
       const ymd = parseTaskDateToYMD(c);
       if (ymd) return ymd;
@@ -89,6 +263,64 @@ export function getTaskReportYMD(task: DisconnectionTask): string {
   }
 
   return '';
+}
+
+function getTaskUpdateTimestampMs(task: DisconnectionTask): number {
+  if (typeof (task as any)._localUpdatedAt === 'number' && (task as any)._localUpdatedAt > 0) {
+    return (task as any)._localUpdatedAt;
+  }
+  const candidates = [
+    (task as any)['Last Updated'],
+    task.updatedAt,
+    (task as any)['Discon Date'],
+    task.disconDate,
+    (task as any)['Paid Date'],
+    task.paidDate,
+    task.reportDate
+  ];
+  for (const c of candidates) {
+    if (c) {
+      const ms = new Date(String(c)).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+  }
+  const ymd = getTaskReportYMD(task);
+  if (ymd) {
+    const ms = new Date(ymd).getTime();
+    if (!isNaN(ms)) return ms;
+  }
+  return 0;
+}
+
+/**
+ * Filters ONLY valid updated records and deduplicates by Consumer ID so that if the same consumer
+ * was updated multiple times on the same day, only the single latest update row is returned.
+ */
+export function getDeduplicatedUpdatedTasks(tasks: DisconnectionTask[]): DisconnectionTask[] {
+  const byConsumerKey = new Map<string, DisconnectionTask>();
+
+  tasks.forEach((task, idx) => {
+    if (!isUpdatedDisconnectionRecord(task)) return;
+
+    const rawCid = String((task as any)['Consumer Id'] ?? task.consumerId ?? task.taskId ?? `ROW-${idx}`)
+      .replace(/^TASK-DISC-/i, '')
+      .trim()
+      .toLowerCase();
+    const key = rawCid || `row-${idx}`;
+
+    const existing = byConsumerKey.get(key);
+    if (!existing) {
+      byConsumerKey.set(key, task);
+    } else {
+      const existingTs = getTaskUpdateTimestampMs(existing);
+      const currentTs = getTaskUpdateTimestampMs(task);
+      if (currentTs >= existingTs) {
+        byConsumerKey.set(key, task);
+      }
+    }
+  });
+
+  return Array.from(byConsumerKey.values());
 }
 
 export function getTaskPrintedDateDot(task: DisconnectionTask): string {
@@ -127,56 +359,57 @@ export function getDisplayStatusPair(task: DisconnectionTask): { tableLabel: str
     (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? ''
   ).trim();
 
-  const combinedUpper = (rawDisconStatus || rawPaymentStatus).toUpperCase();
+  const statusUpper = rawDisconStatus.toUpperCase();
+  const paymentUpper = rawPaymentStatus.toUpperCase();
 
+  // 1. Check explicit Discon Status first
   if (
-    matchesDisconnectionStatusFilter(task, 'PAID') ||
-    combinedUpper === 'PAID' ||
-    combinedUpper === 'AGENCY PAID' ||
-    rawPaymentStatus.toUpperCase() === 'PAID' ||
-    rawPaymentStatus.toUpperCase() === 'AGENCY PAID'
-  ) {
-    return { tableLabel: 'agency paid', summaryLabel: 'Agency Paid' };
-  }
-
-  if (
-    matchesDisconnectionStatusFilter(task, 'DISCONNECT') ||
-    combinedUpper === 'DISCONNECT' ||
-    combinedUpper === 'DISCONNECTED' ||
-    combinedUpper === 'COMPLETED' ||
-    combinedUpper === 'ALREADY DISCONNECTED'
+    statusUpper === 'DISCONNECT' ||
+    statusUpper === 'DISCONNECTED' ||
+    statusUpper === 'COMPLETED' ||
+    statusUpper === 'ALREADY DISCONNECTED' ||
+    matchesDisconnectionStatusFilter(task, 'DISCONNECT')
   ) {
     return { tableLabel: 'disconnected', summaryLabel: 'Disconnected' };
   }
 
-  if (matchesDisconnectionStatusFilter(task, 'OFFICE TEAM') || combinedUpper === 'OFFICE TEAM') {
+  if (
+    statusUpper === 'PAID' ||
+    statusUpper === 'AGENCY PAID' ||
+    matchesDisconnectionStatusFilter(task, 'PAID')
+  ) {
+    return { tableLabel: 'agency paid', summaryLabel: 'Agency Paid' };
+  }
+
+  if (statusUpper === 'OFFICE TEAM' || matchesDisconnectionStatusFilter(task, 'OFFICE TEAM')) {
     return { tableLabel: 'office team', summaryLabel: 'Office Team' };
   }
 
-  if (matchesDisconnectionStatusFilter(task, 'DISPUTE') || combinedUpper === 'DISPUTE') {
+  if (statusUpper === 'DISPUTE' || matchesDisconnectionStatusFilter(task, 'DISPUTE')) {
     return { tableLabel: 'dispute', summaryLabel: 'Dispute' };
   }
 
-  if (matchesDisconnectionStatusFilter(task, 'NOT FOUND') || combinedUpper === 'NOT FOUND' || combinedUpper === 'UNABLE') {
+  if (statusUpper === 'NOT FOUND' || statusUpper === 'UNABLE' || matchesDisconnectionStatusFilter(task, 'NOT FOUND')) {
     return { tableLabel: 'not found', summaryLabel: 'Not Found' };
   }
 
-  if (matchesDisconnectionStatusFilter(task, 'REISSUE') || combinedUpper === 'REISSUE') {
+  if (statusUpper === 'REISSUE' || matchesDisconnectionStatusFilter(task, 'REISSUE')) {
     return { tableLabel: 'reissue', summaryLabel: 'Reissue' };
   }
 
-  if (combinedUpper === 'PENDING' || combinedUpper === 'CONNECTED' || combinedUpper === 'IN PROGRESS') {
-    return { tableLabel: 'connected', summaryLabel: 'Connected' };
-  }
-
-  if (rawDisconStatus && rawDisconStatus !== 'undefined' && rawDisconStatus !== 'null') {
+  if (statusUpper && statusUpper !== 'PENDING' && statusUpper !== 'IN PROGRESS') {
     return {
       tableLabel: rawDisconStatus.toLowerCase(),
       summaryLabel: rawDisconStatus.replace(/\b\w/g, ch => ch.toUpperCase())
     };
   }
 
-  return { tableLabel: '-', summaryLabel: 'Pending' };
+  // 2. If Discon Status is still PENDING/empty, derive label from Payment Status or update fields
+  if (paymentUpper === 'PAID' || paymentUpper === 'AGENCY PAID' || (paymentUpper && paymentUpper !== 'UNPAID' && paymentUpper !== 'PENDING')) {
+    return { tableLabel: 'agency paid', summaryLabel: 'Agency Paid' };
+  }
+
+  return { tableLabel: 'updated', summaryLabel: 'Updated' };
 }
 
 export function getTaskOsdInfo(task: DisconnectionTask): { hasValue: boolean; numeric: number; formatted: string } {
@@ -512,7 +745,7 @@ export function downloadDailyDisconnectionReportPdf(
   doc.setTextColor(75, 75, 75);
   doc.text('Authorised Signatory', stampX + stampW / 2, footerY, { align: 'center' });
 
-  doc.save(`Daily_Disconnection_Report_${fromDateDot.replace(/\./g, '-')}.pdf`);
+  doc.save(`Daily_Disconnection_Report_${fromDateDot.replace(/\./g, '-')}_to_${toDateDot.replace(/\./g, '-')}.pdf`);
 }
 
 interface ReportDocumentViewProps {
@@ -691,20 +924,45 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
   tasks,
   activeClassFilter = 'ALL',
   onClassFilterChange,
-  activeStatusFilter = 'ALL'
+  activeStatusFilter = 'ALL',
+  fromDate: controlledFromDate,
+  toDate: controlledToDate,
+  onFromDateChange,
+  onToDateChange
 }) => {
   const todayYMD = useMemo(() => getTodayYMD(), []);
 
-  const latestTaskYMD = useMemo(() => {
-    const ymds = tasks.map(getTaskReportYMD).filter(Boolean).sort();
-    return ymds.length > 0 ? ymds[ymds.length - 1] : todayYMD;
-  }, [tasks, todayYMD]);
+  // Only include records that have had a valid Status / Remark / Payment / Reading update, deduplicated by Consumer ID (latest update wins)
+  const updatedTasksOnly = useMemo(() => {
+    return getDeduplicatedUpdatedTasks(tasks);
+  }, [tasks]);
 
-  const [filterByDate, setFilterByDate] = useState<boolean>(false);
-  const [fromDate, setFromDate] = useState<string>(latestTaskYMD);
-  const [toDate, setToDate] = useState<string>(latestTaskYMD);
+  const defaultReportYMD = useMemo(() => {
+    const ymds = updatedTasksOnly.map(getTaskReportYMD).filter(Boolean).sort();
+    if (ymds.includes(todayYMD)) return todayYMD;
+    return ymds.length > 0 ? ymds[ymds.length - 1] : todayYMD;
+  }, [updatedTasksOnly, todayYMD]);
+
+  const [internalFromDate, setInternalFromDate] = useState<string>(defaultReportYMD);
+  const [internalToDate, setInternalToDate] = useState<string>(defaultReportYMD);
+  const [hasUserPickedDates, setHasUserPickedDates] = useState<boolean>(false);
   const [reportClassFilter, setReportClassFilter] = useState<ConnectionClassFilterType>(activeClassFilter);
   const [reportStatusFilter, setReportStatusFilter] = useState<string>(activeStatusFilter);
+
+  const fromDate = controlledFromDate !== undefined ? controlledFromDate : internalFromDate;
+  const toDate = controlledToDate !== undefined ? controlledToDate : internalToDate;
+
+  const handleSetFromDate = (val: string) => {
+    setHasUserPickedDates(true);
+    setInternalFromDate(val);
+    if (onFromDateChange) onFromDateChange(val);
+  };
+
+  const handleSetToDate = (val: string) => {
+    setHasUserPickedDates(true);
+    setInternalToDate(val);
+    if (onToDateChange) onToDateChange(val);
+  };
 
   // Sync with parent Disconnection filters whenever opened or changed
   useEffect(() => {
@@ -716,49 +974,37 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
   }, [activeStatusFilter, isOpen]);
 
   useEffect(() => {
-    if (latestTaskYMD) {
-      setFromDate(latestTaskYMD);
-      setToDate(latestTaskYMD);
+    if (!hasUserPickedDates && defaultReportYMD) {
+      setInternalFromDate(defaultReportYMD);
+      setInternalToDate(defaultReportYMD);
+      if (onFromDateChange && !controlledFromDate) onFromDateChange(defaultReportYMD);
+      if (onToDateChange && !controlledToDate) onToDateChange(defaultReportYMD);
     }
-  }, [latestTaskYMD]);
+  }, [defaultReportYMD, hasUserPickedDates]);
 
+  // Strictly filter updated records by selected From Date .. To Date, Class Filter, and Status Filter
   const filteredReportTasks = useMemo(() => {
-    return tasks.filter(t => {
+    return updatedTasksOnly.filter(t => {
       if (reportClassFilter !== 'ALL' && getTaskConnectionClass(t) !== reportClassFilter) {
         return false;
       }
       if (reportStatusFilter !== 'ALL' && !matchesDisconnectionStatusFilter(t, reportStatusFilter)) {
         return false;
       }
-      if (filterByDate && fromDate && toDate) {
-        const ymd = getTaskReportYMD(t);
-        if (!ymd || ymd < fromDate || ymd > toDate) return false;
-      }
+      const ymd = getTaskReportYMD(t);
+      if (!ymd) return false;
+      if (fromDate && ymd < fromDate) return false;
+      if (toDate && ymd > toDate) return false;
       return true;
     });
-  }, [tasks, reportClassFilter, reportStatusFilter, filterByDate, fromDate, toDate]);
+  }, [updatedTasksOnly, reportClassFilter, reportStatusFilter, fromDate, toDate]);
 
   const effectiveDateRange = useMemo(() => {
-    if (filterByDate && fromDate && toDate) {
-      return {
-        fromDot: formatYMDToDotDate(fromDate),
-        toDot: formatYMDToDotDate(toDate)
-      };
-    }
-    if (filteredReportTasks.length > 0) {
-      const ymds = filteredReportTasks.map(getTaskReportYMD).filter(Boolean).sort();
-      if (ymds.length > 0) {
-        return {
-          fromDot: formatYMDToDotDate(ymds[0]),
-          toDot: formatYMDToDotDate(ymds[ymds.length - 1])
-        };
-      }
-    }
     return {
-      fromDot: formatYMDToDotDate(todayYMD),
-      toDot: formatYMDToDotDate(todayYMD)
+      fromDot: formatYMDToDotDate(fromDate || todayYMD),
+      toDot: formatYMDToDotDate(toDate || fromDate || todayYMD)
     };
-  }, [filterByDate, fromDate, toDate, filteredReportTasks, todayYMD]);
+  }, [fromDate, toDate, todayYMD]);
 
   const summaryData = useMemo(() => {
     const map = new Map<string, { count: number; amount: number }>();
@@ -787,9 +1033,12 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
     };
   }, [filteredReportTasks]);
 
-  const generatedTimestamp = useMemo(() => formatGeneratedTimestamp(), [isOpen, filteredReportTasks.length]);
+  const generatedTimestamp = useMemo(
+    () => formatGeneratedTimestamp(),
+    [isOpen, filteredReportTasks.length, fromDate, toDate]
+  );
 
-  // Dedicated top-level portal for @media print (.print-only-report) so printing ONLY prints the A4 report
+  // Dedicated top-level portal for @media print (.print-only-report) so printing ONLY prints the A4 report for the selected date range
   const printPortal =
     typeof document !== 'undefined'
       ? createPortal(
@@ -813,58 +1062,41 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
       {printPortal}
       {isOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs overflow-y-auto flex flex-col items-center p-2 sm:p-6 animate-in fade-in duration-150 print:hidden">
-          {/* Top Control Bar (Date Range + Class Filter + Status Filter + Print / Save as PDF) */}
+          {/* Top Control Bar: Calendar From Date & To Date Range Selector + Class + Status + Print & Download */}
           <div className="w-full max-w-4xl bg-slate-900 text-white border border-slate-700 rounded-2xl p-3 sm:p-4 mb-4 shadow-xl flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-              {/* Date Mode Toggle */}
-              <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-xl px-2 py-1">
+              {/* Calendar From Date & To Date Range Selector */}
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs">
                 <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <button
-                  type="button"
-                  onClick={() => setFilterByDate(false)}
-                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${
-                    !filterByDate ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  All Dates
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterByDate(true)}
-                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${
-                    filterByDate ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  Date Filter
-                </button>
-              </div>
-
-              {/* Date Range Pickers */}
-              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-[11px] font-bold text-slate-300">From Date:</span>
                 <input
                   type="date"
                   value={fromDate}
                   onChange={e => {
-                    setFromDate(e.target.value);
-                    if (e.target.value > toDate) setToDate(e.target.value);
-                    setFilterByDate(true);
+                    const val = e.target.value;
+                    handleSetFromDate(val);
+                    if (val && toDate && val > toDate) {
+                      handleSetToDate(val);
+                    }
                   }}
-                  className="bg-slate-800 border border-slate-700 text-white rounded-xl px-2 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer [color-scheme:dark]"
                 />
-                <span className="text-slate-400 font-bold">to</span>
+                <span className="text-[11px] font-bold text-slate-300">To Date:</span>
                 <input
                   type="date"
                   value={toDate}
                   onChange={e => {
-                    setToDate(e.target.value);
-                    if (e.target.value < fromDate) setFromDate(e.target.value);
-                    setFilterByDate(true);
+                    const val = e.target.value;
+                    handleSetToDate(val);
+                    if (val && fromDate && val < fromDate) {
+                      handleSetFromDate(val);
+                    }
                   }}
-                  className="bg-slate-800 border border-slate-700 text-white rounded-xl px-2 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer [color-scheme:dark]"
                 />
               </div>
 
-              {/* Class Filter (All Class | D | C | I | S) */}
+              {/* Class Filter (All | D | C | I | S) */}
               <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-xl p-1">
                 {(['ALL', 'DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'STW'] as ConnectionClassFilterType[]).map(cls => (
                   <button
@@ -901,13 +1133,13 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
                   onChange={e => setReportStatusFilter(e.target.value)}
                   className="bg-transparent text-white text-xs font-bold focus:outline-none cursor-pointer"
                 >
-                  <option value="ALL" className="text-slate-900">All Status</option>
+                  <option value="ALL" className="text-slate-900">All Updated</option>
                   <option value="PAID" className="text-slate-900">Agency Paid</option>
                   <option value="DISCONNECT" className="text-slate-900">Disconnected</option>
                   <option value="OFFICE TEAM" className="text-slate-900">Office Team</option>
                   <option value="DISPUTE" className="text-slate-900">Dispute</option>
                   <option value="NOT FOUND" className="text-slate-900">Not Found</option>
-                  <option value="PENDING" className="text-slate-900">Connected</option>
+                  <option value="REISSUE" className="text-slate-900">Reissue</option>
                 </select>
               </div>
             </div>

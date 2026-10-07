@@ -677,11 +677,12 @@ interface CachedUsersState {
   timestamp: number;
 }
 let cachedUsersState: CachedUsersState | null = null;
+let isRefreshingUsersInBg = false;
 try {
   if (fs.existsSync(USERS_CACHE_FILE)) {
     const diskUsers = JSON.parse(fs.readFileSync(USERS_CACHE_FILE, 'utf-8'));
     if (Array.isArray(diskUsers) && diskUsers.length > 0) {
-      cachedUsersState = { users: diskUsers, timestamp: Date.now() - 15000 };
+      cachedUsersState = { users: diskUsers, timestamp: Date.now() };
     }
   }
 } catch {}
@@ -837,13 +838,24 @@ async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | nul
 }
 
 async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]> {
-  if (!forceRefresh && cachedUsersState && (Date.now() - cachedUsersState.timestamp < USERS_STATE_TTL_MS)) {
+  if (cachedUsersState && Array.isArray(cachedUsersState.users) && cachedUsersState.users.length > 0) {
+    const isExpired = Date.now() - cachedUsersState.timestamp >= USERS_STATE_TTL_MS;
+    if ((forceRefresh || isExpired) && !isRefreshingUsersInBg) {
+      isRefreshingUsersInBg = true;
+      (async () => {
+        try {
+          await refreshVerifiedUsersFromSheetNow();
+        } catch {} finally {
+          isRefreshingUsersInBg = false;
+        }
+      })();
+    }
     return cachedUsersState.users;
   }
-  if (forceRefresh) {
-    gasCache.clear();
-  }
+  return await refreshVerifiedUsersFromSheetNow();
+}
 
+async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
   const userMap = new Map<string, any>();
 
   try {
@@ -1733,16 +1745,20 @@ function loadDiskPersistence() {
   try {
     if (fs.existsSync(ENTRIES_CACHE_FILE)) {
       const arr = JSON.parse(fs.readFileSync(ENTRIES_CACHE_FILE, 'utf-8'));
-      if (Array.isArray(arr) && arr.length > 0) {
+      if (Array.isArray(arr)) {
         const cleaned = arr.filter((e: any) => {
           const catUp = String(e?.category || e?.Category || '').toUpperCase().trim();
           const idUp = String(e?.id || '').toUpperCase().trim();
           return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
         });
-        cachedEntriesState = { entries: cleaned, timestamp: Date.now() - 10000 };
+        cachedEntriesState = { entries: cleaned, timestamp: Date.now() };
       }
+    } else {
+      cachedEntriesState = { entries: [], timestamp: Date.now() };
     }
-  } catch {}
+  } catch {
+    cachedEntriesState = { entries: [], timestamp: Date.now() };
+  }
 }
 loadDiskPersistence();
 
@@ -2549,10 +2565,8 @@ async function refreshEntriesFromSheetInBackground() {
       )
     );
     const combined = mergeEntriesWithOverlay(allModuleLists.flat());
-    if (combined.length > 0 || !cachedEntriesState) {
-      cachedEntriesState = { entries: combined, timestamp: Date.now() };
-      try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
-    }
+    cachedEntriesState = { entries: combined, timestamp: Date.now() };
+    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
   } catch (err) {
     console.warn('[Background Entries Sync] Notice:', err);
   } finally {
@@ -2564,7 +2578,8 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
   if (query?.category && String(query.category).toUpperCase().trim() !== 'ALL') {
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === 'Disconnection') {
-      if (!forceRefresh && cachedDisconnectionState && cachedDisconnectionState.tasks.length > 0) {
+      if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+        if (forceRefresh) refreshDisconnectionFromSheetInBackground();
         return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(t =>
           normalizeServerEntry({ ...t, category: 'DISCONNECTION' })
         );
@@ -2572,11 +2587,18 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
       const tasks = await fetchDisconnectionTasksFromGoogleSheet();
       return tasks.map(t => normalizeServerEntry({ ...t, category: 'DISCONNECTION' }));
     }
+    const modCached = moduleEntriesCacheMap.get(canonicalTab);
+    if (modCached && Array.isArray(modCached.entries)) {
+      if (forceRefresh || Date.now() - modCached.timestamp >= 45000) {
+        fetchIsolatedModuleEntriesFromSheet(canonicalTab, true).catch(() => {});
+      }
+      return mergeEntriesWithOverlay(modCached.entries).filter(e => e.category === toFrontendCategory(canonicalTab));
+    }
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
 
-  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && cachedEntriesState.entries.length > 0) {
-    if (Date.now() - cachedEntriesState.timestamp >= 45000) {
+  if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
+    if (forceRefresh || Date.now() - cachedEntriesState.timestamp >= 45000) {
       refreshEntriesFromSheetInBackground();
     }
     return mergeEntriesWithOverlay(cachedEntriesState.entries);
@@ -3003,7 +3025,8 @@ app.put('/api/users/:id', async (req, res) => {
 const WORK_ORDERS_CACHE_FILE = path.join(process.cwd(), '.work-orders-cache.json');
 const WO_SHEET_CATEGORY = 'Work Orders';
 let serverWorkOrdersCache: any[] = [];
-let lastWorkOrdersFetchTime = 0;
+let lastWorkOrdersFetchTime = Date.now();
+let hasLoadedWorkOrdersOnce = true;
 let isSyncingWorkOrdersFromSheet = false;
 
 try {
@@ -3218,17 +3241,13 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
 }
 
 async function getMergedWorkOrders(categoryFilter?: any, forceRefresh = false): Promise<any[]> {
-  if (serverWorkOrdersCache.length === 0) {
+  if (!hasLoadedWorkOrdersOnce) {
+    hasLoadedWorkOrdersOnce = true;
     await Promise.race([
       fetchWorkOrdersFromSheet(),
-      new Promise(resolve => setTimeout(resolve, 4500))
+      new Promise(resolve => setTimeout(resolve, 2500))
     ]);
-  } else if (forceRefresh) {
-    await Promise.race([
-      fetchWorkOrdersFromSheet(),
-      new Promise(resolve => setTimeout(resolve, 4500))
-    ]);
-  } else if (Date.now() - lastWorkOrdersFetchTime > 30000) {
+  } else if (forceRefresh || Date.now() - lastWorkOrdersFetchTime > 45000) {
     fetchWorkOrdersFromSheet().catch(() => {});
   }
 
@@ -3770,7 +3789,7 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     .trim();
   const natureOfConn = String(entry['Nature of Conn'] ?? entry.natureOfConn ?? '').trim();
   const govNonGov = String(entry['Gov/Non-Gov'] ?? entry.govNonGov ?? entry.govStatus ?? '').trim();
-  const lastUpdated = String(entry['Last Updated'] || entry.lastUpdated || entry.updatedAt || new Date().toISOString()).trim();
+  const lastUpdated = String(entry['Last Updated'] || entry.lastUpdated || entry.updatedAt || '').trim();
   const priority = String(entry['Priority'] || entry.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
   const paidAmount = String(entry['Paid Amount'] ?? entry.paidAmount ?? '').trim();
   const paidDate = String(entry['Paid Date'] ?? entry.paidDate ?? entry.paymentDate ?? '').trim();
@@ -4321,23 +4340,20 @@ app.get('/api/disconnection-tasks', async (req, res) => {
     return { success: true, tasks: cleanList, stats };
   };
 
-  if (!forceRefresh && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+  if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
     const age = Date.now() - cachedDisconnectionState.timestamp;
-    if (age > 45000) {
+    if (forceRefresh || age > 45000) {
       refreshDisconnectionFromSheetInBackground();
     }
     return res.json(applyFilterAndStats(cachedDisconnectionState.tasks));
   }
 
   try {
-    if (forceRefresh) {
-      gasCache.clear();
-    }
-    // Bound foreground wait to 6s so UI refresh never hangs; if GAS takes longer, return merged cache + overlay while fetch finishes in background
+    // Bound foreground wait to 3.5s so UI refresh never hangs; if GAS takes longer, return merged cache + overlay while fetch finishes in background
     const tasks = await Promise.race([
       fetchDisconnectionTasksFromGoogleSheet(),
       new Promise<any[]>(resolve =>
-        setTimeout(() => resolve(cachedDisconnectionState?.tasks || []), 6000)
+        setTimeout(() => resolve(cachedDisconnectionState?.tasks || []), 3500)
       )
     ]);
     return res.json(applyFilterAndStats(tasks));
@@ -4821,56 +4837,88 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     ) ||
     localDisconnectionOverlayMap.get(cIdKey);
 
-  const hasReportConsumerInfo = Boolean(report.consumerName || report['Name'] || report.Name);
-  if ((!existingTask || !existingTask['Consumer Id']) && !hasReportConsumerInfo) {
-    try {
-      await fetchDisconnectionTasksFromGoogleSheet();
-      existingTask =
-        cachedDisconnectionState?.tasks?.find(
-          (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey || String(t.taskId) === taskId
-        ) ||
-        localDisconnectionOverlayMap.get(cIdKey);
-    } catch {}
-  } else if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
+  if (!cachedDisconnectionState || !Array.isArray(cachedDisconnectionState.tasks) || cachedDisconnectionState.tasks.length === 0) {
     refreshDisconnectionFromSheetInBackground();
   }
 
   if (!existingTask || !isValidDisconnectionConsumerRow(existingTask)) {
-    // Reconstruct consumer from report payload if present (e.g. when consumer was in client cache / newly uploaded)
-    const candidateFromReport = convertSheetEntryToDisconnectionTask(
+    // Reconstruct consumer from report payload immediately without blocking on Google Sheets network fetch
+    const fallbackName = String(
+      report.consumerName ||
+      report['Name'] ||
+      report.Name ||
+      report['Consumer Name'] ||
+      (existingTask && (existingTask.consumerName || existingTask['Name'])) ||
+      `Consumer #${cId}`
+    ).trim();
+    existingTask = convertSheetEntryToDisconnectionTask(
       {
+        ...(existingTask || {}),
         ...report,
         consumerId: cId,
         'Consumer Id': cId,
-        Name: report.consumerName || report['Name'] || report.Name || (existingTask && (existingTask.consumerName || existingTask['Name'])) || `Consumer ${cId}`
+        Name: fallbackName,
+        consumerName: fallbackName
       },
       (cachedDisconnectionState?.tasks?.length || 0) + 1
     );
-    if (isValidDisconnectionConsumerRow(candidateFromReport)) {
-      existingTask = candidateFromReport;
-    } else {
-      return res.status(404).json({
-        success: false,
-        error: `Consumer ${cId} not found in Disconnection tab`
-      });
-    }
   }
 
+  const nowIso = new Date().toISOString();
   const prevStatus = String(existingTask.taskStatus || existingTask.disconStatus || existingTask['Discon Status'] || 'PENDING').toUpperCase();
+  const updatedReading =
+    report.reading !== undefined || report['Reading'] !== undefined || report.meterReading !== undefined
+      ? String(report.reading ?? report['Reading'] ?? report.meterReading ?? '').trim()
+      : String(existingTask.reading ?? existingTask['Reading'] ?? '').trim();
+  const updatedPaymentStatus =
+    report.paymentStatus !== undefined || report['Payment Status'] !== undefined
+      ? String(report.paymentStatus ?? report['Payment Status'] ?? '').trim()
+      : String(existingTask.paymentStatus ?? existingTask['Payment Status'] ?? (newStatus === 'PAID' ? 'PAID' : '')).trim();
+  const updatedPaidAmount =
+    report.paidAmount !== undefined || report['Paid Amount'] !== undefined
+      ? String(report.paidAmount ?? report['Paid Amount'] ?? '').trim()
+      : String(existingTask.paidAmount ?? existingTask['Paid Amount'] ?? '').trim();
+  const updatedPaidDate =
+    report.paidDate !== undefined || report['Paid Date'] !== undefined || report.paymentDate !== undefined
+      ? String(report.paidDate ?? report['Paid Date'] ?? report.paymentDate ?? '').trim()
+      : String(existingTask.paidDate ?? existingTask['Paid Date'] ?? '').trim();
+  const updatedPaidType =
+    report.paidType !== undefined || report['Paid Type'] !== undefined || report.paymentReference !== undefined
+      ? String(report.paidType ?? report['Paid Type'] ?? report.paymentReference ?? '').trim()
+      : String(existingTask.paidType ?? existingTask['Paid Type'] ?? '').trim();
+  const updatedDisconDate =
+    report.disconDate !== undefined || report['Discon Date'] !== undefined || report.reportDate !== undefined
+      ? String(report.disconDate ?? report['Discon Date'] ?? report.reportDate ?? '').trim()
+      : String(existingTask.disconDate ?? existingTask['Discon Date'] ?? dateStr).trim();
+  const updatedGisPole =
+    report.gisPole !== undefined || report['Gis Pole'] !== undefined
+      ? String(report.gisPole ?? report['Gis Pole'] ?? '').trim()
+      : String(existingTask.gisPole ?? existingTask['Gis Pole'] ?? '').trim();
+  const updatedAgency =
+    report.agency !== undefined || report['Agency'] !== undefined || report.assignedAgency !== undefined
+      ? String(report.agency ?? report['Agency'] ?? report.assignedAgency ?? '').trim()
+      : String(existingTask.agency ?? existingTask['Agency'] ?? existingTask.assignedAgency ?? '').trim();
+  const updatedImage =
+    report.photoUrl !== undefined || report['Image'] !== undefined || report.photoDataUrl !== undefined
+      ? String(report.photoUrl ?? report['Image'] ?? report.photoDataUrl ?? '').trim()
+      : String(existingTask.photoUrl ?? existingTask['Image'] ?? '').trim();
+
+  const effectiveHistoryDate = (newStatus === 'PAID' && updatedPaidDate) ? updatedPaidDate : (updatedDisconDate || dateStr);
+
   const newHistoryEntry = {
-    date: dateStr,
+    date: effectiveHistoryDate,
     time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
     previousStatus: prevStatus,
     newStatus: newStatus,
-    workerName: String(report.workerName || existingTask.assignedAgency || existingTask.agency || 'Worker'),
+    workerName: String(report.workerName || updatedAgency || existingTask.assignedAgency || existingTask.agency || 'Worker'),
     remarks: remarksStr,
-    paidAmount: existingTask.paidAmount || '',
-    meterReading: existingTask.reading || '',
-    photoUrl: existingTask.imageUrl || '',
+    paidAmount: updatedPaidAmount,
+    meterReading: updatedReading,
+    photoUrl: updatedImage,
     action: 'UPDATE'
   };
 
-  // Preserve ALL existing consumer columns 100% unchanged; ONLY update Status ('Discon Status') and Remark ('Notes')
+  // Preserve ALL existing consumer identity columns 100% unchanged; update operational report fields
   const updatedTaskObj = {
     ...existingTask,
     taskId: existingTask.taskId || taskId || `TASK-DISC-${cId}`,
@@ -4887,6 +4935,33 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     'Notes': remarksStr,
     'Remark': remarksStr,
     'Remarks': remarksStr,
+    reading: updatedReading,
+    meterReading: updatedReading,
+    'Reading': updatedReading,
+    paymentStatus: updatedPaymentStatus,
+    'Payment Status': updatedPaymentStatus,
+    paidAmount: updatedPaidAmount,
+    'Paid Amount': updatedPaidAmount,
+    paidDate: updatedPaidDate,
+    paymentDate: updatedPaidDate,
+    'Paid Date': updatedPaidDate,
+    paidType: updatedPaidType,
+    paymentReference: updatedPaidType,
+    'Paid Type': updatedPaidType,
+    disconDate: updatedDisconDate,
+    reportDate: updatedDisconDate,
+    'Discon Date': updatedDisconDate,
+    gisPole: updatedGisPole,
+    'Gis Pole': updatedGisPole,
+    agency: updatedAgency,
+    assignedAgency: updatedAgency,
+    'Agency': updatedAgency,
+    photoUrl: updatedImage,
+    imageUrl: updatedImage,
+    'Image': updatedImage,
+    lastUpdated: nowIso,
+    'Last Updated': nowIso,
+    updatedAt: nowIso,
     statusHistory: [newHistoryEntry, ...(Array.isArray(existingTask.statusHistory) ? existingTask.statusHistory : [])],
     _onlyUpdateStatusAndRemark: true,
     _localUpdatedAt: Date.now(),
@@ -5115,6 +5190,24 @@ async function startServer() {
         const vite = await createViteServer({
           server: { middlewareMode: true, hmr: false },
           appType: 'spa',
+          plugins: [
+            {
+              name: 'disable-hmr-ws-rejection',
+              transform(code, id) {
+                if (id.includes('vite/dist/client/client.mjs')) {
+                  return code
+                    .replace(
+                      'reject(new Error("WebSocket closed without opened."));',
+                      'resolve();'
+                    )
+                    .replace(
+                      'transport.connect(createHMRHandler(handleMessage));',
+                      '/* HMR disabled */'
+                    );
+                }
+              }
+            }
+          ]
         });
         viteMiddleware = vite.middlewares;
       } catch (viteErr) {
