@@ -187,6 +187,13 @@ export function getConnectionClassLabel(cls: 'DOMESTIC' | 'COMMERCIAL' | 'INDUST
   }
 }
 
+function parseAmountValue(val: unknown): number {
+  if (val === undefined || val === null || val === '') return 0;
+  const clean = String(val).replace(/[^0-9.-]/g, '');
+  const num = parseFloat(clean);
+  return isNaN(num) ? 0 : num;
+}
+
 /**
  * Universal status matcher across Disconnection Dashboard, Performance Dashboard, and Consumer List.
  */
@@ -198,44 +205,42 @@ export function matchesDisconnectionStatusFilter(task: DisconnectionTask, status
     task.taskStatus ||
     task.disconStatus ||
     (task as any)['Discon Status'] ||
+    (task as any).status ||
     'PENDING'
   ).trim().toUpperCase();
-
-  const paidAmt = parseFloat(String(task.paidAmount || (task as any)['Paid Amount'] || '0').replace(/[^0-9.-]/g, '')) || 0;
   const paymentSt = String(task.paymentStatus || (task as any)['Payment Status'] || '').trim().toUpperCase();
+  const paidAmt = parseAmountValue(task.paidAmount ?? (task as any)['Paid Amount']);
 
   if (filterUpper === 'URGENT') {
     return String(task.priority || (task as any)['Priority'] || '').trim().toUpperCase() === 'URGENT';
   }
 
   if (filterUpper === 'PAID') {
-    return rawStatus === 'PAID' || paymentSt === 'PAID' || (paidAmt > 0 && rawStatus !== 'DISCONNECT' && rawStatus !== 'DISCONNECTED');
+    return rawStatus === 'PAID';
   }
 
   if (filterUpper === 'DISCONNECT' || filterUpper === 'DISCONNECTED') {
     return (
       rawStatus === 'DISCONNECT' ||
       rawStatus === 'DISCONNECTED' ||
-      rawStatus === 'COMPLETED' ||
-      rawStatus === 'ALREADY DISCONNECTED'
+      rawStatus === 'ALREADY DISCONNECTED' ||
+      rawStatus === 'COMPLETED'
     );
   }
 
   if (filterUpper === 'COMPLETED') {
     return (
+      rawStatus === 'COMPLETED' ||
       rawStatus === 'DISCONNECT' ||
       rawStatus === 'DISCONNECTED' ||
-      rawStatus === 'COMPLETED' ||
       rawStatus === 'ALREADY DISCONNECTED' ||
-      rawStatus === 'PAID' ||
-      paymentSt === 'PAID' ||
-      paidAmt > 0
+      rawStatus === 'PAID'
     );
   }
 
   if (filterUpper === 'PENDING' || filterUpper === 'CONNECTED') {
-    const isPaid = rawStatus === 'PAID' || paymentSt === 'PAID' || paidAmt > 0;
-    const isDisc = rawStatus === 'DISCONNECT' || rawStatus === 'DISCONNECTED' || rawStatus === 'COMPLETED' || rawStatus === 'ALREADY DISCONNECTED';
+    const isPaid = rawStatus === 'PAID';
+    const isDisc = rawStatus === 'DISCONNECT' || rawStatus === 'DISCONNECTED' || rawStatus === 'ALREADY DISCONNECTED' || rawStatus === 'COMPLETED';
     const isOther = rawStatus === 'DISPUTE' || rawStatus === 'OFFICE TEAM' || rawStatus === 'NOT FOUND' || rawStatus === 'UNABLE' || rawStatus === 'REISSUE';
     if (filterUpper === 'CONNECTED') {
       return !isPaid && !isDisc && !isOther;
@@ -262,7 +267,8 @@ export function matchesDisconnectionStatusFilter(task: DisconnectionTask, status
   }
 
   if (filterUpper === 'REISSUE') {
-    return rawStatus === 'REISSUE';
+    const lock = getReissueLockState(task);
+    return rawStatus === 'REISSUE' || lock.isReissueApproved || lock.isReissueRequested;
   }
 
   return rawStatus === filterUpper;
@@ -292,12 +298,14 @@ export function cleanDisconnectionNotes(rawNotes?: string): string {
     .replace(/\[DELETED_BY_ADMIN\]/gi, '')
     .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
     .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
+    .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
+    .replace(/\s*\|\s*$/, '')
     .trim();
 }
 
 /**
- * Evaluates whether a Disconnection task has a Re-issue Request pending / approved by Admin.
- * Workers, Supervisors, and Admins can update status and remarks on any consumer record.
+ * Evaluates whether a Disconnection task has a Re-issue Request pending / approved / rejected by Admin.
+ * Workers, Agencies, Supervisors, and Admins can update status and remarks on any consumer record.
  */
 export function getReissueLockState(task: DisconnectionTask): {
   isUpdatedOnce: boolean;
@@ -305,6 +313,8 @@ export function getReissueLockState(task: DisconnectionTask): {
   isReissueRequested: boolean;
   reissueRequested: boolean;
   isReissueApproved: boolean;
+  isReissueRejected: boolean;
+  reissueRejected: boolean;
   requestedBy: string;
   requestedAt: string;
 } {
@@ -319,21 +329,37 @@ export function getReissueLockState(task: DisconnectionTask): {
   );
 
   const reqMatch = rawNotes.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
-  const isReissueRequested = Boolean(task.reissueRequested || reqMatch);
+  const hasRejectTag = /\[REISSUE_REJECTED/i.test(rawNotes);
+  const hasApproveTag = /\[REISSUE_APPROVED/i.test(rawNotes);
+
   const isReissueApproved = Boolean(
-    task.reissueApproved ||
-    /\[REISSUE_APPROVED/i.test(rawNotes) ||
+    task.reissueApproved === true ||
+    hasApproveTag ||
     rawStatus === 'REISSUE'
   );
 
+  const isReissueRejected = Boolean(
+    !isReissueApproved &&
+    (task.reissueRejected === true || hasRejectTag)
+  );
+
+  const isReissueRequested = Boolean(
+    !isReissueApproved &&
+    !isReissueRejected &&
+    (task.reissueRequested === true || Boolean(reqMatch))
+  );
+
   const isInitialPending =
-    rawStatus === '' ||
-    rawStatus === 'PENDING' ||
-    rawStatus === 'CONNECTED' ||
-    rawStatus === 'IN PROGRESS';
+    (rawStatus === '' ||
+      rawStatus === 'PENDING' ||
+      rawStatus === 'CONNECTED' ||
+      rawStatus === 'IN PROGRESS') &&
+    !isReissueRequested &&
+    !isReissueApproved &&
+    !isReissueRejected;
 
   const isUpdatedOnce = !isInitialPending;
-  const isLockedForWorker = false;
+  const isLockedForWorker = isUpdatedOnce && !isReissueApproved;
 
   const requestedBy = cleanWorkerOrAgencyName(
     task.reissueRequestedBy ||
@@ -356,8 +382,127 @@ export function getReissueLockState(task: DisconnectionTask): {
     isReissueRequested,
     reissueRequested: isReissueRequested,
     isReissueApproved,
+    isReissueRejected,
+    reissueRejected: isReissueRejected,
     requestedBy,
     requestedAt
   };
 }
+
+/**
+ * Checks whether a single Disconnection consumer row's "Agency" column matches the logged-in Agency user.
+ * Strictly requires a non-empty Agency column in the sheet that matches the user's Agency Name or Login ID.
+ */
+export function doesTaskBelongToAgencyUser(
+  task: DisconnectionTask,
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null
+): boolean {
+  if (!task || !user) return false;
+
+  const rawTaskAgency = String(
+    (task as any)['Agency'] ??
+    task.Agency ??
+    task.agency ??
+    task.assignedAgency ??
+    ''
+  ).trim();
+
+  if (!rawTaskAgency) return false;
+
+  const normTaskAgency = cleanWorkerOrAgencyName(rawTaskAgency)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+    .trim();
+  const compactTaskAgency = normTaskAgency.replace(/\s+/g, '');
+  if (!compactTaskAgency) return false;
+
+  const rawUserName = String(user.name || user.username || '').trim();
+  const normUserName = cleanWorkerOrAgencyName(rawUserName)
+    .toLowerCase()
+    .replace(/^agency\s+/i, '')
+    .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+    .trim();
+  const compactUserName = normUserName.replace(/\s+/g, '');
+
+  const rawUserId = String(user.idNo || '').trim().toLowerCase();
+  const compactUserId = rawUserId.replace(/[^a-z0-9\u0980-\u09ff]+/g, '');
+
+  if (compactUserName.length >= 2 && compactTaskAgency === compactUserName) {
+    return true;
+  }
+  if (compactUserId.length >= 2 && (compactTaskAgency === compactUserId || rawTaskAgency.toLowerCase() === rawUserId)) {
+    return true;
+  }
+  if (
+    normUserName.length >= 3 &&
+    normTaskAgency.length >= 3 &&
+    (normTaskAgency === normUserName ||
+      normTaskAgency.includes(normUserName) ||
+      normUserName.includes(normTaskAgency))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Determines whether the currently logged-in user is an Agency account (or has rows assigned in the Sheet's Agency column).
+ */
+export function isAgencyUserSession(
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null,
+  allTasks?: DisconnectionTask[]
+): boolean {
+  if (!user) return false;
+  const role = String(user.role || '').trim().toLowerCase();
+  const idNo = String(user.idNo || '').trim();
+  const name = String(user.name || user.username || '').trim();
+  const desig = String(user.designation || '').trim();
+
+  if (
+    role === 'admin' ||
+    role === 'superadmin' ||
+    role === 'controller' ||
+    idNo === '8695716192' ||
+    idNo.toLowerCase() === 'admin'
+  ) {
+    return false;
+  }
+
+  if (
+    role === 'agency' ||
+    /^(agn|agency)[-_0-9]/i.test(idNo) ||
+    /agency|এজেন্সি/i.test(desig) ||
+    /enterprise|agency|associates|traders|construction/i.test(name)
+  ) {
+    return true;
+  }
+
+  if (Array.isArray(allTasks) && allTasks.length > 0) {
+    return allTasks.some(t => doesTaskBelongToAgencyUser(t, user));
+  }
+
+  return false;
+}
+
+/**
+ * Filters Disconnection tasks for the logged-in user:
+ * - Admin sees all rows.
+ * - Agency account (e.g. BISHAL ENTERPRISE, PUSPO ENTERPRISE) ONLY sees rows where the Google Sheet "Agency" column matches their Agency Name / ID.
+ * - General Lineman / Field Worker (not matching an Agency) sees the general list.
+ */
+export function filterDisconnectionTasksForUser(
+  tasks: DisconnectionTask[],
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null
+): DisconnectionTask[] {
+  if (!Array.isArray(tasks)) return [];
+  if (!user) return tasks;
+
+  if (isAgencyUserSession(user, tasks)) {
+    return tasks.filter(t => doesTaskBelongToAgencyUser(t, user));
+  }
+
+  return tasks;
+}
+
 

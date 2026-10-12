@@ -47,7 +47,9 @@ import {
   UploadCloud,
   MessageSquareWarning,
   RotateCcw,
-  Loader2
+  XCircle,
+  Loader2,
+  Building2
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType, SyncMode, DisconnectionTask } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries, deleteDisconnectionTask, submitDisconnectionTaskReport } from '../services/api';
@@ -126,14 +128,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isClearingAll, setIsClearingAll] = useState<boolean>(false);
   const [clearAllError, setClearAllError] = useState<string | null>(null);
   const [approvingReissueId, setApprovingReissueId] = useState<string | null>(null);
+  const [rejectingReissueId, setRejectingReissueId] = useState<string | null>(null);
+  const [showReissueRequestsPanel, setShowReissueRequestsPanel] = useState<boolean>(false);
+  const [localReissueOverrides, setLocalReissueOverrides] = useState<Record<string, 'APPROVED' | 'REJECTED'>>({});
 
   const handleAdminApproveReissue = async (task: DisconnectionTask) => {
-    const cId = String(task.consumerId || task.taskId || '');
+    const cId = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim();
     setApprovingReissueId(cId);
+    setLocalReissueOverrides(prev => ({ ...prev, [cId]: 'APPROVED' }));
     try {
       const cleanedNotes = cleanDisconnectionNotes(task.workerRemarks || task.notes || '');
-      const approvedMarker = `${cleanedNotes ? cleanedNotes + ' | ' : ''}[REISSUE_APPROVED]`;
+      const approvedMarker = `${cleanedNotes ? cleanedNotes + ' ' : ''}[REISSUE_APPROVED]`.trim();
       await submitDisconnectionTaskReport({
+        ...task,
         taskId: task.taskId || `TASK-DISC-${cId}`,
         consumerId: cId,
         consumerName: task.consumerName || '',
@@ -142,12 +149,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         workerRemarks: approvedMarker,
         notes: approvedMarker,
         agency: cleanNameOnly(task.assignedAgency || task.agency || ''),
-        workerId: '',
-        workerName: cleanNameOnly(task.assignedWorkerName || '')
+        workerId: 'ADMIN',
+        workerName: cleanNameOnly(task.assignedWorkerName || 'Admin'),
+        reissueRequested: false,
+        reissueApproved: true,
+        reissueRejected: false,
+        reissueAction: 'APPROVE'
       });
       onRefresh();
     } finally {
       setApprovingReissueId(null);
+    }
+  };
+
+  const handleAdminRejectReissue = async (task: DisconnectionTask) => {
+    const cId = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim();
+    setRejectingReissueId(cId);
+    setLocalReissueOverrides(prev => ({ ...prev, [cId]: 'REJECTED' }));
+    try {
+      const cleanedNotes = cleanDisconnectionNotes(task.workerRemarks || task.notes || '');
+      const rejectedMarker = `${cleanedNotes ? cleanedNotes + ' ' : ''}[REISSUE_REJECTED]`.trim();
+      const keepStatus = (task.disconStatus || task.taskStatus || 'DISCONNECT') as any;
+      await submitDisconnectionTaskReport({
+        ...task,
+        taskId: task.taskId || `TASK-DISC-${cId}`,
+        consumerId: cId,
+        consumerName: task.consumerName || '',
+        taskStatus: keepStatus,
+        disconStatus: String(keepStatus),
+        workerRemarks: rejectedMarker,
+        notes: rejectedMarker,
+        agency: cleanNameOnly(task.assignedAgency || task.agency || ''),
+        workerId: 'ADMIN',
+        workerName: cleanNameOnly(task.assignedWorkerName || 'Admin'),
+        reissueRequested: false,
+        reissueApproved: false,
+        reissueRejected: true,
+        reissueAction: 'REJECT'
+      });
+      onRefresh();
+    } finally {
+      setRejectingReissueId(null);
     }
   };
 
@@ -557,8 +599,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
 
   const effectiveDiscTasks: DisconnectionTask[] = React.useMemo(() => {
-    return (disconnectionTasks || []).filter(t => !isDeletedLocally(t));
-  }, [disconnectionTasks, isDeletedLocally]);
+    return (disconnectionTasks || [])
+      .filter(t => !isDeletedLocally(t))
+      .map(t => {
+        const cId = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '').replace(/^TASK-DISC-/i, '').trim();
+        const ov = localReissueOverrides[cId];
+        if (ov === 'APPROVED') {
+          const baseNotes = cleanDisconnectionNotes(t.workerRemarks || t.notes || '');
+          const appNotes = `${baseNotes} [REISSUE_APPROVED]`.trim();
+          return {
+            ...t,
+            taskStatus: 'REISSUE' as any,
+            disconStatus: 'REISSUE',
+            workerRemarks: appNotes,
+            notes: appNotes,
+            reissueRequested: false,
+            reissueApproved: true,
+            reissueRejected: false
+          };
+        }
+        if (ov === 'REJECTED') {
+          const baseNotes = cleanDisconnectionNotes(t.workerRemarks || t.notes || '');
+          const rejNotes = `${baseNotes} [REISSUE_REJECTED]`.trim();
+          return {
+            ...t,
+            workerRemarks: rejNotes,
+            notes: rejNotes,
+            reissueRequested: false,
+            reissueApproved: false,
+            reissueRejected: true
+          };
+        }
+        return t;
+      });
+  }, [disconnectionTasks, isDeletedLocally, localReissueOverrides]);
+
+  const pendingReissueTasks = React.useMemo(
+    () => effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested),
+    [effectiveDiscTasks]
+  );
 
   const discEntriesFromTasks: PowerEntry[] = React.useMemo(() => {
     return effectiveDiscTasks.map((t) => {
@@ -594,6 +673,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         phase: t.device || t.deviceType || raw['Device'] || '',
         tariffCategory: t.baseClass || raw['Class'] || '',
         agencyName: raw.agencyName || t.assignedAgency || raw['Agency'] || '',
+        photoUrl: t.photoUrl || raw['Image'] || raw.imageUrl || raw.image || '',
       };
     });
   }, [effectiveDiscTasks]);
@@ -872,31 +952,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="space-y-6">
       {/* Admin Top Dashboard Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-          <div className="flex items-center gap-3">
-            <img 
-              src={appLogo} 
-              alt="Power of Construction Round Logo" 
-              className="w-12 h-12 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
-              referrerPolicy="no-referrer"
-            />
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-6 shadow-sm relative overflow-hidden">
+        <div className="absolute -top-24 -right-24 w-64 h-64 bg-gradient-to-br from-amber-400/10 via-sky-400/5 to-transparent rounded-full blur-2xl pointer-events-none" />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4 relative">
+          <div className="flex items-center gap-3.5">
+            <div className="relative shrink-0">
+              <div className="absolute -inset-0.5 bg-gradient-to-tr from-amber-500 via-yellow-400 to-orange-500 rounded-full opacity-80 blur-[1px]" />
+              <img 
+                src={appLogo} 
+                alt="Power of Construction Round Logo" 
+                className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover shadow-md border-2 border-white p-0.5 bg-white shrink-0"
+                referrerPolicy="no-referrer"
+              />
+              <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white shadow-xs" title="Live System Online" />
+            </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                  POWER Admin Control Panel
-                </h1>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  Live Master Data
+              <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 text-amber-400 text-[10px] font-black uppercase tracking-widest shadow-2xs border border-slate-800">
+                  <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+                  <span>WBSEDCL EXECUTIVE SUITE</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/90 shadow-2xs">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Live Master Data</span>
                 </span>
               </div>
-              <p className="text-xs sm:text-sm text-slate-500">
-                All field entries submitted by linemen and workers are synced and secured here in real time
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-black tracking-tight flex items-center gap-2 flex-wrap">
+                  <span className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-500 bg-clip-text text-transparent drop-shadow-2xs">
+                    POWER
+                  </span>
+                  <span className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 bg-clip-text text-transparent">
+                    Admin Control Panel
+                  </span>
+                </h1>
+              </div>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                {lang === 'bn'
+                  ? 'ফিল্ড ইঞ্জিনিয়ারিং, ওয়ার্কার আইডি, লাইভ ক্লাউড সিঙ্ক ও মাস্টার রিপোর্ট কমান্ড সেন্টার'
+                  : 'Real-time field operations, identity governance & live cloud synchronization hub'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               id="admin-refresh-btn"
               onClick={onRefresh}
@@ -945,20 +1044,59 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* ORGANIZED ADMIN OPTIONS COMMAND BAR (Styled like Performance Dashboard NSC & Disconnection Cards) */}
-        <div className="mt-4 pt-2 border-t border-slate-100">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-[11px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-amber-500" />
-              <span>{lang === 'bn' ? 'অ্যাডমিন অপারেশন ও ডাটা কন্ট্রোল অপশন' : 'Admin Operations & Data Control Hub'}</span>
+        {/* ORGANIZED ADMIN OPERATIONS & DATA CONTROL HUB (4 Bespoke Executive Modules) */}
+        <div className="mt-4 pt-3">
+          <div className="flex items-center justify-between mb-3.5">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center shadow-2xs">
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+              </div>
+              <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
+                {lang === 'bn' ? 'অ্যাডমিন অপারেশন ও ডাটা কন্ট্রোল হাব' : 'Admin Operations & Data Control Hub'}
+              </span>
             </div>
-            <span className="text-[10px] text-slate-500 font-bold bg-slate-100 border border-slate-200 px-2.5 py-0.5 rounded-full hidden sm:inline">
-              {lang === 'bn' ? 'কর্মী আইডি, ক্লাউড ব্যাকআপ, ওয়ার্ক অর্ডার ও এক্সপোর্ট' : 'Worker ID, Cloud Backup, Work Orders & Export'}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Compact "Reissue Request's" Option Button in Admin Panel */}
+              <button
+                id="admin-reissue-requests-btn"
+                type="button"
+                onClick={() => {
+                  setShowReissueRequestsPanel(prev => !prev);
+                  setTimeout(() => {
+                    document.getElementById('admin-reissue-requests-inbox')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 80);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  pendingReissueTasks.length > 0
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-500 shadow-purple-500/25 ring-2 ring-purple-300/60'
+                    : showReissueRequestsPanel
+                      ? 'bg-purple-100 text-purple-900 border-purple-300'
+                      : 'bg-purple-50 hover:bg-purple-100 text-purple-800 border-purple-200'
+                }`}
+                title="View Worker Reissue Requests (Approve or Reject)"
+              >
+                <MessageSquareWarning className={`w-3.5 h-3.5 ${pendingReissueTasks.length > 0 ? 'text-amber-300 animate-bounce' : 'text-purple-600'}`} />
+                <span>Reissue Request's</span>
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                    pendingReissueTasks.length > 0
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-purple-200/80 text-purple-900'
+                  }`}
+                >
+                  {pendingReissueTasks.length}
+                </span>
+              </button>
+
+              <span className="text-[10px] text-slate-600 font-extrabold bg-slate-100/90 border border-slate-200/80 px-2.5 py-1 rounded-full hidden md:inline-flex items-center gap-1.5">
+                <Activity className="w-3 h-3 text-amber-600" />
+                <span>{lang === 'bn' ? 'আইডি ভল্ট • ক্লাউড সিঙ্ক • এক্সেল রিপোর্ট • ওয়ার্ক অর্ডার' : 'ID Vault • Cloud Sync • Excel Export • Work Orders'}</span>
+              </span>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {/* 1. Worker & User Accounts (Amber - NSC Card Style) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {/* 1. Worker & User Accounts (Manage IDs) */}
             <button
               id="admin-manage-users-btn"
               type="button"
@@ -966,88 +1104,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 setUserModalTab('create');
                 setIsUserModalOpen(true);
               }}
-              className="text-left p-3 rounded-xl border border-amber-300 bg-amber-50 hover:shadow-md hover:border-amber-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98]"
-              title="Create new worker or admin IDs"
+              className="text-left p-4 rounded-2xl border border-amber-200/90 bg-gradient-to-br from-amber-50/90 via-white to-orange-50/70 hover:shadow-lg hover:shadow-amber-500/10 hover:border-amber-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.99] flex flex-col justify-between"
+              title="Create & manage worker or admin login IDs and passwords"
             >
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <Users className="w-4 h-4 text-amber-700" />
-                </div>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-amber-100 text-amber-900 border-amber-300">
-                  {lang === 'bn' ? 'ইউজার তৈরি' : 'Manage IDs'}
-                </span>
-              </div>
-
-              <div className="mt-1">
-                <p className="text-[11px] font-bold text-slate-700 truncate">
-                  {lang === 'bn' ? '1. কর্মী ও ইউজার আইডি' : '1. WORKER & USER ID'}
-                </p>
-                <div className="flex items-baseline gap-1.5 mt-0.5">
-                  <span className="text-sm sm:text-base font-black text-amber-700 truncate">
-                    {lang === 'bn' ? 'ইউজার ম্যানেজ' : 'Manage Users'}
-                  </span>
-                </div>
-                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                  {lang === 'bn' ? 'একাউন্ট তৈরি ও লিস্ট' : 'Create & manage login IDs'}
-                </p>
-              </div>
-
-              <div className="w-full bg-amber-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
-                <div className="h-full bg-amber-500 rounded-full w-full" />
-              </div>
-            </button>
-
-            {/* 2. Password Control (Rose - Disconnection Card Style) */}
-            <button
-              id="admin-change-password-btn"
-              type="button"
-              onClick={() => {
-                setUserModalTab('change-password');
-                setIsUserModalOpen(true);
-              }}
-              className="text-left p-3 rounded-xl border border-rose-300 bg-rose-50 hover:shadow-md hover:border-rose-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98]"
-              title="যেকোনো কর্মী বা এডমিনের পাসওয়ার্ড পরিবর্তন করুন"
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <KeyRound className="w-4 h-4 text-rose-700" />
-                </div>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-rose-100 text-rose-900 border-rose-300">
-                  {lang === 'bn' ? 'পাসওয়ার্ড' : 'Security'}
-                </span>
-              </div>
-
-              <div className="mt-1">
-                <p className="text-[11px] font-bold text-slate-700 truncate">
-                  {lang === 'bn' ? '2. পাসওয়ার্ড কন্ট্রোল' : '2. PASSWORD CONTROL'}
-                </p>
-                <div className="flex items-baseline gap-1.5 mt-0.5">
-                  <span className="text-sm sm:text-base font-black text-rose-700 truncate">
-                    {lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন' : 'Change Password'}
-                  </span>
-                </div>
-                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                  {lang === 'bn' ? 'কর্মী ও এডমিন পাসওয়ার্ড' : 'Reset worker/admin key'}
-                </p>
-              </div>
-
-              <div className="w-full bg-rose-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
-                <div className="h-full bg-rose-500 rounded-full w-full" />
-              </div>
-            </button>
-
-            {/* 3. Google Sheets Live Cloud Backend (Sky - Pole Case Card Style) */}
-            <div className="text-left p-3 rounded-xl border border-sky-300 bg-sky-50 hover:shadow-md hover:border-sky-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-amber-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm shadow-amber-500/20 flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-amber-100/90 text-amber-900 border-amber-300 flex items-center gap-1 shadow-2xs">
+                    <KeyRound className="w-2.5 h-2.5 text-amber-700" />
+                    <span>{lang === 'bn' ? 'আইডি ও পিন' : 'Manage IDs'}</span>
+                  </span>
+                </div>
+
+                <div className="mt-1">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-amber-700/80 truncate">
+                    {lang === 'bn' ? '01 • আইডেন্টিটি ও অ্যাক্সেস ভল্ট' : '01 • IDENTITY & ACCESS VAULT'}
+                  </p>
+                  <div className="flex items-center justify-between gap-1.5 mt-0.5">
+                    <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-amber-700 transition-colors truncate">
+                      {lang === 'bn' ? 'ইউজার ও আইডি কন্ট্রোল' : 'Worker & Admin IDs'}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-amber-600 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all shrink-0" />
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                    {lang === 'bn' ? 'নতুন আইডি তৈরি, লিস্ট ও পাসওয়ার্ড' : 'Create IDs, directory & PIN control'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="w-full bg-amber-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full w-full" />
+              </div>
+            </button>
+
+            {/* 2. Google Sheets Live Cloud Backend */}
+            <div className="text-left p-4 rounded-2xl border border-sky-200/90 bg-gradient-to-br from-sky-50/90 via-white to-blue-50/70 hover:shadow-lg hover:shadow-sky-500/10 hover:border-sky-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-sky-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
                   <button
                     type="button"
                     onClick={handleSyncToGoogleSheets}
                     disabled={isSyncingSheets}
-                    className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                    className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-sm shadow-sky-500/20 flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
                     title="Sync with Google Sheets"
                   >
-                    <RefreshCw className={`w-4 h-4 text-sky-700 ${isSyncingSheets ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-4 h-4 ${isSyncingSheets ? 'animate-spin' : ''}`} />
                   </button>
                   {currentSheetUrl ? (
                     <a
@@ -1055,16 +1160,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-sky-100 hover:bg-sky-200 text-sky-900 border-sky-300 flex items-center gap-1 transition-colors"
+                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100/90 hover:bg-sky-200 text-sky-900 border-sky-300 flex items-center gap-1 transition-colors shadow-2xs"
                       title="Open Live Google Sheet Spreadsheet"
                     >
-                      <span>{lang === 'bn' ? 'খুলুন' : 'Open'}</span>
+                      <span>{lang === 'bn' ? 'শীট খুলুন' : 'Open Sheet'}</span>
                       <ExternalLink className="w-2.5 h-2.5" />
                     </a>
                   ) : (
-                    <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-sky-100 text-sky-900 border-sky-300 flex items-center gap-1">
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100/90 text-sky-900 border-sky-300 flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span>Live</span>
+                      <span>Cloud Live</span>
                     </span>
                   )}
                 </div>
@@ -1077,46 +1182,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="w-full text-left mt-1 cursor-pointer disabled:opacity-60"
                   title="Google Sheets-এ সম্পূর্ণ ডাটাবেস লাইভ ব্যাকআপ ও সেভ করুন"
                 >
-                  <p className="text-[11px] font-bold text-slate-700 truncate">
-                    3. GOOGLE SHEETS
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-sky-700/80 truncate">
+                    {lang === 'bn' ? '02 • গুগল শীটস ক্লাউড ইঞ্জিন' : '02 • GOOGLE SHEETS CLOUD'}
                   </p>
-                  <div className="flex items-baseline gap-1.5 mt-0.5">
-                    <span className="text-sm sm:text-base font-black text-sky-700 truncate">
-                      {isSyncingSheets ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...') : (lang === 'bn' ? 'শীট সিঙ্ক' : 'Sync Sheets')}
+                  <div className="flex items-center justify-between gap-1.5 mt-0.5">
+                    <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-sky-700 transition-colors truncate">
+                      {isSyncingSheets ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing Cloud...') : (lang === 'bn' ? 'লাইভ শীট সিঙ্ক' : 'Sync Master Sheet')}
                     </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-sky-600 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all shrink-0" />
                   </div>
-                  <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                    {lang === 'bn' ? 'অনলাইন লাইভ ডাটাবেস' : 'Live cloud backup'}
+                  <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                    {lang === 'bn' ? 'অনলাইন লাইভ ডাটাবেস ব্যাকআপ' : 'Instant two-way cloud backup'}
                   </p>
                 </button>
               </div>
 
-              <div className="w-full bg-sky-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
-                <div className="h-full bg-sky-500 rounded-full w-full" />
+              <div className="w-full bg-sky-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-sky-500 to-blue-600 rounded-full w-full" />
               </div>
             </div>
 
-            {/* 4. Category Excel Export & Reports (Emerald - Meter Replacement Card Style) */}
+            {/* 3. Category Excel Export & Reports */}
             <div className="relative">
-              <div className="w-full h-full text-left p-3 rounded-xl border border-emerald-300 bg-emerald-50 hover:shadow-md hover:border-emerald-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+              <div className="w-full h-full text-left p-4 rounded-2xl border border-emerald-200/90 bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/70 hover:shadow-lg hover:shadow-emerald-500/10 hover:border-emerald-400 transition-all group relative overflow-hidden flex flex-col justify-between">
+                <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-emerald-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
                 <div>
-                  <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center justify-between mb-2.5">
                     <button
                       type="button"
                       onClick={() => handleExportCategoryExcel(selectedCategory)}
-                      className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                      className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm shadow-emerald-500/20 flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
                       title="Download Excel / CSV"
                     >
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                      <FileSpreadsheet className="w-4 h-4" />
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowExportMenu(!showExportMenu)}
-                      className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-300 flex items-center gap-1 cursor-pointer transition-colors"
+                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-emerald-100/90 hover:bg-emerald-200 text-emerald-900 border-emerald-300 flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
                       title="Choose Category to Export"
                     >
                       <span>{selectedCategory === 'ALL' ? `${total} All` : selectedCategory}</span>
-                      <span>▼</span>
+                      <ChevronDown className="w-3 h-3" />
                     </button>
                   </div>
 
@@ -1127,22 +1234,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="w-full text-left mt-1 cursor-pointer"
                     title={`Download ${selectedCategory === 'ALL' ? 'All' : selectedCategory} Excel / CSV Report`}
                   >
-                    <p className="text-[11px] font-bold text-slate-700 truncate">
-                      {lang === 'bn' ? '4. এক্সেল ও CSV রিপোর্ট' : '4. EXCEL & CSV EXPORT'}
+                    <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700/80 truncate">
+                      {lang === 'bn' ? '03 • এক্সেল ও CSV রিপোর্ট' : '03 • EXCEL & CSV EXPORT'}
                     </p>
-                    <div className="flex items-baseline gap-1.5 mt-0.5">
-                      <span className="text-sm sm:text-base font-black text-emerald-700 truncate">
+                    <div className="flex items-center justify-between gap-1.5 mt-0.5">
+                      <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-emerald-700 transition-colors truncate">
                         Export {selectedCategory === 'ALL' ? 'Master' : selectedCategory}
                       </span>
+                      <Download className="w-3.5 h-3.5 text-emerald-600 opacity-0 group-hover:opacity-100 transition-all shrink-0" />
                     </div>
-                    <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                      {lang === 'bn' ? 'ক্যাটাগরি এক্সেল ডাউনলোড' : 'Download Excel / CSV'}
+                    <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                      {lang === 'bn' ? 'ক্যাটাগরি ভিত্তিক রিপোর্ট ডাউনলোড' : 'Download formatted spreadsheet'}
                     </p>
                   </button>
                 </div>
 
-                <div className="w-full bg-emerald-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
-                  <div className="h-full bg-emerald-500 rounded-full w-full" />
+                <div className="w-full bg-emerald-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full w-full" />
                 </div>
               </div>
 
@@ -1212,43 +1320,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* 5. NSC Work Order & Khata Photo Notice (Indigo - DTR Replacement Card Style) */}
+            {/* 4. NSC Work Order & Khata Photo Notice */}
             <button
               id="admin-work-orders-toggle-btn"
               type="button"
               onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
-              className={`text-left p-3 rounded-xl border transition-all cursor-pointer group relative overflow-hidden active:scale-[0.98] ${
+              className={`text-left p-4 rounded-2xl border transition-all cursor-pointer group relative overflow-hidden active:scale-[0.99] flex flex-col justify-between ${
                 showWorkOrdersManager
-                  ? 'border-indigo-500 bg-indigo-100/90 ring-2 ring-indigo-400 shadow-md'
-                  : 'border-indigo-300 bg-indigo-50 hover:shadow-md hover:border-indigo-400'
+                  ? 'border-indigo-500 bg-gradient-to-br from-indigo-100 via-indigo-50 to-purple-50 ring-2 ring-indigo-400/70 shadow-lg'
+                  : 'border-indigo-200/90 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/70 hover:shadow-lg hover:shadow-indigo-500/10 hover:border-indigo-400'
               }`}
               title="Upload and manage NSC Work Orders and Khata Slips for field workers"
             >
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="w-7 h-7 rounded-lg bg-white/90 shadow-2xs flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <FileImage className="w-4 h-4 text-indigo-700" />
-                </div>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border bg-indigo-100 text-indigo-900 border-indigo-300">
-                  {showWorkOrdersManager ? (lang === 'bn' ? 'খোলা আছে' : 'Open') : (lang === 'bn' ? 'নোটিশ বোর্ড' : 'Notices')}
-                </span>
-              </div>
-
-              <div className="mt-1">
-                <p className="text-[11px] font-bold text-slate-700 truncate">
-                  {lang === 'bn' ? '5. ওয়ার্ক অর্ডার ও খাতা' : '5. NSC WORK ORDERS'}
-                </p>
-                <div className="flex items-baseline gap-1.5 mt-0.5">
-                  <span className="text-sm sm:text-base font-black text-indigo-700 truncate">
-                    {showWorkOrdersManager ? (lang === 'bn' ? 'প্যানেল লুকান' : 'Hide Manager') : (lang === 'bn' ? 'ম্যানেজ ও আপলোড' : 'Manage & Upload')}
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-indigo-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm shadow-indigo-500/20 flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <FileImage className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-indigo-100/90 text-indigo-900 border-indigo-300 shadow-2xs">
+                    {showWorkOrdersManager ? (lang === 'bn' ? 'খোলা আছে' : 'Active View') : (lang === 'bn' ? 'নোটিশ বোর্ড' : 'Dispatch Hub')}
                   </span>
                 </div>
-                <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                  {lang === 'bn' ? 'ফিল্ড কর্মীদের নোটিশ ছবি' : 'Worker notice dispatch'}
-                </p>
+
+                <div className="mt-1">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700/80 truncate">
+                    {lang === 'bn' ? '04 • ওয়ার্ক অর্ডার ও খাতা' : '04 • NSC WORK ORDERS'}
+                  </p>
+                  <div className="flex items-center justify-between gap-1.5 mt-0.5">
+                    <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-indigo-700 transition-colors truncate">
+                      {showWorkOrdersManager ? (lang === 'bn' ? 'প্যানেল লুকান' : 'Hide Manager') : (lang === 'bn' ? 'ম্যানেজ ও আপলোড' : 'Manage & Upload')}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-indigo-600 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all shrink-0" />
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                    {lang === 'bn' ? 'ফিল্ড কর্মীদের কাজের স্লিপ ও ছবি' : 'Field worker work-order slips'}
+                  </p>
+                </div>
               </div>
 
-              <div className="w-full bg-indigo-200/70 rounded-full h-1.5 mt-2 overflow-hidden">
-                <div className="h-full bg-indigo-500 rounded-full w-full" />
+              <div className="w-full bg-indigo-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-indigo-500 to-violet-600 rounded-full w-full" />
               </div>
             </button>
           </div>
@@ -1504,69 +1616,130 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* ADMIN SMS-LIKE RE-ISSUE REQUEST NOTIFICATION INBOX */}
-        {effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length > 0 && (
-          <div className="mt-3 bg-amber-50 border-2 border-amber-400 rounded-xl p-3.5 shadow-xs space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-amber-500 text-slate-950">
+        {/* ADMIN SMS-LIKE REISSUE REQUEST'S INBOX (Shows when toggled OR when pending requests > 0) */}
+        {(showReissueRequestsPanel || pendingReissueTasks.length > 0) && (
+          <div
+            id="admin-reissue-requests-inbox"
+            className="mt-3.5 bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-2 border-purple-500/70 rounded-2xl p-4 shadow-lg space-y-3 animate-in fade-in duration-200"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-purple-500/30 pb-2.5">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-purple-500/20 border border-purple-400/40 text-amber-300">
                   <MessageSquareWarning className="w-4 h-4" />
                 </span>
                 <div>
-                  <h4 className="text-xs font-black text-amber-950 uppercase">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-xs sm:text-sm font-black text-white tracking-wide">
+                      📩 Reissue Request's ({pendingReissueTasks.length} Pending)
+                    </h4>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-[10px] font-black text-amber-300">
+                      SMS INBOX
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-medium text-purple-200 mt-0.5">
                     {lang === 'bn'
-                      ? `📩 ওয়ার্কার রি-ইস্যু মেসেজ (${effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length} টি পেন্ডিং)`
-                      : `📩 Worker Re-issue SMS Requests (${effectiveDiscTasks.filter(t => getReissueLockState(t).reissueRequested).length} Pending)`}
-                  </h4>
-                  <p className="text-[11px] font-semibold text-amber-800">
-                    {lang === 'bn'
-                      ? 'ডিসকানেকশন লিস্টে ওয়ার্কার পুনরায় স্ট্যাটাস আপডেট করার জন্য Re-issue অনুরোধ পাঠিয়েছে।'
-                      : 'Workers requested Re-issue permission to update Disconnection status again.'}
+                      ? 'কোনো ওয়ার্কার Reissue ক্লিক করলে এখানে SMS আকারে দেখা যাবে — Approve করলে ওয়ার্কার আবার Update Status করতে পারবে, আর Reject করলে ওয়ার্কার দেখতে পাবে "Your Reissue Request Rejected"।'
+                      : 'Approve to allow the worker to Update Status again, or Reject to notify "Your Reissue Request Rejected".'}
                   </p>
                 </div>
               </div>
+
+              {showReissueRequestsPanel && (
+                <button
+                  type="button"
+                  onClick={() => setShowReissueRequestsPanel(false)}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white cursor-pointer"
+                  title="Close Reissue Request's Panel"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {effectiveDiscTasks
-                .filter(t => getReissueLockState(t).reissueRequested)
-                .map((rt, rIdx) => {
+            {pendingReissueTasks.length === 0 ? (
+              <div className="bg-slate-900/80 border border-purple-500/30 rounded-xl p-4 text-center space-y-1">
+                <p className="text-xs font-bold text-purple-200">
+                  {lang === 'bn'
+                    ? 'এই মুহূর্তে কোনো নতুন Reissue Request পেন্ডিং নেই।'
+                    : 'No pending Reissue SMS requests right now.'}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {lang === 'bn'
+                    ? 'কোনো ফিল্ড ওয়ার্কার ডিসকানেকশন লিস্ট থেকে "Reissue" বাটনে ক্লিক করার সাথে সাথে এখানে SMS চলে আসবে।'
+                    : 'Whenever a worker clicks "Reissue" on a consumer card, their SMS request will appear here immediately.'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {pendingReissueTasks.map((rt, rIdx) => {
                   const lockInfo = getReissueLockState(rt);
-                  const cId = rt.consumerId || (rt as any)['Consumer Id'] || `ROW-${rIdx}`;
+                  const cId = String(rt.consumerId || (rt as any)['Consumer Id'] || `ROW-${rIdx}`).replace(/^TASK-DISC-/i, '').trim();
+                  const workerDisplay = lockInfo.requestedBy || cleanNameOnly(rt.assignedWorkerName || rt.assignedAgency) || 'Worker';
+                  const isBusy = approvingReissueId === cId || rejectingReissueId === cId;
+
                   return (
                     <div
                       key={`${cId}-${rIdx}`}
-                      className="bg-white border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2.5 shadow-2xs"
+                      className="bg-slate-900/95 border border-purple-400/40 rounded-xl p-3 flex flex-col justify-between gap-2.5 shadow-sm"
                     >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-black uppercase">
-                            {lockInfo.requestedBy || cleanNameOnly(rt.assignedWorkerName || rt.assignedAgency) || 'Worker'}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded-md bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase">
+                              📩 {workerDisplay}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-semibold">• {lockInfo.requestedAt}</span>
+                          </div>
+                          <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-950/80 px-2 py-0.5 rounded border border-purple-500/30">
+                            ID: #{cId}
                           </span>
-                          <span className="text-[10px] font-mono font-bold text-slate-500">ID: {cId}</span>
                         </div>
-                        <p className="text-xs font-black text-slate-900 truncate mt-0.5">{rt.consumerName || 'Consumer'}</p>
-                        <p className="text-[10px] font-semibold text-slate-500">
-                          Status: <span className="font-bold text-slate-800">{rt.disconStatus || rt.taskStatus}</span>
+
+                        <p className="text-xs sm:text-sm font-black text-white truncate">
+                          {rt.consumerName || (rt as any)['Name'] || 'Consumer'}
                         </p>
+
+                        <div className="bg-purple-950/60 border border-purple-500/30 rounded-lg px-2.5 py-1.5 text-[11px] text-purple-100 italic">
+                          {lang === 'bn'
+                            ? `"স্যার, কনজিউমার #${cId} (বর্তমান স্ট্যাটাস: ${rt.disconStatus || rt.taskStatus}) পুনরায় আপডেট করার জন্য Reissue অনুমোদন দিন।"`
+                            : `"Sir, please approve Reissue for Consumer #${cId} (Current Status: ${rt.disconStatus || rt.taskStatus}) so I can update status again."`}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleAdminApproveReissue(rt)}
-                        disabled={approvingReissueId === String(cId)}
-                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
-                      >
-                        {approvingReissueId === String(cId) ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        )}
-                        <span>{lang === 'bn' ? 'Re-issue করুন' : 'Re-issue'}</span>
-                      </button>
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleAdminApproveReissue(rt)}
+                          disabled={isBusy}
+                          className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 transition-all disabled:opacity-60"
+                        >
+                          {approvingReissueId === cId ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          )}
+                          <span>{lang === 'bn' ? 'Approve (অনুমোদন)' : 'Approve'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleAdminRejectReissue(rt)}
+                          disabled={isBusy}
+                          className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 transition-all disabled:opacity-60"
+                        >
+                          {rejectingReissueId === cId ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <XCircle className="w-3.5 h-3.5" />
+                          )}
+                          <span>{lang === 'bn' ? 'Reject (বাতিল)' : 'Reject'}</span>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>

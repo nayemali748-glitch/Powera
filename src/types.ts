@@ -122,11 +122,14 @@ export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_repo
 export interface UserSession {
   id: string;
   idNo: string;
+  loginId?: string;
+  userId?: string;
+  username?: string;
   uid?: string;
   email?: string;
   name: string;
   phone?: string;
-  role: 'admin' | 'worker' | 'supervisor';
+  role: 'admin' | 'worker' | 'agency' | 'supervisor';
   status?: 'active' | 'hold';
   designation: string;
   badgeNo?: string;
@@ -142,7 +145,7 @@ export interface UserAccount {
   password?: string;
   name: string;
   phone: string;
-  role: 'admin' | 'worker' | 'supervisor';
+  role: 'admin' | 'worker' | 'agency' | 'supervisor';
   designation: string;
   badgeNo?: string;
   status?: 'active' | 'hold';
@@ -157,9 +160,9 @@ export interface ChatMessage {
   id: string;
   senderId: string;
   senderName: string;
-  senderRole: 'admin' | 'worker' | 'supervisor';
+  senderRole: 'admin' | 'worker' | 'agency' | 'supervisor';
   recipientId?: string;
-  recipientRole?: 'admin' | 'worker' | 'all';
+  recipientRole?: 'admin' | 'worker' | 'agency' | 'all';
   message: string;
   timestamp: string;
   status?: 'sent' | 'delivered' | 'read';
@@ -310,6 +313,7 @@ export interface DisconnectionTask {
   reissueRequestedBy?: string;
   reissueRequestedAt?: string;
   reissueApproved?: boolean;
+  reissueRejected?: boolean;
 }
 
 export interface WorkerPerformanceStat {

@@ -200,7 +200,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Disconnection Management & Consumer List"
           >
             <PowerOff className="w-3.5 h-3.5" />
-            <span>{currentLanguage === 'bn' ? 'ডিসকানেকশন' : 'Disconnection'}</span>
+            <span>{currentLanguage === 'bn' ? 'ডিসকানেকশন (হোম)' : 'Disconnection'}</span>
           </button>
 
           {isAdmin && (

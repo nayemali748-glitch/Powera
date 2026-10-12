@@ -24,7 +24,8 @@ import {
   Loader2,
   MoreVertical,
   MessageSquareWarning,
-  RotateCcw
+  RotateCcw,
+  XCircle
 } from 'lucide-react';
 import { DisconnectionTask } from '../types';
 import {
@@ -83,34 +84,82 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showThreeDotFilter, setShowThreeDotFilter] = useState<boolean>(false);
   const [approvingReissueId, setApprovingReissueId] = useState<string | null>(null);
+  const [rejectingReissueId, setRejectingReissueId] = useState<string | null>(null);
+  const [localReissueOverrides, setLocalReissueOverrides] = useState<Record<string, 'APPROVED' | 'REJECTED'>>({});
   const [selectedTaskForUpdate, setSelectedTaskForUpdate] = useState<DisconnectionTask | null>(null);
 
   // Pending Re-issue requests from workers
   const pendingReissueTasks = useMemo(() => {
-    return tasks.filter(t => getReissueLockState(t).reissueRequested);
-  }, [tasks]);
+    return tasks.filter(t => {
+      const cId = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '').replace(/^TASK-DISC-/i, '').trim();
+      if (cId && localReissueOverrides[cId]) return false;
+      return getReissueLockState(t).reissueRequested;
+    });
+  }, [tasks, localReissueOverrides]);
 
   const handleApproveReissue = async (task: DisconnectionTask) => {
-    const cId = String(task.consumerId || task.taskId || '');
+    const cId = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim();
     setApprovingReissueId(cId);
+    setLocalReissueOverrides(prev => ({ ...prev, [cId]: 'APPROVED' }));
     try {
       const cleanedNotes = cleanDisconnectionNotes(task.workerRemarks || task.notes || '');
-      const approvedMarker = `${cleanedNotes ? cleanedNotes + ' | ' : ''}[REISSUE_APPROVED]`;
+      const approvedMarker = `${cleanedNotes ? cleanedNotes + ' ' : ''}[REISSUE_APPROVED]`.trim();
       await submitDisconnectionTaskReport({
+        ...task,
         taskId: task.taskId || `TASK-DISC-${cId}`,
         consumerId: cId,
         consumerName: task.consumerName || '',
         taskStatus: 'REISSUE' as any,
         disconStatus: 'REISSUE',
+        'Discon Status': 'REISSUE',
         workerRemarks: approvedMarker,
+        workerReport: approvedMarker,
         notes: approvedMarker,
+        'Notes': approvedMarker,
         agency: cleanWorkerOrAgencyName(task.assignedAgency || task.agency || ''),
-        workerId: '',
-        workerName: cleanWorkerOrAgencyName(task.assignedWorkerName || '')
+        workerId: 'ADMIN',
+        workerName: cleanWorkerOrAgencyName(task.assignedWorkerName || 'Admin'),
+        reissueRequested: false,
+        reissueApproved: true,
+        reissueRejected: false,
+        reissueAction: 'APPROVE'
       });
       if (onRefresh) onRefresh();
     } finally {
       setApprovingReissueId(null);
+    }
+  };
+
+  const handleRejectReissue = async (task: DisconnectionTask) => {
+    const cId = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim();
+    setRejectingReissueId(cId);
+    setLocalReissueOverrides(prev => ({ ...prev, [cId]: 'REJECTED' }));
+    try {
+      const cleanedNotes = cleanDisconnectionNotes(task.workerRemarks || task.notes || '');
+      const rejectedMarker = `${cleanedNotes ? cleanedNotes + ' ' : ''}[REISSUE_REJECTED]`.trim();
+      const keepStatus = (task.disconStatus || task.taskStatus || 'DISCONNECT') as any;
+      await submitDisconnectionTaskReport({
+        ...task,
+        taskId: task.taskId || `TASK-DISC-${cId}`,
+        consumerId: cId,
+        consumerName: task.consumerName || '',
+        taskStatus: keepStatus,
+        disconStatus: String(keepStatus),
+        workerRemarks: rejectedMarker,
+        workerReport: rejectedMarker,
+        notes: rejectedMarker,
+        'Notes': rejectedMarker,
+        agency: cleanWorkerOrAgencyName(task.assignedAgency || task.agency || ''),
+        workerId: 'ADMIN',
+        workerName: cleanWorkerOrAgencyName(task.assignedWorkerName || 'Admin'),
+        reissueRequested: false,
+        reissueApproved: false,
+        reissueRejected: true,
+        reissueAction: 'REJECT'
+      });
+      if (onRefresh) onRefresh();
+    } finally {
+      setRejectingReissueId(null);
     }
   };
 
@@ -565,19 +614,34 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
                             </p>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleApproveReissue(rt)}
-                            disabled={approvingReissueId === String(cId)}
-                            className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
-                          >
-                            {approvingReissueId === String(cId) ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            )}
-                            <span>{lang === 'bn' ? 'Re-issue করুন' : 'Re-issue (Unlock)'}</span>
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleApproveReissue(rt)}
+                              disabled={approvingReissueId === String(cId) || rejectingReissueId === String(cId)}
+                              className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                            >
+                              {approvingReissueId === String(cId) ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              )}
+                              <span>Approve</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRejectReissue(rt)}
+                              disabled={approvingReissueId === String(cId) || rejectingReissueId === String(cId)}
+                              className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                            >
+                              {rejectingReissueId === String(cId) ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <XCircle className="w-3.5 h-3.5" />
+                              )}
+                              <span>Reject</span>
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -977,6 +1041,8 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
                     key={`${t.taskId || t.consumerId || idx}-${idx}`}
                     task={t}
                     onUpdateStatus={(taskItem) => setSelectedTaskForUpdate(taskItem)}
+                    onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                    onRejectReissue={isAdmin ? handleRejectReissue : undefined}
                     isAdmin={isAdmin}
                     onDeleteTask={onDeleteTask}
                     lang={lang}

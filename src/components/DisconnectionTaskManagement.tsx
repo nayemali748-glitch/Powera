@@ -22,6 +22,7 @@ import {
   MoreVertical,
   MessageSquareWarning,
   RotateCcw,
+  XCircle,
   FileText,
   Download,
   List,
@@ -32,15 +33,16 @@ import {
   MessageSquarePlus,
   Palette,
   KeyRound,
-  LogOut
+  LogOut,
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
   DisconnectionTask,
   DisconnectionTaskStatus,
   DisconnectionStats,
-  UserSession,
-  UserAccount
+  UserSession
 } from '../types';
 import {
   fetchDisconnectionTasks,
@@ -60,7 +62,8 @@ import {
   ConnectionClassFilterType,
   getReissueLockState,
   cleanDisconnectionNotes,
-  cleanWorkerOrAgencyName
+  cleanWorkerOrAgencyName,
+  filterDisconnectionTasksForUser
 } from '../utils/disconnectionClassifier';
 import { getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 import { DisconnectionDashboard } from './disconnection/DisconnectionDashboard';
@@ -85,6 +88,7 @@ interface DisconnectionTaskManagementProps {
   onBack?: () => void;
   onTasksChange?: (count: number) => void;
   initialTab?: DisconnectionTab;
+  onTabChange?: (tab: DisconnectionTab) => void;
   externalTasks?: DisconnectionTask[];
 }
 
@@ -94,22 +98,30 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   onBack,
   onTasksChange,
   initialTab = 'VIEW_LIST',
+  onTabChange,
   externalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
 
   // Navigation tab state (Workers always view the Consumer List directly)
-  const [activeTab, setActiveTab] = useState<DisconnectionTab>(isAdmin ? initialTab : 'VIEW_LIST');
+  const [activeTab, setActiveTabState] = useState<DisconnectionTab>(isAdmin ? initialTab : 'VIEW_LIST');
   const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(isAdmin && initialTab === 'DASHBOARD');
+
+  const setActiveTab = useCallback((nextTab: DisconnectionTab) => {
+    setActiveTabState(nextTab);
+    if (onTabChange) {
+      onTabChange(nextTab);
+    }
+  }, [onTabChange]);
 
   useEffect(() => {
     if (!isAdmin) {
-      setActiveTab('VIEW_LIST');
+      setActiveTabState('VIEW_LIST');
       setIsDashboardExpanded(false);
       return;
     }
     if (initialTab) {
-      setActiveTab(initialTab);
+      setActiveTabState(initialTab);
       if (initialTab === 'DASHBOARD') {
         setIsDashboardExpanded(true);
       }
@@ -128,7 +140,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     myPendingTasks: 0,
     myCompletionPercentage: 0
   });
-  const [availableWorkers, setAvailableWorkers] = useState<Array<{ idNo: string; name: string }>>([]);
+  const [availableWorkers, setAvailableWorkers] = useState<Array<{ id: string; idNo: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,13 +151,20 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilterType>('ALL');
   const [classFilter, setClassFilter] = useState<ConnectionClassFilterType>('ALL');
   const [agencyFilter, setAgencyFilter] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<'SERIAL_ASC' | 'DUE_DESC' | 'DUE_ASC' | 'NAME_ASC' | 'URGENT_FIRST' | 'NEWEST'>('SERIAL_ASC');
+  const [sortBy, setSortBy] = useState<'DUE_DESC' | 'SERIAL_ASC' | 'DUE_ASC' | 'NAME_ASC' | 'URGENT_FIRST' | 'NEWEST'>('DUE_DESC');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const ITEMS_PER_PAGE = 20;
   const [workerOnlyFilter, setWorkerOnlyFilter] = useState<boolean>(false);
   const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
   const [showHeaderThreeDotMenu, setShowHeaderThreeDotMenu] = useState<boolean>(false);
   const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState<boolean>(false);
   const [dailyReportFromDate, setDailyReportFromDate] = useState<string>('');
   const [dailyReportToDate, setDailyReportToDate] = useState<string>('');
+
+  // Reset pagination to Page 1 when filters or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, phaseFilter, classFilter, agencyFilter, sortBy, workerOnlyFilter]);
 
   const triggerDailyReportPdfDownload = () => {
     const updatedOnly = getDeduplicatedUpdatedTasks(filteredTasks);
@@ -208,6 +227,54 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
   const inFlightRef = useRef(false);
   const deletedConsumerIdsRef = useRef<Set<string>>(new Set());
+  const localReissueDecisionsRef = useRef<Map<string, { action: 'APPROVED' | 'REJECTED' | 'REQUEST' | 'CLEAR'; notes: string; timestamp: number }>>(new Map());
+
+  const applyLocalReissueDecision = useCallback((item: DisconnectionTask): DisconnectionTask => {
+    const cId = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
+    if (!cId) return item;
+    const dec = localReissueDecisionsRef.current.get(cId);
+    if (!dec) return item;
+    if (Date.now() - dec.timestamp > 120000) {
+      localReissueDecisionsRef.current.delete(cId);
+      return item;
+    }
+    if (dec.action === 'APPROVED') {
+      return {
+        ...item,
+        taskStatus: 'REISSUE' as DisconnectionTaskStatus,
+        disconStatus: 'REISSUE',
+        'Discon Status': 'REISSUE',
+        workerRemarks: dec.notes,
+        workerReport: dec.notes,
+        notes: dec.notes,
+        Notes: dec.notes,
+        reissueRequested: false,
+        reissueApproved: true,
+        reissueRejected: false
+      };
+    }
+    if (dec.action === 'REJECTED') {
+      return {
+        ...item,
+        workerRemarks: dec.notes,
+        workerReport: dec.notes,
+        notes: dec.notes,
+        Notes: dec.notes,
+        reissueRequested: false,
+        reissueApproved: false,
+        reissueRejected: true
+      };
+    }
+    if (dec.action === 'CLEAR') {
+      return {
+        ...item,
+        reissueRequested: false,
+        reissueApproved: false,
+        reissueRejected: false
+      };
+    }
+    return item;
+  }, []);
 
   // Fast Non-Blocking Data Fetch & Background Sync (Preserves canonical Consumer ID order & serial numbers across Admin and Worker)
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
@@ -236,7 +303,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
             return true;
           })
-          .map((item, idx) => ({
+          .map((item, idx) => applyLocalReissueDecision({
             ...item,
             serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
           }));
@@ -254,6 +321,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 item.disconStatus !== p.disconStatus ||
                 item.workerRemarks !== p.workerRemarks ||
                 item.notes !== p.notes ||
+                item.reissueRequested !== p.reissueRequested ||
+                item.reissueApproved !== p.reissueApproved ||
+                item.reissueRejected !== p.reissueRejected ||
                 item.assignedAgency !== p.assignedAgency ||
                 item.assignedWorkerName !== p.assignedWorkerName ||
                 item.outstandingDue !== p.outstandingDue ||
@@ -276,17 +346,17 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         }
       }
     } catch (err: any) {
-      console.error('Failed to load disconnection tasks:', err);
+      console.warn('Disconnection tasks sync notice:', err);
     } finally {
       inFlightRef.current = false;
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [currentUser?.role, currentUser?.idNo, currentUser?.name, onTasksChange]);
+  }, [currentUser?.role, currentUser?.idNo, currentUser?.name, onTasksChange, applyLocalReissueDecision]);
 
   // Sync with parent 10-second auto-refresh state when provided
   useEffect(() => {
-    if (Array.isArray(externalTasks)) {
+    if (Array.isArray(externalTasks) && externalTasks.length > 0) {
       const cleanIncoming = externalTasks
         .filter(t => {
           if (!isValidDisconnectionTaskOrRow(t)) return false;
@@ -296,7 +366,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
           return true;
         })
-        .map((item, idx) => ({
+        .map((item, idx) => applyLocalReissueDecision({
           ...item,
           serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
         }));
@@ -313,6 +383,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               item.disconStatus !== p.disconStatus ||
               item.workerRemarks !== p.workerRemarks ||
               item.notes !== p.notes ||
+              item.reissueRequested !== p.reissueRequested ||
+              item.reissueApproved !== p.reissueApproved ||
+              item.reissueRejected !== p.reissueRejected ||
               item.assignedAgency !== p.assignedAgency ||
               item.assignedWorkerName !== p.assignedWorkerName ||
               item.outstandingDue !== p.outstandingDue ||
@@ -323,7 +396,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         return hasChanged ? cleanIncoming : prev;
       });
     }
-  }, [externalTasks]);
+  }, [externalTasks, applyLocalReissueDecision]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {
@@ -332,27 +405,47 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         if (Array.isArray(usersResult)) {
           const mapped = usersResult
             .filter((u: any) => u.status !== 'hold' && u.status !== 'inactive')
-            .map((u: any) => ({
-              idNo: String(u.idNo || u['User ID'] || u.username || ''),
-              name: String(u.name || u['User Name'] || u.username || '')
-            }))
-            .filter(u => u.name.trim() !== '');
+            .map((u: any) => {
+              const idStr = String(u.idNo || u['User ID'] || u.username || '').trim();
+              const cleanAgencyOrUser = cleanWorkerOrAgencyName(String(u.name || u['User Name'] || u.username || '').trim());
+              return {
+                id: idStr,
+                idNo: idStr,
+                name: cleanAgencyOrUser
+              };
+            })
+            .filter(u => u.name !== '');
           setAvailableWorkers(mapped);
         }
       })
       .catch(() => {});
   }, []);
 
-  // Initial load when component mounts + listen for explicit Power App & Sheets Refresh button clicks
+  // Initial load when component mounts + background sync + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
     loadData(false);
+    const interval = setInterval(() => {
+      if (!document.hidden && !inFlightRef.current) {
+        loadData(true);
+      }
+    }, 8000);
     const onGlobalRefresh = () => {
       inFlightRef.current = false;
       loadData(true);
     };
+    const onFocusOrVisible = () => {
+      if (!document.hidden && !inFlightRef.current) {
+        loadData(true);
+      }
+    };
     window.addEventListener('power-app-sheets-refresh', onGlobalRefresh);
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
     return () => {
+      clearInterval(interval);
       window.removeEventListener('power-app-sheets-refresh', onGlobalRefresh);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
   }, [loadData]);
 
@@ -368,6 +461,16 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       // ignore
     }
 
+    const cIdKey = String(updatedTask.consumerId || (updatedTask as any)['Consumer Id'] || updatedTask.taskId || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
+    if (cIdKey) {
+      const isReissueStatus = String(updatedTask.taskStatus || '').toUpperCase() === 'REISSUE';
+      localReissueDecisionsRef.current.set(cIdKey, {
+        action: isReissueStatus ? 'APPROVED' : 'CLEAR',
+        notes: String(updatedTask.notes || updatedTask.workerRemarks || ''),
+        timestamp: Date.now()
+      });
+    }
+
     setTasks(prev => {
       const next = prev.map(t =>
         (t.taskId === updatedTask.taskId || (t.consumerId && t.consumerId === updatedTask.consumerId))
@@ -381,6 +484,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               workerReport: updatedTask.workerReport,
               Notes: updatedTask.Notes,
               notes: updatedTask.notes,
+              reissueRequested: Boolean(updatedTask.reissueRequested),
+              reissueApproved: Boolean(updatedTask.reissueApproved),
+              reissueRejected: Boolean(updatedTask.reissueRejected),
               statusHistory: updatedTask.statusHistory
             }
           : t
@@ -498,7 +604,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               reissueRequested: true,
               reissueRequestedBy: workerName,
               reissueRequestedAt: timeStr,
-              reissueApproved: false
+              reissueApproved: false,
+              reissueRejected: false
             }
           : t
       );
@@ -517,8 +624,17 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         disconStatus: task.disconStatus || task.taskStatus,
         workerRemarks: taggedNotes,
         workerReport: taggedNotes,
-        notes: taggedNotes
+        notes: taggedNotes,
+        reissueRequested: true,
+        reissueApproved: false,
+        reissueRejected: false,
+        reissueRequestedBy: workerName,
+        reissueRequestedAt: timeStr,
+        reissueAction: 'REQUEST'
       });
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
     } catch (err) {
       console.warn('Re-issue request sync notice:', err);
     }
@@ -530,6 +646,14 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     const adminName = cleanWorkerOrAgencyName(currentUser?.name || 'Admin');
     const existingNotes = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes'] || '');
     const approvedNotes = `${existingNotes} [REISSUE_APPROVED]`.trim();
+    const cIdKey = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
+    if (cIdKey) {
+      localReissueDecisionsRef.current.set(cIdKey, {
+        action: 'APPROVED',
+        notes: approvedNotes,
+        timestamp: Date.now()
+      });
+    }
 
     setTasks(prev => {
       const next = prev.map(t =>
@@ -544,7 +668,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               notes: approvedNotes,
               Notes: approvedNotes,
               reissueRequested: false,
-              reissueApproved: true
+              reissueApproved: true,
+              reissueRejected: false
             }
           : t
       );
@@ -561,12 +686,81 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         workerName: adminName,
         taskStatus: 'REISSUE',
         disconStatus: 'REISSUE',
+        'Discon Status': 'REISSUE',
         workerRemarks: approvedNotes,
         workerReport: approvedNotes,
-        notes: approvedNotes
+        notes: approvedNotes,
+        'Notes': approvedNotes,
+        reissueRequested: false,
+        reissueApproved: true,
+        reissueRejected: false,
+        reissueAction: 'APPROVE'
       });
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
     } catch (err) {
       console.warn('Re-issue approval sync notice:', err);
+    }
+  };
+
+  // Admin rejects Re-issue request -> keeps consumer locked and notifies Worker ('Your Reissue Request Rejected')
+  const handleRejectReissue = async (task: DisconnectionTask) => {
+    if (!isAdmin) return;
+    const adminName = cleanWorkerOrAgencyName(currentUser?.name || 'Admin');
+    const existingNotes = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes'] || '');
+    const rejectedNotes = `${existingNotes} [REISSUE_REJECTED]`.trim();
+    const cIdKey = String(task.consumerId || (task as any)['Consumer Id'] || task.taskId || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
+    if (cIdKey) {
+      localReissueDecisionsRef.current.set(cIdKey, {
+        action: 'REJECTED',
+        notes: rejectedNotes,
+        timestamp: Date.now()
+      });
+    }
+
+    setTasks(prev => {
+      const next = prev.map(t =>
+        (t.taskId === task.taskId || (t.consumerId && t.consumerId === task.consumerId))
+          ? {
+              ...t,
+              workerRemarks: rejectedNotes,
+              workerReport: rejectedNotes,
+              notes: rejectedNotes,
+              Notes: rejectedNotes,
+              reissueRequested: false,
+              reissueApproved: false,
+              reissueRejected: true
+            }
+          : t
+      );
+      setCachedDisconnectionTasksSync(next);
+      return next;
+    });
+
+    try {
+      await submitDisconnectionTaskReport({
+        ...task,
+        taskId: task.taskId,
+        consumerId: task.consumerId || (task as any)['Consumer Id'],
+        workerId: currentUser?.idNo || 'ADMIN',
+        workerName: adminName,
+        taskStatus: task.taskStatus,
+        disconStatus: task.disconStatus || task.taskStatus,
+        workerRemarks: rejectedNotes,
+        workerReport: rejectedNotes,
+        notes: rejectedNotes,
+        'Notes': rejectedNotes,
+        reissueRequested: false,
+        reissueApproved: false,
+        reissueRejected: true,
+        reissueAction: 'REJECT'
+      });
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
+    } catch (err) {
+      console.warn('Re-issue reject sync notice:', err);
     }
   };
 
@@ -575,19 +769,27 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     return tasks.filter(t => getReissueLockState(t).isReissueRequested);
   }, [tasks]);
 
+  // Scope Disconnection rows for logged-in user:
+  // - Admin sees all rows
+  // - Agency account (e.g. BISHAL ENTERPRISE, PUSPO ENTERPRISE) ONLY sees rows where the Sheet's "Agency" column matches their Agency Name / ID
+  const userScopedTasks = useMemo(() => {
+    if (isAdmin) return tasks;
+    return filterDisconnectionTasksForUser(tasks, currentUser);
+  }, [tasks, isAdmin, currentUser]);
+
   // Unique Agencies / Workers (Name Only, No ID) from tasks for filter dropdown
   const uniqueAgencies = useMemo(() => {
     const set = new Set<string>();
-    tasks.forEach(t => {
+    userScopedTasks.forEach(t => {
       const ag = cleanWorkerOrAgencyName(t.assignedAgency || t.Agency || t.assignedWorkerName || '');
       if (ag) set.add(ag);
     });
     return Array.from(set).sort();
-  }, [tasks]);
+  }, [userScopedTasks]);
 
   // Filtered & Sorted View List Consumers
   const filteredTasks = useMemo(() => {
-    return tasks.filter(t => {
+    return userScopedTasks.filter(t => {
       if (!isValidDisconnectionTaskOrRow(t)) return false;
       // Worker only restriction if toggled or worker mode
       if (workerOnlyFilter && !isAdmin) {
@@ -652,42 +854,92 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
       return true;
     }).sort((a, b) => {
+      // 0. Prioritize Reissue-Approved consumers at the very top of the Worker list so the Worker can immediately Update Status
+      const aReissueApp = getReissueLockState(a).isReissueApproved ? 1 : 0;
+      const bReissueApp = getReissueLockState(b).isReissueApproved ? 1 : 0;
+      if (aReissueApp !== bReissueApp) {
+        return bReissueApp - aReissueApp;
+      }
+
+      // 1. Move any consumer that already has a locked updated status or remark to the end (last page)
+      const isUpdatedOrRemarked = (t: DisconnectionTask): boolean => {
+        if (getReissueLockState(t).isReissueApproved) return false;
+        const rawSt = String(t.taskStatus || t.disconStatus || (t as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
+        const hasStatusUpdate = rawSt !== '' && rawSt !== 'PENDING' && rawSt !== 'CONNECTED' && rawSt !== 'REISSUE';
+        const cleanRem = cleanDisconnectionNotes(t.workerRemarks || t.workerReport || t.notes || (t as any)['Notes'] || '');
+        const hasRemark = cleanRem.length > 0;
+        return hasStatusUpdate || hasRemark;
+      };
+
+      const aUpdated = isUpdatedOrRemarked(a) ? 1 : 0;
+      const bUpdated = isUpdatedOrRemarked(b) ? 1 : 0;
+      if (aUpdated !== bUpdated) {
+        return aUpdated - bUpdated;
+      }
+
+      const amtA = parseFloat(String(a.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
+      const amtB = parseFloat(String(b.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
+
+      if (sortBy === 'DUE_DESC') {
+        if (amtB !== amtA) return amtB - amtA;
+      }
+
       if (sortBy === 'SERIAL_ASC') {
         const getSl = (s?: string) => {
           const m = String(s || '').match(/(\d+)/);
           return m ? parseInt(m[1], 10) : 999999;
         };
-        return getSl(a.serialNumber) - getSl(b.serialNumber);
+        const diffSl = getSl(a.serialNumber) - getSl(b.serialNumber);
+        if (diffSl !== 0) return diffSl;
       }
 
       if (sortBy === 'URGENT_FIRST') {
         const aUrgent = String(a.priority || '').toUpperCase() === 'URGENT' ? 1 : 0;
         const bUrgent = String(b.priority || '').toUpperCase() === 'URGENT' ? 1 : 0;
         if (aUrgent !== bUrgent) return bUrgent - aUrgent;
-      }
-
-      if (sortBy === 'DUE_DESC') {
-        const amtA = parseFloat(String(a.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
-        const amtB = parseFloat(String(b.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
-        return amtB - amtA;
+        if (amtB !== amtA) return amtB - amtA;
       }
 
       if (sortBy === 'DUE_ASC') {
-        const amtA = parseFloat(String(a.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
-        const amtB = parseFloat(String(b.outstandingDue || '0').replace(/[^0-9.-]/g, '')) || 0;
-        return amtA - amtB;
+        if (amtA !== amtB) return amtA - amtB;
       }
 
       if (sortBy === 'NAME_ASC') {
-        return String(a.consumerName || '').localeCompare(String(b.consumerName || ''));
+        const cmp = String(a.consumerName || '').localeCompare(String(b.consumerName || ''));
+        if (cmp !== 0) return cmp;
       }
 
-      // Default: Newest first
-      const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      return dateB - dateA;
+      if (sortBy === 'NEWEST') {
+        const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        if (dateB !== dateA) return dateB - dateA;
+      }
+
+      // Default / tie-breaker: High to Low (Outstanding Dues)
+      return amtB - amtA;
     });
-  }, [tasks, statusFilter, phaseFilter, classFilter, agencyFilter, searchQuery, sortBy, workerOnlyFilter, isAdmin, currentUser]);
+  }, [userScopedTasks, statusFilter, phaseFilter, classFilter, agencyFilter, searchQuery, sortBy, workerOnlyFilter, isAdmin, currentUser]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTasks.length / ITEMS_PER_PAGE));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const paginatedTasks = useMemo(() => {
+    const startIdx = (safeCurrentPage - 1) * ITEMS_PER_PAGE;
+    return filteredTasks.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+  }, [filteredTasks, safeCurrentPage, ITEMS_PER_PAGE]);
+
+  const visiblePageNumbers = useMemo(() => {
+    const pages: number[] = [];
+    const maxButtons = 7;
+    let start = Math.max(1, safeCurrentPage - 3);
+    let end = Math.min(totalPages, start + maxButtons - 1);
+    if (end - start + 1 < maxButtons) {
+      start = Math.max(1, end - maxButtons + 1);
+    }
+    for (let p = start; p <= end; p++) {
+      pages.push(p);
+    }
+    return pages;
+  }, [safeCurrentPage, totalPages]);
 
   // Counts for pills (Status + 1PH/3PH + Domestic/Commercial/Industrial/STW)
   const counts = useMemo(() => {
@@ -708,7 +960,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     let industrial = 0;
     let stw = 0;
 
-    tasks.forEach(t => {
+    userScopedTasks.forEach(t => {
       if (matchesDisconnectionStatusFilter(t, 'URGENT')) urgent++;
       if (matchesDisconnectionStatusFilter(t, 'DISCONNECT')) {
         disconnect++;
@@ -740,7 +992,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     });
 
     return {
-      total: tasks.length,
+      total: userScopedTasks.length,
       urgent,
       disconnect,
       paid,
@@ -757,7 +1009,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       industrial,
       stw
     };
-  }, [tasks]);
+  }, [userScopedTasks]);
 
   return (
     <div className="space-y-3.5 w-full max-w-full overflow-x-hidden mx-auto pb-12 animate-in fade-in duration-150 box-border" id="disconnection-module-root">
@@ -792,7 +1044,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             <span>LIVE AUTO-SYNC</span>
           </div>
           <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-black whitespace-nowrap">
-            {tasks.length} Records
+            {userScopedTasks.length} Records
           </span>
 
           {/* Highlighted Three-Dot Menu next to Records */}
@@ -954,9 +1206,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-indigo-700 hover:bg-indigo-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
-                      <Settings className="w-4 h-4 text-slate-800 shrink-0" />
+                      <Settings className="w-4 h-4 text-indigo-600 shrink-0" />
                       <span>Admin Settings</span>
                     </button>
 
@@ -1053,7 +1305,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
       {/* Compact Option Cards (Admin Only - Workers view the consumer list directly) */}
       {isAdmin && (
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="disconnection-compact-options">
+      <div
+        className="grid grid-cols-2 sm:grid-cols-4 gap-2"
+        id="disconnection-compact-options"
+      >
         {/* 1. PERFORMANCE DASHBOARD */}
         <button
           id="tab-dashboard"
@@ -1246,14 +1501,24 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleApproveReissue(reqTask)}
-                    className="px-3.5 py-2 bg-purple-500 hover:bg-purple-400 text-white font-black rounded-xl text-xs shrink-0 cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>{lang === 'bn' ? 'Re-issue করুন' : 'Approve & Re-issue'}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleApproveReissue(reqTask)}
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs shrink-0 cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{lang === 'bn' ? 'Approve' : 'Approve'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRejectReissue(reqTask)}
+                      className="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl text-xs shrink-0 cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>{lang === 'bn' ? 'Reject' : 'Reject'}</span>
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1505,7 +1770,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         showThreeDotMenu ||
                         statusFilter !== 'ALL' ||
                         agencyFilter !== 'ALL' ||
-                        sortBy !== 'SERIAL_ASC' ||
+                        sortBy !== 'DUE_DESC' ||
                         phaseFilter !== 'ALL' ||
                         classFilter !== 'ALL'
                           ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
@@ -1516,7 +1781,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       <MoreVertical className="w-4 h-4" />
                       {(statusFilter !== 'ALL' ||
                         agencyFilter !== 'ALL' ||
-                        sortBy !== 'SERIAL_ASC' ||
+                        sortBy !== 'DUE_DESC' ||
                         phaseFilter !== 'ALL' ||
                         classFilter !== 'ALL') && (
                         <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5" />
@@ -1536,7 +1801,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                             </span>
                             {(statusFilter !== 'ALL' ||
                               agencyFilter !== 'ALL' ||
-                              sortBy !== 'SERIAL_ASC' ||
+                              sortBy !== 'DUE_DESC' ||
                               phaseFilter !== 'ALL' ||
                               classFilter !== 'ALL') && (
                               <button
@@ -1544,7 +1809,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                                 onClick={() => {
                                   setStatusFilter('ALL');
                                   setAgencyFilter('ALL');
-                                  setSortBy('SERIAL_ASC');
+                                  setSortBy('DUE_DESC');
                                   setPhaseFilter('ALL');
                                   setClassFilter('ALL');
                                   setShowThreeDotMenu(false);
@@ -1733,10 +1998,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                             </select>
                           </div>
 
-                          {/* 3. SERIAL NO / SORT DROPDOWN */}
+                          {/* 3. SORT BY DROPDOWN (Always defaults to High to Low) */}
                           <div>
                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
-                              {lang === 'bn' ? 'ক্রমিক নং / সর্ট (Serial No / Sort)' : 'Serial No / Sort By'}
+                              {lang === 'bn' ? 'সর্ট অপশন (Sort By: High to Low)' : 'Sort By (High to Low)'}
                             </span>
                             <select
                               value={sortBy}
@@ -1746,10 +2011,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                               }}
                               className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
                             >
+                              <option value="DUE_DESC">{lang === 'bn' ? 'বকেয়া: বেশি থেকে কম (High to Low)' : 'Dues: High to Low'}</option>
+                              <option value="DUE_ASC">{lang === 'bn' ? 'বকেয়া: কম থেকে বেশি (Low to High)' : 'Dues: Low to High'}</option>
                               <option value="SERIAL_ASC">{lang === 'bn' ? 'ক্রমিক নং (SL 001...)' : 'Serial No (SL 001...)'}</option>
                               <option value="URGENT_FIRST">{lang === 'bn' ? 'জরুরি অগ্রাধিকার' : 'Urgent First'}</option>
-                              <option value="DUE_DESC">{lang === 'bn' ? 'বকেয়া: বেশি থেকে কম' : 'Dues: High to Low'}</option>
-                              <option value="DUE_ASC">{lang === 'bn' ? 'বকেয়া: কম থেকে বেশি' : 'Dues: Low to High'}</option>
                               <option value="NAME_ASC">{lang === 'bn' ? 'নাম: A থেকে Z' : 'Name: A to Z'}</option>
                               <option value="NEWEST">{lang === 'bn' ? 'সর্বশেষ আপডেট' : 'Newest'}</option>
                             </select>
@@ -1890,19 +2155,147 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredTasks.map(task => (
-                    <DisconnectionConsumerCard
-                      key={task.taskId || task.consumerId}
-                      task={task}
-                      onUpdateStatus={handleOpenUpdateModal}
-                      onRequestReissue={handleRequestReissue}
-                      onApproveReissue={isAdmin ? handleApproveReissue : undefined}
-                      isAdmin={isAdmin}
-                      onDeleteTask={isAdmin ? handleDeleteTask : undefined}
-                      lang={lang}
-                    />
-                  ))}
+                <div className="space-y-4">
+                  {/* Top Pagination Bar (20 Consumers Per Page) */}
+                  <div className="bg-white border border-slate-200 rounded-2xl px-3.5 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-slate-600">
+                      {lang === 'bn' ? (
+                        <span>
+                          পৃষ্ঠা <strong className="text-slate-900">{safeCurrentPage}</strong> / {totalPages} • মোট <strong className="text-slate-900">{filteredTasks.length}</strong> উপভোক্তার মধ্যে <strong className="text-slate-900">{(safeCurrentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(safeCurrentPage * ITEMS_PER_PAGE, filteredTasks.length)}</strong> দেখানো হচ্ছে
+                        </span>
+                      ) : (
+                        <span>
+                          Page <strong className="text-slate-900">{safeCurrentPage}</strong> of {totalPages} • Showing <strong className="text-slate-900">{(safeCurrentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(safeCurrentPage * ITEMS_PER_PAGE, filteredTasks.length)}</strong> of <strong className="text-slate-900">{filteredTasks.length}</strong> (20/page)
+                        </span>
+                      )}
+                    </div>
+
+                    {totalPages > 1 && (
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          disabled={safeCurrentPage <= 1}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          Prev
+                        </button>
+                        {visiblePageNumbers.map(pageNum => (
+                          <button
+                            key={pageNum}
+                            type="button"
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                              pageNum === safeCurrentPage
+                                ? 'bg-slate-900 text-amber-400 shadow-xs'
+                                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          disabled={safeCurrentPage >= totalPages}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Paginated Consumer Card Grid (20 per page) */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {paginatedTasks.map(task => (
+                      <DisconnectionConsumerCard
+                        key={task.taskId || task.consumerId}
+                        task={task}
+                        onUpdateStatus={handleOpenUpdateModal}
+                        onRequestReissue={handleRequestReissue}
+                        onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                        onRejectReissue={isAdmin ? handleRejectReissue : undefined}
+                        isAdmin={isAdmin}
+                        onDeleteTask={isAdmin ? handleDeleteTask : undefined}
+                        lang={lang}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Bottom Pagination Bar (Page 1, Page 2, Page 3...) */}
+                  {totalPages > 1 && (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="text-xs font-bold text-slate-500">
+                        {lang === 'bn'
+                          ? `পৃষ্ঠা ${safeCurrentPage} / ${totalPages} (প্রতি পৃষ্ঠায় ২০ টি)`
+                          : `Page ${safeCurrentPage} of ${totalPages} (20 consumers per page)`}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentPage(1);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeCurrentPage <= 1}
+                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          First
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentPage(p => Math.max(1, p - 1));
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeCurrentPage <= 1}
+                          className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          Prev
+                        </button>
+                        {visiblePageNumbers.map(pageNum => (
+                          <button
+                            key={`bottom-page-${pageNum}`}
+                            type="button"
+                            onClick={() => {
+                              setCurrentPage(pageNum);
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className={`min-w-[36px] h-9 px-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                              pageNum === safeCurrentPage
+                                ? 'bg-slate-900 text-amber-400 shadow-sm ring-2 ring-amber-400/40'
+                                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentPage(p => Math.min(totalPages, p + 1));
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeCurrentPage >= totalPages}
+                          className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          Next
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentPage(totalPages);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeCurrentPage >= totalPages}
+                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          Last
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1923,7 +2316,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             idNo: currentUser?.idNo,
             username: currentUser?.username,
             name: currentUser?.name,
-            role: currentUser?.role
+            role: isAdmin ? 'admin' : currentUser?.role
           }}
           availableWorkers={availableWorkers}
           lang={lang}

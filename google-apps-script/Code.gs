@@ -229,9 +229,26 @@ function getHeadersForSheet(name) {
 
 // Spreadsheet Singleton (Strictly read/write existing sheets only; never create or delete sheets)
 var _ss = null;
+var _activeSpreadsheetId = null;
+
+function setRequestSpreadsheetContext(paramsOrBody) {
+  _ss = null;
+  _activeSpreadsheetId = null;
+  if (!paramsOrBody || typeof paramsOrBody !== 'object') return;
+  var reqSheetId = String(paramsOrBody.spreadsheetId || (paramsOrBody.data && paramsOrBody.data.spreadsheetId) || '').trim();
+  if (reqSheetId && reqSheetId !== SPREADSHEET_ID && !/^SHEET-/i.test(reqSheetId)) {
+    _activeSpreadsheetId = reqSheetId;
+  }
+}
+
+function getActiveSpreadsheetId() {
+  return _activeSpreadsheetId || SPREADSHEET_ID;
+}
+
 function ss() {
-  if (!_ss) {
-    _ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var targetId = getActiveSpreadsheetId();
+  if (!_ss || _ss.getId() !== targetId) {
+    _ss = SpreadsheetApp.openById(targetId);
   }
   return _ss;
 }
@@ -308,7 +325,7 @@ function getSheet(canonicalName) {
   return targetSheet;
 }
 
-// Strictly configure and verify exact 33 Disconnection headers while preserving all existing data
+// Strictly preserve existing Disconnection headers and data without creating new headings
 function ensureDisconnectionHeaders(sheet) {
   if (!sheet) return;
   try {
@@ -320,13 +337,7 @@ function ensureDisconnectionHeaders(sheet) {
       sheet.setFrozenRows(1);
       return;
     }
-
-    // Never clear or wipe existing rows. If fewer than 33 columns, append missing headers
-    if (lastCol < DISCONNECTION_HEADERS.length) {
-      const missingHeaders = DISCONNECTION_HEADERS.slice(lastCol);
-      sheet.getRange(1, lastCol + 1, 1, missingHeaders.length).setValues([missingHeaders]);
-    }
-    sheet.setFrozenRows(1);
+    // Existing Disconnection tab already has headings and rows — do NOT add or alter headings
   } catch (err) {
     Logger.log('ensureDisconnectionHeaders notice: ' + err);
   }
@@ -390,7 +401,7 @@ function setupDisconnectionDatabase() {
   return {
     success: true,
     message: 'Disconnection sheet verified and removed tabs cleaned up',
-    spreadsheetId: SPREADSHEET_ID,
+    spreadsheetId: getActiveSpreadsheetId(),
     deletedTabs: deletedTabs,
     disconnectionSheet: {
       name: discSheet.getName(),
@@ -437,6 +448,7 @@ function generateId(prefix) {
 function out(data, message, reqId) {
   const payload = {
     success: true,
+    spreadsheetId: getActiveSpreadsheetId(),
     data: data,
     message: message || 'Success',
     requestId: reqId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase())
@@ -556,7 +568,7 @@ function initializeDatabase() {
 
   return {
     status: 'ok',
-    spreadsheetId: SPREADSHEET_ID,
+    spreadsheetId: getActiveSpreadsheetId(),
     spreadsheetUrl: ss().getUrl(),
     verifiedSheets: createdOrVerified
   };
@@ -1640,6 +1652,7 @@ function deleteWorkOrder(id) {
 function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
+    setRequestSpreadsheetContext(p);
     const action = String(p.action || 'health').trim();
 
     // 1. Health Check
@@ -1647,7 +1660,7 @@ function doGet(e) {
       return out({
         status: 'ok',
         spreadsheet: 'connected',
-        spreadsheetId: SPREADSHEET_ID,
+        spreadsheetId: getActiveSpreadsheetId(),
         app: 'WBSEDCL POWER Management',
         timestamp: now()
       }, 'Health check successful');
@@ -1728,6 +1741,7 @@ function doPost(e) {
     const data = (body.data && typeof body.data === 'object' && Object.keys(body.data).length > 0)
       ? body.data
       : body;
+    setRequestSpreadsheetContext(body);
     const reqId = body.requestId || ('REQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7).toUpperCase());
 
     if (!action) {
@@ -1736,7 +1750,7 @@ function doPost(e) {
 
     // Health
     if (action === 'health' || action === 'healthCheck') {
-      return out({ status: 'ok', spreadsheetId: SPREADSHEET_ID }, 'OK', reqId);
+      return out({ status: 'ok', spreadsheetId: getActiveSpreadsheetId() }, 'OK', reqId);
     }
 
     // Initialize Database
@@ -2186,6 +2200,8 @@ function getDisconnectionTasksData(params) {
   }
 
   return {
+    spreadsheetId: getActiveSpreadsheetId(),
+    sheetName: 'Disconnection',
     tasks: filteredTasks,
     stats: {
       totalTasks: total,

@@ -20,13 +20,15 @@ import {
   Unlock,
   CheckCircle2,
   SlidersHorizontal,
-  ExternalLink
+  ExternalLink,
+  Camera
 } from 'lucide-react';
 import { CategoryType, WorkOrderNotice, UserSession, SyncMode } from '../types';
 import { fetchWorkOrders, uploadWorkOrder, deleteWorkOrder, toggleWorkOrderVisibility } from '../services/api';
 import { Language } from '../utils/translations';
 import { compressImageFile } from '../utils/imageCompressor';
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
+import { GpsCameraModal } from './GpsCameraModal';
 
 // Helper to resolve Google Drive / image URLs cleanly for both workers and admins
 export function resolveWorkOrderImageUrl(notice?: Partial<WorkOrderNotice> | null): string {
@@ -91,6 +93,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   const [uploadFileType, setUploadFileType] = useState<string>('image/jpeg');
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isCompressing, setIsCompressing] = useState<boolean>(false);
+  const [showGpsCameraModal, setShowGpsCameraModal] = useState<boolean>(false);
 
   // In-App Toast & Confirmation Modal States (eliminates buggy browser alert / confirm)
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -167,8 +170,8 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
       try {
         setIsCompressing(true);
         const compressedBase64 = await compressImageFile(file, {
-          maxDimension: 1600,
-          quality: 0.82,
+          maxDimension: 1920,
+          quality: 0.92,
           watermarkText: 'WBSEDCL OFFICIAL NOTICE',
         });
         if (compressedBase64) {
@@ -870,15 +873,25 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
                   {lang === 'bn' ? '২. খাতা বা ওয়ার্ক অর্ডারের ছবি সিলেক্ট করুন (Photo)' : '2. Select Khata / Work Order Photo'} *
                 </label>
                 <div className="flex flex-col gap-2">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePhotoSelect}
-                    className="w-full text-xs text-slate-700 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-600 file:text-white hover:file:bg-amber-700 cursor-pointer border-2 border-amber-300 rounded-lg p-2 bg-amber-50/50"
-                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowGpsCameraModal(true)}
+                      className="flex-1 min-w-[140px] py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>{lang === 'bn' ? 'GPS ক্যামেরা (HD)' : 'GPS Camera (HD)'}</span>
+                    </button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoSelect}
+                      className="flex-1 text-xs text-slate-700 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-600 file:text-white hover:file:bg-amber-700 cursor-pointer border-2 border-amber-300 rounded-lg p-1.5 bg-amber-50/50"
+                    />
+                  </div>
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[11px] text-slate-500">
-                      {lang === 'bn' ? '📷 ক্যামেরা বা ফাইল থেকে আসল ছবি দিন' : '📷 Take photo or upload from gallery'}
+                      {lang === 'bn' ? '📷 GPS ক্যামেরা বা গ্যালারি থেকে পরিষ্কার HD ছবি দিন' : '📷 Take HD GPS photo or upload from gallery'}
                     </span>
                   </div>
                   {isCompressing && (
@@ -1113,6 +1126,20 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
           </div>
         </div>
       )}
+
+      {/* Live Full HD GPS Camera Modal */}
+      <GpsCameraModal
+        isOpen={showGpsCameraModal}
+        onClose={() => setShowGpsCameraModal(false)}
+        onCapture={(hdDataUrl) => {
+          setPhotoPreview(hdDataUrl);
+          setUploadFileName(`GPS_WorkOrder_${Date.now()}.jpg`);
+          setUploadFileType('image/jpeg');
+        }}
+        watermarkTitle="WBSEDCL OFFICIAL NOTICE"
+        workerName={currentUser?.name || 'Admin Controller'}
+        lang={lang}
+      />
     </div>
   );
 };

@@ -27,6 +27,7 @@ import { submitDisconnectionTaskReport, fetchDisconnectionHistory } from '../../
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../../utils/dateTimeFormat';
 import { cleanDisconnectionNotes, cleanWorkerOrAgencyName } from '../../utils/disconnectionClassifier';
 import { getTodayYMD, parseTaskDateToYMD } from './DisconnectionDailyReportModal';
+import { GpsCameraModal } from '../GpsCameraModal';
 
 interface DisconnectionUpdateModalProps {
   task: DisconnectionTask;
@@ -80,7 +81,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     task.gisPole || (task as any)['Gis Pole'] || ''
   );
   const [paymentStatus, setPaymentStatus] = useState<string>(
-    task.paymentStatus || (task as any)['Payment Status'] || (task.taskStatus === 'PAID' ? 'PAID' : 'UNPAID')
+    String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || '').trim().toUpperCase() === 'PAID' ? 'PAID' : 'PENDING'
   );
   const [paidType, setPaidType] = useState<string>(
     task.paidType || (task as any)['Paid Type'] || task.paymentReference || ''
@@ -96,10 +97,21 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   );
   const [conditionalReason, setConditionalReason] = useState<string>('');
 
+  // Admin / Office Admin Consumer Data Correction States
+  const [isEditingConsumerData, setIsEditingConsumerData] = useState(false);
+  const [editConsumerName, setEditConsumerName] = useState<string>(task.consumerName || (task as any)['Name'] || '');
+  const [editConsumerAddress, setEditConsumerAddress] = useState<string>(task.consumerAddress || (task as any)['Address'] || '');
+  const [editMobileNumber, setEditMobileNumber] = useState<string>(task.phoneNumber || (task as any)['Mobile'] || '');
+  const [editMeterNumber, setEditMeterNumber] = useState<string>(task.meterNumber || (task as any)['Device'] || '');
+  const [editOutstandingDue, setEditOutstandingDue] = useState<string>(task.outstandingDue || (task as any)['D2 Net O/S'] || '');
+  const [editMruSection, setEditMruSection] = useState<string>(task.mruSection || (task as any)['MRU'] || '');
+  const [assignedWorkerId, setAssignedWorkerId] = useState<string>(task.assignedWorkerId || (task as any)['Worker ID'] || '');
+
   // UI States
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showPhotoPreview, setShowPhotoPreview] = useState(false);
+  const [showGpsCameraModal, setShowGpsCameraModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [remoteHistory, setRemoteHistory] = useState<any[] | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -113,13 +125,17 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
   useEffect(() => {
     if (task) {
       const rawSt = String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || (task as any)['Status'] || 'DISCONNECT').trim().toUpperCase();
+      const allowedStatuses: DisconnectionTaskStatus[] = ['DISCONNECT', 'PAID', 'NOT FOUND', 'DISPUTE', 'OFFICE TEAM'];
       const normalizedSt: DisconnectionTaskStatus =
         rawSt === 'DISCONNECTED' || rawSt === 'COMPLETED' || rawSt === 'DISCONNECT'
           ? 'DISCONNECT'
-          : (rawSt as DisconnectionTaskStatus);
+          : allowedStatuses.includes(rawSt as DisconnectionTaskStatus)
+          ? (rawSt as DisconnectionTaskStatus)
+          : 'DISCONNECT';
       setSelectedStatus(normalizedSt);
       setIsUrgent(String(task.priority || '').toUpperCase() === 'URGENT');
       setAssignedAgency(cleanWorkerOrAgencyName(task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || ''));
+      setAssignedWorkerId(String(task.assignedWorkerId || (task as any)['Worker ID'] || '').trim());
       setPhotoDataUrl(task.photoUrl || (task as any)['Image'] || '');
       setMeterReading(String(task.meterReading ?? (task as any)['Reading'] ?? '').trim());
       setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || (task as any)['Remarks'] || ''));
@@ -130,12 +146,19 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const rawDisconDate = String(task.disconDate || task.reportDate || (task as any)['Discon Date'] || '').trim();
       setDisconDate(parseTaskDateToYMD(rawDisconDate) || getTodayYMD());
       setGisPole(String(task.gisPole ?? (task as any)['Gis Pole'] ?? '').trim());
-      const rawPayStatus = String(task.paymentStatus || (task as any)['Payment Status'] || (normalizedSt === 'PAID' ? 'PAID' : 'UNPAID')).trim().toUpperCase();
-      setPaymentStatus(rawPayStatus || 'UNPAID');
+      const resolvedPayStatus = normalizedSt === 'PAID' ? 'PAID' : 'PENDING';
+      setPaymentStatus(resolvedPayStatus);
       setPaidType(String(task.paidType || (task as any)['Paid Type'] || task.paymentReference || '').trim());
       setOutstandingAfter(String(task.outstandingAfter ?? (task as any)['Outstanding After'] ?? '').trim());
       setNextPaymentDate(String(task.nextPaymentDate ?? (task as any)['Next Payment Date'] ?? '').trim());
       setPaymentSource(String(task.paymentSource ?? (task as any)['Payment Source'] ?? '').trim());
+      setEditConsumerName(String(task.consumerName || (task as any)['Name'] || '').trim());
+      setEditConsumerAddress(String(task.consumerAddress || (task as any)['Address'] || '').trim());
+      setEditMobileNumber(String(task.phoneNumber || (task as any)['Mobile'] || '').trim());
+      setEditMeterNumber(String(task.meterNumber || (task as any)['Device'] || (task as any)['Number'] || '').trim());
+      setEditOutstandingDue(String(task.outstandingDue || (task as any)['D2 Net O/S'] || '').trim());
+      setEditMruSection(String(task.mruSection || (task as any)['MRU'] || '').trim());
+      setIsEditingConsumerData(false);
       setConditionalReason('');
       setErrorMessage(null);
       setShowRoundSavePopup(false);
@@ -217,14 +240,6 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       selectedText: 'text-emerald-700'
     },
     {
-      status: 'PENDING',
-      label: 'PENDING',
-      icon: Clock,
-      selectedBorder: 'border-2 border-amber-500',
-      selectedBg: 'bg-amber-50/50',
-      selectedText: 'text-amber-700'
-    },
-    {
       status: 'NOT FOUND',
       label: 'NOT FOUND',
       icon: XCircle,
@@ -247,44 +262,19 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       selectedBorder: 'border-2 border-indigo-500',
       selectedBg: 'bg-indigo-50/50',
       selectedText: 'text-indigo-700'
-    },
-    ...(isAdminOrSupervisor
-      ? [
-          {
-            status: 'REISSUE' as DisconnectionTaskStatus,
-            label: 'REISSUE',
-            icon: RefreshCw,
-            selectedBorder: 'border-2 border-purple-500',
-            selectedBg: 'bg-purple-50/50',
-            selectedText: 'text-purple-700'
-          }
-        ]
-      : [])
-  ];
-
-  // Quick tap observation options
-  const quickObservationChips = [
-    'Disconnected',
-    'Already disconnected',
-    'Consumer not found',
-    'Consumer paid on spot',
-    'Meter removed from pole',
-    'Consumer refused disconnection',
-    'Office team required / high resistance',
-    'Premises locked / untraceable',
-    'Defective meter / burnt terminal',
-    'Court stay order presented'
-  ];
-
-  const handleInsertQuickChip = (chip: string) => {
-    if (!remarks.trim()) {
-      setRemarks(chip);
-    } else if (!remarks.includes(chip)) {
-      setRemarks(prev => `${prev.trim()}, ${chip}`);
     }
-  };
+  ];
 
-  // Photo Upload Handler with Geotag & Watermark
+  const isRemarksRequired =
+    selectedStatus === 'DISCONNECT' ||
+    selectedStatus === 'DISPUTE' ||
+    selectedStatus === 'OFFICE TEAM';
+
+  const isMeterReadingRequired =
+    selectedStatus === 'DISCONNECT' ||
+    selectedStatus === 'DISPUTE';
+
+  // Photo Upload Handler with Full HD Geotag & Watermark
   const handlePhotoUpload = async (file: File) => {
     if (!file) return;
     setIsProcessingPhoto(true);
@@ -295,17 +285,19 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
 
       const watermarkText = `CONSUMER: ${task.consumerId}`;
       const subText = `WORKER: ${workerName} | ${dateStr} ${timeStr}`;
+      const addrText = String(task.consumerAddress || (task as any)['Address'] || '').trim();
 
       const compressed = await compressImageFile(file, {
-        maxDimension: 900,
-        quality: 0.7,
+        maxDimension: 1920,
+        quality: 0.92,
         watermarkText,
-        subText
+        subText,
+        addressText: addrText || undefined
       });
 
       setPhotoDataUrl(compressed);
     } catch (err: any) {
-      alert(`Photo compression failed: ${err.message}`);
+      setErrorMessage(`Photo processing failed: ${err.message}`);
     } finally {
       setIsProcessingPhoto(false);
     }
@@ -322,10 +314,51 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       return;
     }
 
+    const effectivePhoto = (photoDataUrl || task.photoUrl || (task as any)['Image'] || '').trim();
+    if (!effectivePhoto && selectedStatus !== 'REISSUE') {
+      setErrorMessage(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে Evidence ছবি আপলোড করুন (ছবি ছাড়া সেভ হবে না)'
+          : 'Please upload an Evidence photo before saving'
+      );
+      return;
+    }
+
+    if (selectedStatus === 'PAID' && !paidAmount.trim()) {
+      setErrorMessage(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে Paid Amount (₹) লিখুন'
+          : 'Please enter Paid Amount (₹)'
+      );
+      return;
+    }
+
+    if (isMeterReadingRequired && !meterReading.trim()) {
+      setErrorMessage(
+        lang === 'bn'
+          ? `${selectedStatus} স্ট্যাটাসের জন্য Meter Reading দেওয়া বাধ্যতামূলক`
+          : `Meter Reading is mandatory when status is ${selectedStatus}`
+      );
+      return;
+    }
+
+    if (isRemarksRequired && !remarks.trim()) {
+      setErrorMessage(
+        lang === 'bn'
+          ? `${selectedStatus} স্ট্যাটাসের জন্য Remarks লেখা বাধ্যতামূলক`
+          : `Remarks are mandatory when status is ${selectedStatus}`
+      );
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const isAdminUser = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
+      const isAdminUser =
+        currentUser?.role === 'admin' ||
+        currentUser?.role === 'superadmin' ||
+        currentUser?.idNo === 'ADMIN' ||
+        currentUser?.idNo === '8695716192';
       const workerId = currentUser?.idNo || currentUser?.username || 'WORKER';
       const workerName = cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || 'Field Worker');
       const dateNow = getNowDateDDMMYYYY();
@@ -341,8 +374,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       }
 
       const targetConsumerId = String(task.consumerId || (task as any)['Consumer Id'] || '').trim();
-      const sheetStatusVal = selectedStatus === 'DISCONNECT' ? 'Disconnected' : selectedStatus;
-      const finalPaymentStatus = paymentStatus || (selectedStatus === 'PAID' ? 'PAID' : 'UNPAID');
+      const sheetStatusVal = selectedStatus;
+      const finalPaymentStatus = selectedStatus === 'PAID' ? 'PAID' : 'PENDING';
       const finalPaidType = paidType || paymentReference || '';
       const finalPaidDate = paymentDate || '';
       const finalDisconDate = disconDate || '';
@@ -350,15 +383,28 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const finalPaidAmount = paidAmount.trim();
       const finalPaymentSource = paymentSource.trim();
       const finalGisPole = gisPole.trim();
-      const finalAgency = cleanWorkerOrAgencyName(assignedAgency || task.assignedAgency || task.assignedWorkerName || (task as any)['Agency'] || '');
+      const currentAgencyDefault =
+        !isAdminUser && currentUser?.role === 'agency'
+          ? cleanWorkerOrAgencyName((currentUser as any)?.agencyName || currentUser?.name || currentUser?.username || '')
+          : '';
+      const finalAgency = cleanWorkerOrAgencyName(
+        (task as any)['Agency'] || task.Agency || task.agency || task.assignedAgency || assignedAgency || currentAgencyDefault || ''
+      );
+      const matchedWorkerObj = availableWorkers.find(
+        w => cleanWorkerOrAgencyName(w.name).toLowerCase() === finalAgency.toLowerCase() || String(w.id).toLowerCase() === String(assignedWorkerId).toLowerCase()
+      );
+      const finalAssignedWorkerId = String(matchedWorkerObj?.id || assignedWorkerId || task.assignedWorkerId || (!isAdminUser ? workerId : '')).trim();
       const finalPhotoUrl = photoDataUrl || task.photoUrl || (task as any)['Image'] || '';
+      const finalPriority = isUrgent ? 'URGENT' : 'NORMAL';
 
-      // Include existing consumer snapshot + all updated fields so backend & Google Sheets update the exact row
+      // Preserve all consumer source columns (A:N) untouched; only update operational fields
       const reportPayload = {
         ...task,
         taskId: task.taskId,
         consumerId: targetConsumerId,
         'Consumer Id': targetConsumerId,
+        priority: finalPriority,
+        Priority: finalPriority,
         workerId,
         workerName,
         taskStatus: selectedStatus,
@@ -402,11 +448,16 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         agency: finalAgency,
         assignedAgency: finalAgency,
         assignedWorkerName: finalAgency,
+        assignedWorkerId: finalAssignedWorkerId,
+        'Worker ID': finalAssignedWorkerId,
+        'Worker Name': finalAgency,
         'Agency': finalAgency,
-        photoDataUrl: finalPhotoUrl,
         photoUrl: finalPhotoUrl,
-        image: finalPhotoUrl,
-        'Image': finalPhotoUrl
+        'Image': finalPhotoUrl,
+        reissueRequested: false,
+        reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
+        reissueRejected: false,
+        reissueAction: isAdminUser && selectedStatus === 'REISSUE' ? 'APPROVE' : 'CLEAR'
       };
 
       const nowIso = new Date().toISOString();
@@ -423,7 +474,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         remarks: cleanDisconnectionNotes(combinedRemarks),
         paidAmount: finalPaidAmount || undefined,
         meterReading: finalMeterReading || undefined,
-        photoUrl: finalPhotoUrl || undefined
+        photoUrl: finalPhotoUrl && !finalPhotoUrl.startsWith('data:') ? finalPhotoUrl : undefined
       };
 
       const existingHistory = Array.isArray(task.statusHistory) ? task.statusHistory : [];
@@ -432,6 +483,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       // Preserve all existing consumer fields while reflecting all saved updates immediately
       const updatedTaskObj: DisconnectionTask = {
         ...task,
+        priority: finalPriority as any,
+        Priority: finalPriority,
         taskStatus: selectedStatus,
         disconStatus: sheetStatusVal,
         'Discon Status': sheetStatusVal,
@@ -466,6 +519,9 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Next Payment Date': nextPaymentDate.trim(),
         assignedAgency: finalAgency,
         assignedWorkerName: finalAgency,
+        assignedWorkerId: finalAssignedWorkerId,
+        'Worker ID': finalAssignedWorkerId,
+        'Worker Name': finalAgency,
         'Agency': finalAgency,
         photoUrl: finalPhotoUrl,
         'Image': finalPhotoUrl,
@@ -474,6 +530,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Last Updated': nowIso,
         reissueRequested: false,
         reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
+        reissueRejected: false,
         statusHistory: updatedHistory,
         _localUpdatedAt: Date.now(),
         _hasUserRemarkUpdate: true
@@ -488,13 +545,27 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       // Sync to backend & Google Sheets without blocking UI
       submitDisconnectionTaskReport({
         ...reportPayload,
+        reissueRequested: false,
+        reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
+        reissueRejected: false,
+        reissueAction: isAdminUser && selectedStatus === 'REISSUE' ? 'APPROVE' : 'CONSUME',
         statusHistory: updatedHistory,
         updatedAt: nowIso,
         lastUpdated: nowIso,
         'Last Updated': nowIso
-      }).catch(err => {
-        console.warn('[Disconnection] Background report sync notice:', err);
-      });
+      })
+        .then(res => {
+          if (res && res.imageUrl && res.imageUrl.startsWith('http')) {
+            onUpdateSuccess({
+              ...updatedTaskObj,
+              photoUrl: res.imageUrl,
+              'Image': res.imageUrl
+            } as DisconnectionTask);
+          }
+        })
+        .catch(err => {
+          console.warn('[Disconnection] Background report sync notice:', err);
+        });
 
       // Auto close confirmation popup quickly (450ms)
       setTimeout(() => {
@@ -709,6 +780,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                       type="button"
                       onClick={() => {
                         setSelectedStatus(item.status);
+                        setPaymentStatus(item.status === 'PAID' ? 'PAID' : 'PENDING');
                         setErrorMessage(null);
                       }}
                       className={`py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 ${
@@ -725,94 +797,19 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
               </div>
             </div>
 
-            {/* Conditional input if PAID is chosen */}
+            {/* Conditional input if PAID is chosen - ONLY Paid Amount */}
             {selectedStatus === 'PAID' && (
-              <div className="bg-teal-50/70 border border-teal-200 rounded-2xl p-4 space-y-3 animate-in fade-in">
-                <div className="flex items-center gap-2 text-teal-900 font-bold text-xs">
-                  <CreditCard className="w-4 h-4 text-teal-600" />
-                  <span>Payment Collection Details (Mandatory for PAID)</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Paid Amount (₹) *
-                    </label>
-                    <input
-                      type="number"
-                      value={paidAmount}
-                      onChange={e => setPaidAmount(e.target.value)}
-                      placeholder="Enter amount..."
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Payment Date
-                    </label>
-                    <input
-                      type="date"
-                      value={paymentDate}
-                      onChange={e => setPaymentDate(e.target.value)}
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Paid Type / Mode
-                    </label>
-                    <select
-                      value={paidType}
-                      onChange={e => {
-                        setPaidType(e.target.value);
-                        if (!paymentReference) setPaymentReference(e.target.value);
-                      }}
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    >
-                      <option value="">Select Mode</option>
-                      <option value="UPI / Online">UPI / Online</option>
-                      <option value="Cash">Cash</option>
-                      <option value="Cheque">Cheque</option>
-                      <option value="RTGS / NEFT">RTGS / NEFT</option>
-                      <option value="Counter Receipt">Counter Receipt</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Receipt / Ref No.
-                    </label>
-                    <input
-                      type="text"
-                      value={paymentReference}
-                      onChange={e => setPaymentReference(e.target.value)}
-                      placeholder="Receipt or Money Receipt no..."
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Payment Source
-                    </label>
-                    <input
-                      type="text"
-                      value={paymentSource}
-                      onChange={e => setPaymentSource(e.target.value)}
-                      placeholder="e.g. Field / Portal / Counter..."
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-teal-900 block mb-1">
-                      Outstanding After (₹)
-                    </label>
-                    <input
-                      type="number"
-                      value={outstandingAfter}
-                      onChange={e => setOutstandingAfter(e.target.value)}
-                      placeholder="Remaining due if any..."
-                      className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                  </div>
-                </div>
+              <div className="bg-teal-50/70 border border-teal-200 rounded-2xl p-4 space-y-2 animate-in fade-in">
+                <label className="text-[11px] font-bold text-teal-900 block">
+                  Paid Amount (₹) <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="number"
+                  value={paidAmount}
+                  onChange={e => setPaidAmount(e.target.value)}
+                  placeholder="Enter amount..."
+                  className="w-full py-2.5 px-3 bg-white border border-teal-300 rounded-xl text-xs sm:text-sm font-bold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                />
               </div>
             )}
 
@@ -875,44 +872,30 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
               </div>
             )}
 
-            {/* Conditional reason for REISSUE */}
-            {selectedStatus === 'REISSUE' && (
-              <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 space-y-1.5 animate-in fade-in">
-                <label className="text-[11px] font-bold text-purple-950 block">
-                  Reissue Reason
-                </label>
-                <select
-                  value={conditionalReason}
-                  onChange={e => setConditionalReason(e.target.value)}
-                  className="w-full py-2 px-3 bg-white border border-purple-300 rounded-xl text-xs font-bold text-purple-950 focus:outline-none focus:ring-2 focus:ring-purple-600"
-                >
-                  <option value="">Select Reason</option>
-                  <option value="Field re-verification required">Field re-verification required</option>
-                  <option value="Wrong Pole / Feeder tagged">Wrong Pole / Feeder tagged</option>
-                  <option value="Defective meter notice expired">Defective meter notice expired</option>
-                </select>
-              </div>
-            )}
-
-            {/* ASSIGN AGENCY & PRIORITY (Admin / Supervisor Only) */}
+            {/* ASSIGN WORKER / AGENCY & PRIORITY (Admin / Office Admin / Supervisor Only) */}
             {isAdminOrSupervisor && (
               <>
                 <div>
                   <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                    ASSIGN AGENCY
+                    ASSIGN WORKER / AGENCY
                   </span>
                   <div className="relative">
                     <select
                       value={assignedAgency}
-                      onChange={e => setAssignedAgency(e.target.value)}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setAssignedAgency(val);
+                        const matched = availableWorkers.find(w => cleanWorkerOrAgencyName(w.name) === val);
+                        setAssignedWorkerId(matched ? String(matched.id || '') : '');
+                      }}
                       className="w-full py-3 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                     >
-                      <option value="">Select Worker / Agency</option>
+                      <option value="">-- Unassigned (Select Worker / Agency) --</option>
                       {availableWorkers.map((w, idx) => {
                         const cleanW = cleanWorkerOrAgencyName(w.name);
                         return (
                           <option key={`${cleanW}-${idx}`} value={cleanW}>
-                            {cleanW}
+                            {cleanW} {w.id ? `(ID: ${w.id})` : ''}
                           </option>
                         );
                       })}
@@ -951,7 +934,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             {/* EVIDENCE (AUTO-WATERMARKED) */}
             <div>
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                EVIDENCE (AUTO-WATERMARKED)
+                EVIDENCE (AUTO-WATERMARKED) <span className="text-rose-600">*</span>
               </span>
 
               {/* Hidden file inputs */}
@@ -982,12 +965,12 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => cameraInputRef.current?.click()}
+                  onClick={() => setShowGpsCameraModal(true)}
                   disabled={isProcessingPhoto}
-                  className="py-3 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs sm:text-sm font-bold text-slate-800 flex items-center justify-center gap-2 cursor-pointer active:scale-98 transition-all"
+                  className="py-3 px-4 rounded-xl border border-emerald-500/40 bg-emerald-50/70 hover:bg-emerald-100/80 text-xs sm:text-sm font-bold text-emerald-900 flex items-center justify-center gap-2 cursor-pointer active:scale-98 transition-all shadow-2xs"
                 >
-                  <Camera className="w-4 h-4 text-slate-600" />
-                  <span>Camera (Live)</span>
+                  <Camera className="w-4 h-4 text-emerald-600" />
+                  <span>GPS Camera (HD)</span>
                 </button>
 
                 <button
@@ -997,169 +980,105 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                   className="py-3 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs sm:text-sm font-bold text-slate-800 flex items-center justify-center gap-2 cursor-pointer active:scale-98 transition-all"
                 >
                   <Upload className="w-4 h-4 text-slate-600" />
-                  <span>Gallery</span>
+                  <span>Gallery (HD)</span>
                 </button>
               </div>
 
               {isProcessingPhoto && (
                 <div className="flex items-center gap-2 text-xs text-blue-600 font-bold py-2 mt-1">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Watermarking photo & optimizing...</span>
+                  <span>Applying HD GPS watermark & preparing crystal-clear photo...</span>
                 </div>
               )}
 
               {photoDataUrl && !isProcessingPhoto && (
-                <div className="relative border border-slate-200 rounded-2xl p-2.5 bg-slate-50 flex items-center justify-between mt-3">
-                  <div className="flex items-center gap-3">
+                <div className="relative border border-slate-200 rounded-2xl p-3 bg-slate-50 space-y-2.5 mt-3">
+                  <div
+                    onClick={() => setShowPhotoPreview(true)}
+                    className="relative w-full h-48 sm:h-56 rounded-xl overflow-hidden bg-slate-900 border border-slate-300 cursor-pointer group"
+                    title="Click to view Full HD photo"
+                  >
                     <img
                       src={photoDataUrl}
-                      alt="Evidence"
+                      alt="HD Evidence"
                       referrerPolicy="no-referrer"
-                      className="w-12 h-12 object-cover rounded-xl border border-slate-300"
+                      className="w-full h-full object-contain bg-slate-950"
                     />
-                    <div>
-                      <span className="font-bold text-slate-900 text-xs block">
-                        Evidence Photo Attached
-                      </span>
-                      <span className="text-[10px] text-emerald-600 font-medium">
-                        ✓ Watermark & Geotag applied
-                      </span>
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-600/90 text-white text-[10px] font-black tracking-wide shadow-xs">
+                      FULL HD • GPS STAMPED
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowPhotoPreview(true)}
-                      className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-lg"
-                      title="View"
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPhotoDataUrl('')}
-                      className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-100 rounded-lg"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-slate-900 text-xs block">
+                        HD Evidence Photo Attached
+                      </span>
+                      <span className="text-[10px] text-emerald-600 font-medium">
+                        ✓ Crystal-clear HD & Live GPS Geotag applied
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowPhotoPreview(true)}
+                        className="px-2.5 py-1.5 text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        title="View Full HD"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>HD View</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPhotoDataUrl('')}
+                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-100 rounded-lg cursor-pointer"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* CARD 3: OPERATIONAL DETAILS (METER READING, DISCON DATE, GIS POLE, REMARKS) */}
-          <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-4">
-            {/* DISCON DATE & GIS POLE */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* CARD 3: OPERATIONAL DETAILS (METER READING & REMARKS) */}
+          {selectedStatus !== 'PAID' && (
+            <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-4">
+              {/* METER READING */}
               <div>
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                  DISCON DATE
-                </span>
-                <input
-                  type="date"
-                  value={disconDate}
-                  onChange={e => setDisconDate(e.target.value)}
-                  className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                  GIS POLE NO.
+                  METER READING {isMeterReadingRequired && <span className="text-rose-600">*</span>}
                 </span>
                 <input
                   type="text"
-                  value={gisPole}
-                  onChange={e => setGisPole(e.target.value)}
-                  placeholder="e.g. POL-1029..."
-                  className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={meterReading}
+                  onChange={e => setMeterReading(e.target.value)}
+                  placeholder="Enter reading..."
+                  className="w-full py-3 px-3.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* REMARKS */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    REMARKS {isRemarksRequired && <span className="text-rose-600">*</span>}
+                  </span>
+                </div>
+
+                <textarea
+                  rows={3}
+                  value={remarks}
+                  onChange={e => setRemarks(e.target.value)}
+                  placeholder="Any additional notes..."
+                  className="w-full p-3.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px]"
                 />
               </div>
             </div>
-
-            {/* PAYMENT STATUS & PAYMENT SOURCE (If not already marked as PAID) */}
-            {selectedStatus !== 'PAID' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                    PAYMENT STATUS
-                  </span>
-                  <select
-                    value={paymentStatus}
-                    onChange={e => setPaymentStatus(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="UNPAID">UNPAID</option>
-                    <option value="PAID">PAID</option>
-                    <option value="PARTIAL">PARTIAL</option>
-                    <option value="DISPUTED">DISPUTED</option>
-                  </select>
-                </div>
-
-                <div>
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                    PAYMENT SOURCE
-                  </span>
-                  <input
-                    type="text"
-                    value={paymentSource}
-                    onChange={e => setPaymentSource(e.target.value)}
-                    placeholder="e.g. Counter / Portal / Cash..."
-                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* METER READING */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                METER READING
-              </span>
-              <input
-                type="text"
-                value={meterReading}
-                onChange={e => setMeterReading(e.target.value)}
-                placeholder="Enter reading..."
-                className="w-full py-3 px-3.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* REMARKS */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  REMARKS
-                </span>
-                <span className="text-[10px] text-slate-400">Tap chips to insert</span>
-              </div>
-
-              {/* Quick Observation Chips */}
-              <div className="flex flex-wrap gap-1.5 mb-2.5">
-                {quickObservationChips.slice(0, 6).map((chip, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleInsertQuickChip(chip)}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-semibold border border-slate-200 transition-colors cursor-pointer"
-                  >
-                    + {chip}
-                  </button>
-                ))}
-              </div>
-
-              <textarea
-                rows={3}
-                value={remarks}
-                onChange={e => setRemarks(e.target.value)}
-                placeholder="Any additional notes..."
-                className="w-full p-3.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px]"
-              />
-            </div>
-          </div>
+          )}
 
           {/* Error Message if any */}
           {errorMessage && (
@@ -1302,7 +1221,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
           className="fixed inset-0 z-60 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
           onClick={() => setShowPhotoPreview(false)}
         >
-          <div className="relative max-w-xl w-full" onClick={e => e.stopPropagation()}>
+          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => setShowPhotoPreview(false)}
               className="absolute -top-10 right-0 p-1 text-white hover:text-slate-300 cursor-pointer"
@@ -1311,13 +1230,27 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
             </button>
             <img
               src={photoDataUrl}
-              alt="Evidence Preview"
+              alt="HD Evidence Preview"
               referrerPolicy="no-referrer"
-              className="w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-slate-700"
+              className="w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-slate-700 bg-black"
             />
           </div>
         </div>
       )}
+
+      {/* Live Full HD GPS Camera Modal */}
+      <GpsCameraModal
+        isOpen={showGpsCameraModal}
+        onClose={() => setShowGpsCameraModal(false)}
+        onCapture={(hdDataUrl) => {
+          setPhotoDataUrl(hdDataUrl);
+          setErrorMessage(null);
+        }}
+        watermarkTitle={`CONSUMER: ${task.consumerId || (task as any)['Consumer Id'] || ''}`}
+        workerName={cleanWorkerOrAgencyName(currentUser?.name || currentUser?.username || 'Worker')}
+        addressHint={String(task.consumerAddress || (task as any)['Address'] || '').trim()}
+        lang={lang}
+      />
     </div>
   );
 };

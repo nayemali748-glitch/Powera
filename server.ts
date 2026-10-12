@@ -3,18 +3,23 @@ import path from 'path';
 import fs from 'fs';
 import dns from 'dns';
 import crypto from 'crypto';
+import net from 'net';
 import { GoogleGenAI } from '@google/genai';
 import * as XLSX from 'xlsx';
 
-// Ensure IPv4 resolution first for stable script.google.com connection
+// Ensure IPv4 resolution first and disable Happy Eyeballs IPv6 stall for stable script.google.com connection
 try {
   dns.setDefaultResultOrder('ipv4first');
+  if (typeof (net as any).setDefaultAutoSelectFamily === 'function') {
+    (net as any).setDefaultAutoSelectFamily(false);
+  }
 } catch {
   // ignore
 }
 
 const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
-const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
+const GOOGLE_SHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
+const GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY/edit?usp=drivesdk';
 
 // Standard desktop browser User-Agent to prevent Google Edge Security Frontend (ESF) 403/interstitial blocks
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -217,6 +222,13 @@ function normalizeServerEntry(entry: any): any {
 }
 
 const LARGE_IMAGES_FILE = path.join(process.cwd(), '.large-images-store.json');
+const UPLOADED_PHOTO_LINKS_FILE = path.join(process.cwd(), '.uploaded-photo-links.json');
+const PUBLIC_APP_BASE_URL = (
+  process.env.SHARED_APP_URL ||
+  process.env.APP_URL ||
+  'https://ais-pre-rh4ipudzd63obfsffyyaxm-140503423112.asia-southeast1.run.app'
+).replace(/\/+$/, '');
+
 const largeImagesMap = new Map<string, string>();
 try {
   if (fs.existsSync(LARGE_IMAGES_FILE)) {
@@ -224,6 +236,18 @@ try {
     if (rawMap && typeof rawMap === 'object') {
       for (const [k, v] of Object.entries(rawMap)) {
         if (typeof v === 'string') largeImagesMap.set(k, v);
+      }
+    }
+  }
+} catch {}
+
+const uploadedPhotoLinksMap = new Map<string, string>();
+try {
+  if (fs.existsSync(UPLOADED_PHOTO_LINKS_FILE)) {
+    const rawLinks = JSON.parse(fs.readFileSync(UPLOADED_PHOTO_LINKS_FILE, 'utf-8'));
+    if (rawLinks && typeof rawLinks === 'object') {
+      for (const [k, v] of Object.entries(rawLinks)) {
+        if (typeof v === 'string') uploadedPhotoLinksMap.set(k, v);
       }
     }
   }
@@ -239,46 +263,133 @@ function saveLargeImagesToDisk() {
   } catch {}
 }
 
-function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): any {
+function saveUploadedPhotoLinksToDisk() {
+  try {
+    const obj: Record<string, string> = {};
+    for (const [k, v] of uploadedPhotoLinksMap.entries()) {
+      obj[k] = v;
+    }
+    fs.writeFileSync(UPLOADED_PHOTO_LINKS_FILE, JSON.stringify(obj), 'utf-8');
+  } catch {}
+}
+
+async function convertDataUrlToClickablePhotoLink(val: string, recordKeyHint = ''): Promise<string> {
+  if (!val || typeof val !== 'string') return '';
+  const trimmed = val.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/api/stored-images/')) {
+    return `${PUBLIC_APP_BASE_URL}${trimmed}`;
+  }
+  if (!trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+
+  const imgHash = crypto.createHash('sha1').update(trimmed).digest('hex').slice(0, 16);
+  const safeHint = String(recordKeyHint || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+  const imgKey = `${safeHint}_${imgHash}`;
+
+  largeImagesMap.set(imgKey, trimmed);
+  saveLargeImagesToDisk();
+
+  const cachedPublicUrl = uploadedPhotoLinksMap.get(imgHash);
+  if (cachedPublicUrl && cachedPublicUrl.startsWith('https://')) {
+    return cachedPublicUrl;
+  }
+
+  try {
+    const base64Clean = trimmed.includes(';base64,')
+      ? trimmed.split(';base64,')[1]
+      : trimmed.replace(/^data:[^,]+,/, '');
+    if (base64Clean && base64Clean.length > 20) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        try { controller.abort(); } catch {}
+      }, 18000);
+      const form = new FormData();
+      form.append('key', '6d207e02198a847aa98d0a2a901485a5');
+      form.append('action', 'upload');
+      form.append('source', base64Clean);
+      form.append('format', 'json');
+      const res = await fetch('https://freeimage.host/api/1/upload', {
+        method: 'POST',
+        body: form,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const json: any = await res.json().catch(() => null);
+        const directUrl = String(json?.image?.url || json?.image?.display_url || '').trim();
+        if (directUrl && directUrl.startsWith('https://')) {
+          uploadedPhotoLinksMap.set(imgHash, directUrl);
+          saveUploadedPhotoLinksToDisk();
+          return directUrl;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Photo Link Upload] Fallback to server stored-images URL:', (err as any)?.message || err);
+  }
+
+  return `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+}
+
+async function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): Promise<any> {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
   // Do not alter WorkOrders_Khata chunked payloads which are already sized at <=43,000 chars per column
   if (obj.category === 'WorkOrders_Khata') return obj;
 
   const clone: Record<string, any> = { ...obj };
   const recId = String(clone.id || clone.submissionId || clone.consumerId || clone['Consumer Id'] || recordKeyHint || Date.now()).trim();
-  let storedAny = false;
 
   for (const [k, v] of Object.entries(clone)) {
-    if (typeof v === 'string' && v.length > 45000) {
-      if (v.startsWith('data:')) {
-        const imgKey = `${recId}_${k}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-        largeImagesMap.set(imgKey, v);
-        storedAny = true;
-        clone[k] = `/api/stored-images/${encodeURIComponent(imgKey)}`;
-      } else {
+    if (typeof v === 'string') {
+      const trimmedV = v.trim();
+      if (trimmedV.startsWith('data:image/') || (trimmedV.startsWith('data:') && trimmedV.length > 200)) {
+        clone[k] = await convertDataUrlToClickablePhotoLink(trimmedV, `${recId}_${k}`);
+      } else if (trimmedV.startsWith('/api/stored-images/')) {
+        clone[k] = `${PUBLIC_APP_BASE_URL}${trimmedV}`;
+      } else if (v.length > 45000) {
         clone[k] = v.slice(0, 45000);
       }
     } else if (v && typeof v === 'object' && !Array.isArray(v) && k === 'data') {
-      clone[k] = sanitizeObjectForSheetCells(v, recId);
+      clone[k] = await sanitizeObjectForSheetCells(v, recId);
     }
   }
 
-  if (storedAny) {
-    saveLargeImagesToDisk();
+  // Ensure all Google Sheet photo column aliases receive the clickable https:// photo link
+  const mainPhotoLink = String(clone.photoUrl || clone.Image || clone.image || clone['Photo Evidence'] || clone.directImageUrl || '').trim();
+  if (mainPhotoLink && (mainPhotoLink.startsWith('http://') || mainPhotoLink.startsWith('https://'))) {
+    clone.photoUrl = mainPhotoLink;
+    clone.Image = mainPhotoLink;
+    clone.image = mainPhotoLink;
+    clone['Photo Evidence'] = mainPhotoLink;
+    clone.directImageUrl = mainPhotoLink;
   }
+  const beforePhotoLink = String(clone.photoBefore || clone.photoBeforeUrl || clone['Photo Before'] || '').trim();
+  if (beforePhotoLink && (beforePhotoLink.startsWith('http://') || beforePhotoLink.startsWith('https://'))) {
+    clone.photoBefore = beforePhotoLink;
+    clone.photoBeforeUrl = beforePhotoLink;
+    clone['Photo Before'] = beforePhotoLink;
+  }
+  const afterPhotoLink = String(clone.photoAfter || clone.photoAfterUrl || clone['Photo After'] || '').trim();
+  if (afterPhotoLink && (afterPhotoLink.startsWith('http://') || afterPhotoLink.startsWith('https://'))) {
+    clone.photoAfter = afterPhotoLink;
+    clone.photoAfterUrl = afterPhotoLink;
+    clone['Photo After'] = afterPhotoLink;
+  }
+
   return clone;
 }
 
-// Concurrency gate for Google Apps Script POST mutations to prevent concurrent SpreadsheetApp write lock contention
-// GET read requests run directly without waiting behind write queues
+// Concurrency gate for all Google Apps Script requests to prevent simultaneous execution throttling
 let gasFetchQueuePromise: Promise<any> = Promise.resolve();
 async function runSerializedGasFetch(url: string, options: RequestInit): Promise<Response> {
-  if (!options.method || options.method.toUpperCase() === 'GET') {
-    return fetch(url, options);
-  }
   const next = gasFetchQueuePromise.then(async () => {
     const res = await fetch(url, options);
-    await new Promise(r => setTimeout(r, 40));
+    await new Promise(r => setTimeout(r, 50));
     return res;
   });
   gasFetchQueuePromise = next.catch(() => {});
@@ -320,7 +431,7 @@ async function callGoogleAppsScript(
   if (action === 'healthCheck') finalAction = 'health';
 
   if (finalAction === 'submitRecord' || finalAction === 'updateEntry') {
-    finalPayload = sanitizeObjectForSheetCells(finalPayload);
+    finalPayload = await sanitizeObjectForSheetCells(finalPayload);
   }
 
   // Submission Idempotency Check for 'createEntry' / 'submitRecord'
@@ -395,6 +506,18 @@ async function callGoogleAppsScript(
   }
 
   const executionPromise = (async () => {
+    if (!GOOGLE_APPS_SCRIPT_URL) {
+      return {
+        success: false,
+        data: null,
+        error: {
+          code: 'NO_GAS_URL',
+          message: 'GOOGLE_APPS_SCRIPT_URL is not configured.'
+        },
+        requestId: `REQ-${Date.now()}`
+      };
+    }
+
     const maxAttempts = isMutation ? 2 : 2;
     let lastError: any = null;
 
@@ -429,14 +552,16 @@ async function callGoogleAppsScript(
           fetchUrl = `${fetchUrl}${sep}${new URLSearchParams(queryParams).toString()}`;
           options.method = 'GET';
           options.headers = {
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': BROWSER_USER_AGENT
           };
         } else {
           options.method = 'POST';
           // Use text/plain to avoid CORS preflight issues across Google redirects
           options.headers = {
             'Content-Type': 'text/plain;charset=utf-8',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': BROWSER_USER_AGENT
           };
           const innerData = (finalPayload.data && typeof finalPayload.data === 'object') ? finalPayload.data : {};
           const mergedPayload = { ...finalPayload, ...innerData };
@@ -692,6 +817,51 @@ function clearUsersStateCache() {
   gasCache.clear();
 }
 
+function saveUsersStateToDisk(users: any[]) {
+  const filtered = (Array.isArray(users) ? users : []).filter((u: any) => {
+    if (!u) return false;
+    const uid = String(u.id || '').trim().toLowerCase();
+    const uidNo = String(u.idNo || '').trim().toLowerCase();
+    if (uid && deletedTombstoneSet.has(uid)) return false;
+    if (uidNo && deletedTombstoneSet.has(`usr_${uidNo}`)) return false;
+    return true;
+  });
+  cachedUsersState = { users: filtered, timestamp: Date.now() };
+  try {
+    fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(filtered), 'utf-8');
+  } catch {}
+}
+
+function upsertUserIntoCachedState(userObj: any) {
+  if (!userObj || !userObj.idNo) return;
+  const currentList = cachedUsersState?.users ? [...cachedUsersState.users] : [];
+  const targetId = String(userObj.id || '').trim().toLowerCase();
+  const targetIdNo = String(userObj.idNo || '').trim().toLowerCase();
+  const idx = currentList.findIndex(
+    (u: any) =>
+      (targetId && String(u.id || '').trim().toLowerCase() === targetId) ||
+      (targetIdNo && String(u.idNo || '').trim().toLowerCase() === targetIdNo)
+  );
+  const stamped = { ...userObj, _localSavedAt: Date.now() };
+  if (idx >= 0) {
+    currentList[idx] = { ...currentList[idx], ...stamped };
+  } else {
+    currentList.unshift(stamped);
+  }
+  saveUsersStateToDisk(currentList);
+}
+
+function removeUserFromCachedState(idOrIdNo: string) {
+  const target = String(idOrIdNo || '').trim().toLowerCase();
+  if (!target || !cachedUsersState?.users) return;
+  const next = cachedUsersState.users.filter(
+    (u: any) =>
+      String(u.id || '').trim().toLowerCase() !== target &&
+      String(u.idNo || '').trim().toLowerCase() !== target
+  );
+  saveUsersStateToDisk(next);
+}
+
 function buildUserSyncTag(u: { idNo?: string; password?: string; phone?: string; designation?: string; badgeNo?: string; role?: string; status?: string; createdAt?: string }): string {
   const baseDate = String(u.createdAt || '').split('||')[0] || new Date().toISOString().slice(0, 10);
   const idNo = String(u.idNo || '').trim();
@@ -699,7 +869,8 @@ function buildUserSyncTag(u: { idNo?: string; password?: string; phone?: string;
   const phone = String(u.phone || '').trim();
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
-  const role = String(u.role || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker';
+  const rawRole = String(u.role || 'worker').trim().toLowerCase();
+  const role = rawRole === 'admin' ? 'admin' : rawRole === 'agency' ? 'agency' : 'worker';
   const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
   return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
@@ -761,8 +932,18 @@ function normalizeUserRecord(u: any): any {
     finalIdNo.toLowerCase() === 'admin' ||
     rawId === 'adm_8695716192' ||
     /^adm[-_0-9]/i.test(finalIdNo);
-  const finalRole = isAdm ? 'admin' : 'worker';
-  const finalDesig = String(merged.designation || merged['Designation'] || (isAdm ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')).trim();
+  const isAgency =
+    !isAdm &&
+    (rawRole === 'agency' ||
+      /^agn[-_0-9]/i.test(finalIdNo) ||
+      /^agency[-_0-9]/i.test(finalIdNo));
+  const finalRole = isAdm ? 'admin' : isAgency ? 'agency' : 'worker';
+  const defaultDesig = isAdm
+    ? 'Sub-Divisional Controller'
+    : isAgency
+      ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)'
+      : 'লাইনম্যান / Worker (WBSEDCL)';
+  const finalDesig = String(merged.designation || merged['Designation'] || defaultDesig).trim();
   const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
 
   return {
@@ -889,6 +1070,30 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
     console.warn('[UsersLoader] Sheet fetch notice:', err?.message);
   }
 
+  // Preserve any locally created/updated users from cachedUsersState so newly created Agency/Worker accounts never vanish while Google Sheets indexes
+  if (cachedUsersState && Array.isArray(cachedUsersState.users)) {
+    for (const localU of cachedUsersState.users) {
+      if (!localU || !localU.idNo) continue;
+      const lId = String(localU.id || '').trim();
+      const lIdNoLower = String(localU.idNo || '').trim().toLowerCase();
+      if (lId && deletedTombstoneSet.has(lId.toLowerCase())) continue;
+      if (lIdNoLower && deletedTombstoneSet.has(`usr_${lIdNoLower}`)) continue;
+
+      const existingByRowId = lId ? userMap.get(lId) : undefined;
+      const existingByIdNo = Array.from(userMap.values()).find(
+        (u: any) => String(u.idNo || '').trim().toLowerCase() === lIdNoLower
+      );
+      const isRecentLocal = Boolean(localU._localSavedAt) && (Date.now() - Number(localU._localSavedAt) < 600000);
+
+      if (!existingByRowId && !existingByIdNo) {
+        userMap.set(lId || `usr_${localU.idNo}`, localU);
+      } else if (isRecentLocal) {
+        const keyToUpdate = existingByRowId ? lId : String(existingByIdNo.id || lId);
+        userMap.set(keyToUpdate, { ...(existingByRowId || existingByIdNo), ...localU });
+      }
+    }
+  }
+
   const users = Array.from(userMap.values()).filter((u: any) => {
     if (!u) return false;
     const uid = String(u.id || '').trim().toLowerCase();
@@ -898,8 +1103,7 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
     return true;
   });
   if (users.length > 0) {
-    cachedUsersState = { users, timestamp: Date.now() };
-    try { fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(users), 'utf-8'); } catch {}
+    saveUsersStateToDisk(users);
   }
   return cachedUsersState?.users || users;
 }
@@ -917,6 +1121,8 @@ function findMatchingUserInList(users: any[], cleanId: string): any {
     const uInternalId = normalizeUniversal(u.id || '').trim().toLowerCase();
     const uBadge = normalizeUniversal(u.badgeNo || u['Badge No'] || '').trim().toLowerCase();
     const uBadgeAlnum = uBadge.replace(/[^a-z0-9]/g, '');
+    const uName = normalizeUniversal(u['Full Name'] || u.name || u['Name'] || '').trim().toLowerCase();
+    const uNameAlnum = uName.replace(/[^a-z0-9]/g, '');
     const uPhoneDigits = normalizeUniversal(u['Phone'] || u.phone || '').replace(/\D/g, '');
     const uPhone10 = uPhoneDigits.length >= 10 ? uPhoneDigits.slice(-10) : uPhoneDigits;
 
@@ -924,6 +1130,7 @@ function findMatchingUserInList(users: any[], cleanId: string): any {
     if (cleanIdAlnum && uIdNoAlnum && uIdNoAlnum === cleanIdAlnum) return true;
     if (uInternalId && uInternalId === lowerId) return true;
     if (uBadge && (uBadge === lowerId || (cleanIdAlnum && uBadgeAlnum === cleanIdAlnum))) return true;
+    if (uName && (uName === lowerId || (cleanIdAlnum.length >= 3 && uNameAlnum === cleanIdAlnum))) return true;
     if (cleanPhone10 && uPhone10 && uPhone10 === cleanPhone10) return true;
     if (cleanDigits && cleanDigits.length >= 4 && uPhoneDigits && cleanDigits === uPhoneDigits) return true;
     return false;
@@ -1056,16 +1263,27 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     matchedUser.id === 'adm_8695716192' ||
     /^adm[-_0-9]/i.test(idNoStr);
 
+  const isRoleAgency =
+    !isRoleAdmin &&
+    (roleStr === 'agency' ||
+      /^agn[-_0-9]/i.test(idNoStr) ||
+      /^agency[-_0-9]/i.test(idNoStr));
+  const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+
   const session = {
     id: String(matchedUser.id || `usr_${idNoStr}`),
     idNo: idNoStr,
     loginId: idNoStr,
     userId: idNoStr,
-    name: String(matchedUser['Full Name'] || matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : 'কর্মী')),
+    name: String(matchedUser['Full Name'] || matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
     phone: String(matchedUser['Phone'] || matchedUser.phone || ''),
-    role: (isRoleAdmin ? 'admin' : 'worker') as 'admin' | 'worker',
+    role: resolvedRole,
     status: 'active' as const,
-    designation: String(matchedUser['Designation'] || matchedUser.designation || (isRoleAdmin ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')),
+    designation: String(
+      matchedUser['Designation'] ||
+      matchedUser.designation ||
+      (isRoleAdmin ? 'Sub-Divisional Controller' : isRoleAgency ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)')
+    ),
     badgeNo: String(matchedUser['Badge No'] || matchedUser.badgeNo || idNoStr),
     token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
     loggedInAt: new Date().toISOString()
@@ -1591,8 +1809,81 @@ app.all('/api/gas-proxy', async (req, res) => {
       const cId = String(payload.consumerId || payload['Consumer Id'] || payload.id || payload.taskId || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
       const cIdKey = cId.toLowerCase();
       const existing = cachedDisconnectionState?.tasks?.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey) || localDisconnectionOverlayMap.get(cIdKey) || {};
-      const newStatus = String(payload.disconStatus || payload['Discon Status'] || payload.taskStatus || payload.status || payload['Status'] || existing.disconStatus || 'PENDING').trim().toUpperCase();
-      const newNotes = String(payload.notes ?? payload['Notes'] ?? payload.workerRemarks ?? payload.workerReport ?? payload.remarks ?? payload['Remark'] ?? existing.notes ?? '').trim();
+      const rawNewStatus = String(payload.disconStatus || payload['Discon Status'] || payload.taskStatus || payload.status || payload['Status'] || existing.disconStatus || 'PENDING').trim().toUpperCase();
+      let newNotes = String(payload.notes ?? payload['Notes'] ?? payload.workerRemarks ?? payload.workerReport ?? payload.remarks ?? payload['Remark'] ?? existing.notes ?? '').trim();
+
+      const reqTagMatch = newNotes.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
+      const hasApproveTag = /\[REISSUE_APPROVED/i.test(newNotes) || rawNewStatus === 'REISSUE' || payload.reissueAction === 'APPROVE' || payload.reissueApproved === true;
+      const hasRejectTag = !hasApproveTag && (/\[REISSUE_REJECTED/i.test(newNotes) || payload.reissueAction === 'REJECT' || payload.reissueRejected === true);
+      const hasRequestTag = !hasApproveTag && !hasRejectTag && (Boolean(reqTagMatch) || payload.reissueAction === 'REQUEST' || payload.reissueRequested === true);
+
+      const newStatus = hasApproveTag ? 'REISSUE' : rawNewStatus;
+      const cleanBase = newNotes
+        .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
+        .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
+        .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
+        .replace(/\s*\|\s*$/, '')
+        .trim();
+
+      let isReissueReq = false;
+      let isReissueApp = false;
+      let isReissueRej = false;
+      let reqByStr = String(payload.reissueRequestedBy || (reqTagMatch && reqTagMatch[1]) || existing.reissueRequestedBy || payload.workerName || 'Worker').trim();
+      let reqAtStr = String(payload.reissueRequestedAt || (reqTagMatch && reqTagMatch[2]) || existing.reissueRequestedAt || '').trim();
+
+      if (cIdKey) {
+        if (hasApproveTag) {
+          isReissueApp = true;
+          const prevReq = reissueRequestsMap.get(cIdKey);
+          reqByStr = prevReq?.requestedBy || reqByStr;
+          reqAtStr = prevReq?.requestedAt || reqAtStr;
+          newNotes = `${cleanBase} [REISSUE_APPROVED]`.trim();
+          reissueRequestsMap.set(cIdKey, {
+            consumerId: cId,
+            status: 'APPROVED',
+            requestedBy: reqByStr,
+            requestedAt: reqAtStr,
+            updatedAt: Date.now()
+          });
+          saveReissueRequestsToDisk();
+        } else if (hasRejectTag) {
+          isReissueRej = true;
+          const prevReq = reissueRequestsMap.get(cIdKey);
+          reqByStr = prevReq?.requestedBy || reqByStr;
+          reqAtStr = prevReq?.requestedAt || reqAtStr;
+          newNotes = `${cleanBase} [REISSUE_REJECTED]`.trim();
+          reissueRequestsMap.set(cIdKey, {
+            consumerId: cId,
+            status: 'REJECTED',
+            requestedBy: reqByStr,
+            requestedAt: reqAtStr,
+            updatedAt: Date.now()
+          });
+          saveReissueRequestsToDisk();
+        } else if (hasRequestTag) {
+          isReissueReq = true;
+          newNotes = `${cleanBase} [REISSUE_REQ:${reqByStr}|${reqAtStr}]`.trim();
+          reissueRequestsMap.set(cIdKey, {
+            consumerId: cId,
+            status: 'PENDING',
+            requestedBy: reqByStr,
+            requestedAt: reqAtStr,
+            updatedAt: Date.now()
+          });
+          saveReissueRequestsToDisk();
+        } else {
+          newNotes = cleanBase;
+          reissueRequestsMap.set(cIdKey, {
+            consumerId: cId,
+            status: 'COMPLETED',
+            requestedBy: '',
+            requestedAt: '',
+            updatedAt: Date.now()
+          });
+          saveReissueRequestsToDisk();
+        }
+      }
+
       const mergedTask = {
         ...existing,
         ...payload,
@@ -1603,12 +1894,19 @@ app.all('/api/gas-proxy', async (req, res) => {
         status: newStatus,
         'Discon Status': newStatus,
         'Status': newStatus,
+        paymentStatus: newStatus === 'PAID' ? 'PAID' : 'PENDING',
+        'Payment Status': newStatus === 'PAID' ? 'PAID' : 'PENDING',
         notes: newNotes,
         'Notes': newNotes,
         'Remark': newNotes,
         'Remarks': newNotes,
         workerRemarks: newNotes,
         workerReport: newNotes,
+        reissueRequested: isReissueReq,
+        reissueApproved: isReissueApp,
+        reissueRejected: isReissueRej,
+        reissueRequestedBy: reqByStr,
+        reissueRequestedAt: reqAtStr,
         _onlyUpdateStatusAndRemark: true,
         _localUpdatedAt: Date.now(),
         _syncedToSheet: false
@@ -1702,10 +2000,18 @@ const DISC_OVERLAY_FILE = path.join(process.cwd(), '.disconnection-overlay.json'
 const DISC_CACHE_FILE = path.join(process.cwd(), '.disconnection-cache.json');
 const ENTRIES_OVERLAY_FILE = path.join(process.cwd(), '.entries-overlay.json');
 const ENTRIES_CACHE_FILE = path.join(process.cwd(), '.entries-cache.json');
+const REISSUE_REQUESTS_FILE = path.join(process.cwd(), '.reissue-requests.json');
 
 const deletedTombstoneSet = new Set<string>();
 const localDisconnectionOverlayMap = new Map<string, any>();
 const localEntriesOverlayMap = new Map<string, any>();
+const reissueRequestsMap = new Map<string, {
+  consumerId: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'COMPLETED';
+  requestedBy: string;
+  requestedAt: string;
+  updatedAt: number;
+}>();
 
 interface CachedEntriesState {
   entries: any[];
@@ -1728,6 +2034,18 @@ function loadDiskPersistence() {
       if (obj && typeof obj === 'object') {
         for (const [k, v] of Object.entries(obj)) {
           localDisconnectionOverlayMap.set(k, v);
+        }
+      }
+    }
+  } catch {}
+  try {
+    if (fs.existsSync(REISSUE_REQUESTS_FILE)) {
+      const obj = JSON.parse(fs.readFileSync(REISSUE_REQUESTS_FILE, 'utf-8'));
+      if (obj && typeof obj === 'object') {
+        for (const [k, v] of Object.entries(obj)) {
+          if (v && typeof v === 'object') {
+            reissueRequestsMap.set(k.toLowerCase(), v as any);
+          }
         }
       }
     }
@@ -1775,6 +2093,16 @@ function saveDiscOverlayToDisk() {
       obj[k] = v;
     }
     fs.writeFileSync(DISC_OVERLAY_FILE, JSON.stringify(obj), 'utf-8');
+  } catch {}
+}
+
+function saveReissueRequestsToDisk() {
+  try {
+    const obj: Record<string, any> = {};
+    for (const [k, v] of reissueRequestsMap.entries()) {
+      obj[k] = v;
+    }
+    fs.writeFileSync(REISSUE_REQUESTS_FILE, JSON.stringify(obj), 'utf-8');
   } catch {}
 }
 
@@ -2371,6 +2699,8 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
       status: statusVal,
       'Discon Status': statusVal,
       'Status': statusVal,
+      paymentStatus: statusVal === 'PAID' ? 'PAID' : 'PENDING',
+      'Payment Status': statusVal === 'PAID' ? 'PAID' : 'PENDING',
       workerRemarks: remarksVal,
       workerReport: remarksVal,
       notes: remarksVal,
@@ -2557,13 +2887,16 @@ async function refreshEntriesFromSheetInBackground() {
   if (isRefreshingEntriesInBg || activeGasWriteCount > 0) return;
   isRefreshingEntriesInBg = true;
   try {
-    const allModuleLists = await Promise.all(
-      ISOLATED_FIELD_MODULES.map(tab =>
-        fetchIsolatedModuleEntriesFromSheet(tab, true).catch(() => {
-          return moduleEntriesCacheMap.get(tab)?.entries || [];
-        })
-      )
-    );
+    const allModuleLists: any[][] = [];
+    for (const tab of ISOLATED_FIELD_MODULES) {
+      if (activeGasWriteCount > 0) break;
+      try {
+        const list = await fetchIsolatedModuleEntriesFromSheet(tab, true);
+        allModuleLists.push(list);
+      } catch {
+        allModuleLists.push(moduleEntriesCacheMap.get(tab)?.entries || []);
+      }
+    }
     const combined = mergeEntriesWithOverlay(allModuleLists.flat());
     cachedEntriesState = { entries: combined, timestamp: Date.now() };
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
@@ -2780,17 +3113,26 @@ app.post('/api/users', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const payload = req.body.data || req.body;
-    const cleanIdNo = normalizeUniversal(payload.idNo || payload.phone || '').trim();
+    const cleanName = String(payload.name || payload.idNo || payload.phone || 'Worker').trim();
+    const cleanIdNo = normalizeUniversal(payload.idNo || payload.name || payload.phone || '').trim();
     const cleanPhone = normalizeUniversal(payload.phone || '').replace(/\D/g, '');
     const plainPass = normalizeUniversal(payload.password || '1234').trim();
     const passHash = crypto.createHash('sha256').update(plainPass).digest('hex').toLowerCase();
-    const cleanName = String(payload.name || cleanIdNo || 'কর্মী').trim();
-    const cleanRole = String(payload.role || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker';
+    const rawRoleInput = String(payload.role || 'worker').trim().toLowerCase();
+    const cleanRole = rawRoleInput === 'admin' ? 'admin' : rawRoleInput === 'agency' ? 'agency' : 'worker';
     const cleanStatus = String(payload.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
-    const cleanDesig = String(payload.designation || (cleanRole === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)')).trim();
+    const defaultDesignation =
+      cleanRole === 'admin'
+        ? 'Assistant Engineer / Admin (WBSEDCL)'
+        : cleanRole === 'agency'
+          ? 'Agency Partner (WBSEDCL)'
+          : 'Lineman / Worker (WBSEDCL)';
+    const cleanDesig = String(payload.designation || defaultDesignation).trim();
     const cleanBadge = String(payload.badgeNo || cleanIdNo).trim();
 
-    const existingUsers = await fetchVerifiedUsersFromSheet();
+    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
+      ? cachedUsersState.users
+      : await fetchVerifiedUsersFromSheet();
     const existingMatch = existingUsers.find(u =>
       String(u.idNo || '').trim().toLowerCase() === cleanIdNo.toLowerCase() ||
       (payload.id && String(u.id || '').trim().toLowerCase() === String(payload.id).trim().toLowerCase())
@@ -2839,36 +3181,54 @@ app.post('/api/users', async (req, res) => {
       updatedAt: new Date().toISOString()
     };
 
-    let result: any;
-    if (existingMatch) {
-      result = await callGoogleAppsScript('updateEntry', {
-        id: recordId,
-        category: 'Users',
-        status: cleanStatus,
-        role: cleanRole,
-        ...userRowData,
-        data: userRowData
-      }, 'POST');
-    } else {
-      result = await callGoogleAppsScript('submitRecord', {
-        id: recordId,
-        category: 'Users',
-        status: cleanStatus,
-        role: cleanRole,
-        ...userRowData,
-        data: userRowData
-      }, 'POST');
-    }
-
     const savedUser = normalizeUserRecord(userRowData);
+    upsertUserIntoCachedState(savedUser);
     clearUsersStateCache();
-    fetchVerifiedUsersFromSheet(true).catch(() => {});
+
+    // Sync to Google Sheets Users sheet in background and ensure 8-part syncTag is persisted in Created At
+    (async () => {
+      try {
+        if (existingMatch) {
+          await callGoogleAppsScript('updateEntry', {
+            id: recordId,
+            category: 'Users',
+            status: cleanStatus,
+            role: cleanRole,
+            ...userRowData,
+            data: userRowData
+          }, 'POST');
+        } else {
+          await callGoogleAppsScript('submitRecord', {
+            id: recordId,
+            category: 'Users',
+            status: cleanStatus,
+            role: cleanRole,
+            ...userRowData,
+            data: userRowData
+          }, 'POST');
+        }
+        await callGoogleAppsScript('updateEntry', {
+          id: recordId,
+          category: 'Users',
+          status: cleanStatus,
+          role: cleanRole,
+          createdAt: syncTag,
+          'Created At': syncTag,
+          data: {
+            ...userRowData,
+            createdAt: syncTag,
+            'Created At': syncTag
+          }
+        }, 'POST').catch(() => {});
+      } catch (err) {
+        console.warn('[Users Sheet Sync] Background save notice:', err);
+      }
+    })();
 
     return res.status(201).json({
       success: true,
       user: savedUser,
-      data: { user: savedUser },
-      result
+      data: { user: savedUser }
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
@@ -2888,7 +3248,9 @@ const handleUserDeleteRequest = async (req: express.Request, res: express.Respon
       });
     }
 
-    const existingUsers = await fetchVerifiedUsersFromSheet();
+    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
+      ? cachedUsersState.users
+      : await fetchVerifiedUsersFromSheet();
     const targetUser = existingUsers.find(u =>
       String(u.id).trim().toLowerCase() === id.toLowerCase() ||
       String(u.idNo).trim().toLowerCase() === id.toLowerCase()
@@ -2899,6 +3261,8 @@ const handleUserDeleteRequest = async (req: express.Request, res: express.Respon
     deletedTombstoneSet.add(String(rowId).trim().toLowerCase());
     if (idNo) deletedTombstoneSet.add(`usr_${String(idNo).trim().toLowerCase()}`);
     saveTombstonesToDisk();
+    removeUserFromCachedState(rowId);
+    if (idNo) removeUserFromCachedState(idNo);
     clearUsersStateCache();
 
     callGoogleAppsScript('deleteUser', {
@@ -2934,7 +3298,9 @@ app.put('/api/users/:id', async (req, res) => {
   try {
     const paramId = String(req.params.id || '').trim();
     const payload = req.body.data || req.body;
-    const existingUsers = await fetchVerifiedUsersFromSheet();
+    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
+      ? cachedUsersState.users
+      : await fetchVerifiedUsersFromSheet();
     const targetUser = existingUsers.find(u =>
       String(u.id).trim().toLowerCase() === paramId.toLowerCase() ||
       String(u.idNo).trim().toLowerCase() === paramId.toLowerCase()
@@ -2995,24 +3361,23 @@ app.put('/api/users/:id', async (req, res) => {
     mergedUser.createdAt = syncTag;
     mergedUser['Created At'] = syncTag;
 
-    const result = await callGoogleAppsScript('updateEntry', {
+    const updatedUser = normalizeUserRecord(mergedUser);
+    upsertUserIntoCachedState(updatedUser);
+    clearUsersStateCache();
+
+    callGoogleAppsScript('updateEntry', {
       id: rowId,
       category: 'Users',
       status: mergedUser.status,
       role: mergedUser.role,
       ...mergedUser,
       data: mergedUser
-    }, 'POST');
-
-    const updatedUser = normalizeUserRecord(mergedUser);
-    clearUsersStateCache();
-    fetchVerifiedUsersFromSheet(true).catch(() => {});
+    }, 'POST').catch(() => {});
 
     return res.json({
       success: true,
       user: updatedUser,
-      data: { user: updatedUser },
-      result
+      data: { user: updatedUser }
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
@@ -3666,8 +4031,8 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
   }>();
 
   for (const t of tasks) {
-    const st = String(t.taskStatus || t.status || 'PENDING').toUpperCase();
-    if (st === 'DISCONNECT') {
+    const st = String(t.taskStatus || t.disconStatus || t['Discon Status'] || t.status || 'PENDING').trim().toUpperCase();
+    if (st === 'DISCONNECT' || st === 'DISCONNECTED') {
       disconnectedTasks++;
       completedTasks++;
     } else if (st === 'COMPLETED') {
@@ -3676,15 +4041,15 @@ function computeLocalStats(tasks: any[], workerId?: string, workerName?: string)
       pendingTasks++;
     } else if (st === 'PAID') {
       paidTasks++;
-    } else if (st === 'NOT FOUND') {
+    } else if (st === 'NOT FOUND' || st === 'NOT_FOUND') {
       notFoundTasks++;
     } else if (st === 'DISPUTE') {
       disputeTasks++;
-    } else if (st === 'OFFICE TEAM') {
+    } else if (st === 'OFFICE TEAM' || st === 'OFFICE_TEAM') {
       officeTeamTasks++;
     } else if (st === 'REISSUE') {
       reissueTasks++;
-    } else if (st === 'IN PROGRESS') {
+    } else if (st === 'IN PROGRESS' || st === 'IN_PROGRESS') {
       inProgressTasks++;
     } else if (st === 'UNABLE') {
       unableTasks++;
@@ -3776,12 +4141,10 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const numberVal = String(entry['Number'] ?? entry.number ?? entry['Meter'] ?? '').trim();
   const latitude = String(entry['Latitude'] ?? entry.latitude ?? '').trim();
   const longitude = String(entry['Longitude'] ?? entry.longitude ?? '').trim();
-  const rawStatus = String(entry['Discon Status'] || entry.disconStatus || entry.taskStatus || entry.status || entry['Status'] || 'PENDING').trim().toUpperCase();
-  const status = rawStatus || 'PENDING';
+  const rawStatus = String(entry['Discon Status'] || entry.disconStatus || entry.taskStatus || 'PENDING').trim().toUpperCase();
   const reportDate = String(entry['Discon Date'] ?? entry.disconDate ?? entry.reportDate ?? '').trim();
   const imageUrl = String(entry['Image'] ?? entry.image ?? entry.photoUrl ?? entry['Photo Evidence'] ?? '').trim();
   const reading = String(entry['Reading'] ?? entry.reading ?? entry.meterReading ?? '').trim();
-  const paymentStatus = String(entry['Payment Status'] ?? entry.paymentStatus ?? '').trim();
   const gisPole = String(entry['Gis Pole'] ?? entry.gisPole ?? entry.poleNo ?? '').trim();
   const agency = String(entry['Agency'] ?? entry.agency ?? entry.assignedAgency ?? entry['Agency Name'] ?? '').trim();
   const notes = String(entry['Notes'] ?? entry.notes ?? entry.workerRemarks ?? entry.workerReport ?? '')
@@ -3792,6 +4155,15 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const lastUpdated = String(entry['Last Updated'] || entry.lastUpdated || entry.updatedAt || '').trim();
   const priority = String(entry['Priority'] || entry.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
   const paidAmount = String(entry['Paid Amount'] ?? entry.paidAmount ?? '').trim();
+
+  // Normalize initial Connected/Completed status to PENDING while preserving explicit operational statuses (DISCONNECT, PAID, DISPUTE, OFFICE TEAM, NOT FOUND, REISSUE)
+  const status =
+    !rawStatus ||
+    rawStatus === 'CONNECTED' ||
+    rawStatus === 'COMPLETED'
+      ? 'PENDING'
+      : rawStatus;
+  const paymentStatus = status === 'PAID' ? 'PAID' : 'PENDING';
   const paidDate = String(entry['Paid Date'] ?? entry.paidDate ?? entry.paymentDate ?? '').trim();
   const paidType = String(entry['Paid Type'] ?? entry.paidType ?? entry.paymentReference ?? '').trim();
   const outstandingAfter = String(entry['Outstanding After'] ?? entry.outstandingAfter ?? '').trim();
@@ -3822,6 +4194,7 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     'Latitude': latitude,
     'Longitude': longitude,
     'Discon Status': status,
+    'Status': status,
     'Discon Date': reportDate,
     'Image': imageUrl,
     'Reading': reading,
@@ -3864,6 +4237,7 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || entry['Worker Name'] || '').trim(),
     assignedAgency: agency,
     agency,
+    status,
     taskStatus: status,
     disconStatus: status,
     disconDate: reportDate,
@@ -3954,12 +4328,14 @@ function isValidDisconnectionConsumerRow(e: any): boolean {
   return true;
 }
 
-// Purge any invalid/demo Disconnection records that may have been persisted to disk previously
+// Purge any invalid/demo or already-synced Disconnection records that may have been persisted to disk previously
 (function purgeBogusDisconnectionRecordsFromDisk() {
   try {
     let discOverlayChanged = false;
+    const now = Date.now();
     for (const [k, v] of Array.from(localDisconnectionOverlayMap.entries())) {
-      if (!isValidDisconnectionConsumerRow(v)) {
+      const isStaleOrSynced = !v || v._syncedToSheet === true || !v._localUpdatedAt || (now - Number(v._localUpdatedAt) >= 35000);
+      if (!isValidDisconnectionConsumerRow(v) || isStaleOrSynced) {
         localDisconnectionOverlayMap.delete(k);
         discOverlayChanged = true;
       }
@@ -4001,18 +4377,20 @@ try {
   if (fs.existsSync(DISC_CACHE_FILE)) {
     const diskTasks = JSON.parse(fs.readFileSync(DISC_CACHE_FILE, 'utf-8'));
     if (Array.isArray(diskTasks)) {
-      const validDiskTasks = diskTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
+      const validDiskTasks = diskTasks.filter(
+        t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t)
+      );
       if (validDiskTasks.length !== diskTasks.length) {
         try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(validDiskTasks), 'utf-8'); } catch {}
       }
       if (validDiskTasks.length > 0) {
-        cachedDisconnectionState = { tasks: validDiskTasks, timestamp: Date.now() - 10000 };
+        cachedDisconnectionState = { tasks: validDiskTasks, timestamp: 0 };
       }
     }
   }
 } catch {}
 
-const DISCONNECTION_CACHE_TTL_MS = 45000;
+const DISCONNECTION_CACHE_TTL_MS = 8000;
 
 function clearDisconnectionStateCache() {
   gasCache.clear();
@@ -4021,6 +4399,7 @@ function clearDisconnectionStateCache() {
 function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
   const mergedMap = new Map<string, any>();
   const now = Date.now();
+  let overlayChanged = false;
 
   // 1. Always iterate sheetTasks FIRST so Google Sheets 'Disconnection' tab is the Single Source of Truth
   for (const t of sheetTasks) {
@@ -4030,14 +4409,15 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
     const ov = localDisconnectionOverlayMap.get(key);
     if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
-      const sheetStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || '').trim().toUpperCase();
-      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || '').trim().toUpperCase();
-      const sheetNotes = String(t.workerRemarks || t.notes || t['Notes'] || '').trim();
-      const ovNotes = String(ov.workerRemarks || ov.notes || ov['Notes'] || '').trim();
-      const sheetMatchesOverlay = (sheetStatus === ovStatus) && (sheetNotes === ovNotes);
-      const isRecentOverlay = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
+      const sheetStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
+      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || 'PENDING').trim().toUpperCase();
+      const sheetNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
+      const ovNotes = String(ov.notes || ov['Notes'] || ov.workerRemarks || '').trim();
 
-      if ((!ov._syncedToSheet || !sheetMatchesOverlay) && isRecentOverlay) {
+      const sheetMatchesOverlay = sheetStatus === ovStatus && sheetNotes === ovNotes;
+      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+
+      if (!sheetMatchesOverlay && isRecentUnsynced && (ovStatus !== 'PENDING' || ovNotes !== '' || ov._hasUserRemarkUpdate)) {
         mergedMap.set(key, {
           ...t,
           ...ov,
@@ -4049,6 +4429,8 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
           'D2 Net O/S': ov['D2 Net O/S'] || ov.outstandingDue || t['D2 Net O/S'] || t.outstandingDue || '',
         });
       } else {
+        localDisconnectionOverlayMap.delete(key);
+        overlayChanged = true;
         mergedMap.set(key, t);
       }
     } else {
@@ -4056,15 +4438,26 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
     }
   }
 
-  // 2. Include overlay items not yet in sheetTasks while they are pending sync or updated within the last 24 hours
-  for (const [key, ov] of localDisconnectionOverlayMap.entries()) {
-    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) continue;
+  // 2. Include any brand-new uploaded overlay items not yet returned by sheetTasks (only if unsynced and < 35s)
+  for (const [key, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
+    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) {
+      localDisconnectionOverlayMap.delete(key);
+      overlayChanged = true;
+      continue;
+    }
     if (!mergedMap.has(key)) {
-      const isRecentOverlay = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
-      if (isRecentOverlay) {
+      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+      if (isRecentUnsynced) {
         mergedMap.set(key, ov);
+      } else {
+        localDisconnectionOverlayMap.delete(key);
+        overlayChanged = true;
       }
     }
+  }
+
+  if (overlayChanged) {
+    saveDiscOverlayToDisk();
   }
 
   // 3. Deterministically sort by Consumer ID so the list order and serial numbers NEVER change or jump across GAS calls
@@ -4074,10 +4467,88 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
     return idA.localeCompare(idB, undefined, { numeric: true });
   });
 
-  const finalTasks = sortedValues.map((t, idx) => ({
-    ...t,
-    serialNumber: formatSlNumber(idx + 1)
-  }));
+  const finalTasks = sortedValues.map((t, idx) => {
+    const cIdKey = String(t.consumerId || t['Consumer Id'] || t.taskId || '')
+      .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
+      .trim()
+      .toLowerCase();
+    const rawSt = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
+    const isInitialPending = rawSt === '' || rawSt === 'PENDING' || rawSt === 'CONNECTED';
+    let rawNotes = String(t.notes || t['Notes'] || t.workerRemarks || t.workerReport || '').trim();
+    const cleanBaseNotes = rawNotes
+      .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
+      .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
+      .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
+      .replace(/\s*\|\s*$/, '')
+      .trim();
+
+    let reissueRequested = Boolean(t.reissueRequested || /\[REISSUE_REQ:/i.test(rawNotes));
+    let reissueApproved = Boolean(t.reissueApproved || rawSt === 'REISSUE' || /\[REISSUE_APPROVED/i.test(rawNotes));
+    let reissueRejected = Boolean(t.reissueRejected || /\[REISSUE_REJECTED/i.test(rawNotes));
+    let reissueRequestedBy = t.reissueRequestedBy || '';
+    let reissueRequestedAt = t.reissueRequestedAt || '';
+
+    const reqMatch = rawNotes.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
+    if (reqMatch) {
+      reissueRequestedBy = reissueRequestedBy || reqMatch[1] || '';
+      reissueRequestedAt = reissueRequestedAt || reqMatch[2] || '';
+    }
+
+    const rEntry = cIdKey ? reissueRequestsMap.get(cIdKey) : undefined;
+    if (rEntry) {
+      if (rEntry.status === 'PENDING') {
+        reissueRequested = true;
+        reissueApproved = false;
+        reissueRejected = false;
+        reissueRequestedBy = rEntry.requestedBy || reissueRequestedBy || 'Worker';
+        reissueRequestedAt = rEntry.requestedAt || reissueRequestedAt || '';
+        rawNotes = `${cleanBaseNotes} [REISSUE_REQ:${reissueRequestedBy}|${reissueRequestedAt}]`.trim();
+      } else if (rEntry.status === 'APPROVED') {
+        reissueRequested = false;
+        reissueApproved = true;
+        reissueRejected = false;
+        rawNotes = `${cleanBaseNotes} [REISSUE_APPROVED]`.trim();
+      } else if (rEntry.status === 'REJECTED') {
+        reissueRequested = false;
+        reissueApproved = false;
+        reissueRejected = true;
+        reissueRequestedBy = rEntry.requestedBy || reissueRequestedBy || 'Worker';
+        reissueRequestedAt = rEntry.requestedAt || reissueRequestedAt || '';
+        rawNotes = `${cleanBaseNotes} [REISSUE_REJECTED]`.trim();
+      } else if (rEntry.status === 'COMPLETED') {
+        reissueRequested = false;
+        reissueApproved = false;
+        reissueRejected = false;
+        rawNotes = cleanBaseNotes;
+      }
+    } else if (isInitialPending && rawSt !== 'REISSUE') {
+      // Consumer is back to initial Connected/Pending state -> clear any stale reissue flags
+      reissueRequested = false;
+      reissueApproved = false;
+      reissueRejected = false;
+    }
+
+    const effectiveTaskStatus = reissueApproved ? 'REISSUE' : (t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING');
+
+    return {
+      ...t,
+      serialNumber: formatSlNumber(idx + 1),
+      taskStatus: effectiveTaskStatus,
+      disconStatus: effectiveTaskStatus,
+      status: effectiveTaskStatus,
+      'Discon Status': effectiveTaskStatus,
+      'Status': effectiveTaskStatus,
+      notes: rawNotes,
+      'Notes': rawNotes,
+      workerRemarks: rawNotes,
+      workerReport: rawNotes,
+      reissueRequested,
+      reissueApproved,
+      reissueRejected,
+      reissueRequestedBy,
+      reissueRequestedAt
+    };
+  });
   return finalTasks;
 }
 
@@ -4107,22 +4578,50 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
   };
 
   if (!isValidDisconnectionConsumerRow(mergedSource)) return false;
+
+  const rawImgVal = String(mergedSource.photoUrl || mergedSource['Image'] || mergedSource.image || mergedSource.photoDataUrl || '').trim();
+  if (rawImgVal && (rawImgVal.startsWith('data:') || rawImgVal.startsWith('/api/stored-images/'))) {
+    const clickablePhotoUrl = await convertDataUrlToClickablePhotoLink(rawImgVal, rawCId);
+    mergedSource.photoUrl = clickablePhotoUrl;
+    mergedSource.imageUrl = clickablePhotoUrl;
+    mergedSource.image = clickablePhotoUrl;
+    mergedSource['Image'] = clickablePhotoUrl;
+    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+      const idx = cachedDisconnectionState.tasks.findIndex(
+        (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+      );
+      if (idx !== -1) {
+        cachedDisconnectionState.tasks[idx] = {
+          ...cachedDisconnectionState.tasks[idx],
+          photoUrl: clickablePhotoUrl,
+          imageUrl: clickablePhotoUrl,
+          'Image': clickablePhotoUrl
+        };
+      }
+    }
+  }
+
   const full33 = buildComplete33ColumnPayload(mergedSource);
   const cId = String(full33.consumerId || full33['Consumer Id'] || '').trim();
   if (!cId) return false;
   const discId = `PWR-DIS-${cId}`;
   const nowIso = new Date().toISOString();
 
-  // Pass a single space for any empty string on Base Class, Class, Device, or Notes so GAS extractFieldValue never falls back to 'Domestic' or 'I'
   const safeBaseClass = full33['Base Class'] || existingCached['Base Class'] || existingCached.baseClass || ' ';
   const safeClass = full33['Class'] || existingCached['Class'] || existingCached.classType || ' ';
   const safeDevice = full33['Device'] || existingCached['Device'] || existingCached.deviceType || ' ';
   const safeNotes = full33['Notes'] || ' ';
+  const cleanedAgencyVal = String(full33['Agency'] || existingCached['Agency'] || existingCached.assignedAgency || '')
+    .replace(/\s*\(ID:[^)]+\)/gi, '')
+    .trim();
+  const safeAgency = cleanedAgencyVal || ' ';
+  const targetSheetId = GOOGLE_SHEET_ID;
 
   const gasPayload = {
     ...full33,
     id: discId,
     submissionId: discId,
+    spreadsheetId: targetSheetId,
     baseClass: safeBaseClass,
     'Base Class': safeBaseClass,
     class: safeClass,
@@ -4134,6 +4633,10 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     bClassPhase: safeDevice,
     'Device': safeDevice,
     'BClass/Phase': safeDevice,
+    'Agency': safeAgency,
+    agency: safeAgency,
+    assignedAgency: safeAgency,
+    workerName: safeAgency,
     'Notes': safeNotes,
     notes: safeNotes,
     'Remark': safeNotes,
@@ -4144,7 +4647,6 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     updatedAt: nowIso
   };
 
-  // If this is a newly uploaded consumer not yet in the sheet, try createEntry first to save round-trip time
   if (taskOrRow._isNewInsert) {
     try {
       const crFirst = await callGoogleAppsScript(
@@ -4159,7 +4661,6 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     } catch {}
   }
 
-  // 1. Single updateEntry call: Code.gs matches both PWR-DIS-<cId> and bare <cId> in one pass
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
@@ -4174,7 +4675,6 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     console.warn(`[Disconnection Sheet Sync] updateEntry notice for ${cId}:`, err);
   }
 
-  // 2. Fallback: If consumer row does not exist in Google Sheets yet, insert the full 33-column row via createEntry
   try {
     const crRes = await callGoogleAppsScript(
       'createEntry',
@@ -4192,111 +4692,90 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
 }
 
 async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
-  let entriesRes: any = null;
   try {
-    entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection', sheet: 'Disconnection' }, 'GET', 20000);
-  } catch {}
+    if (activeGasWriteCount > 0) {
+      await gasWriteQueue.catch(() => {});
+    }
+    gasCache.delete('getDisconnectionTasks_{}');
+    gasCache.delete('entries_{"category":"Disconnection"}');
+    gasCache.delete('entries:{"category":"Disconnection"}');
 
-  if (!entriesRes || entriesRes.success === false) {
-    return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
-  }
-
-  const rawEntries = extractEntriesArray(entriesRes);
-
-  // 1. Group by Consumer ID, selecting the row with the latest persisted Last Updated / updatedAt timestamp
-  const canonicalByConsumerMap = new Map<string, any>();
-  for (const e of rawEntries) {
-    const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim().toLowerCase();
-    if (!cId) continue;
-    const existing = canonicalByConsumerMap.get(cId);
-    if (!existing) {
-      canonicalByConsumerMap.set(cId, e);
-    } else {
-      const existingTime = Date.parse(String(existing['Last Updated'] || existing.updatedAt || existing['Upload Date'] || existing.createdAt || '')) || 0;
-      const candidateTime = Date.parse(String(e['Last Updated'] || e.updatedAt || e['Upload Date'] || e.createdAt || '')) || 0;
-      if (candidateTime >= existingTime) {
-        canonicalByConsumerMap.set(cId, e);
+    let rawTasks: any[] = [];
+    const entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 20000);
+    if (entriesRes && entriesRes.success !== false) {
+      const candidateEntries = Array.isArray(entriesRes.entries)
+        ? entriesRes.entries
+        : Array.isArray(entriesRes.data?.entries)
+        ? entriesRes.data.entries
+        : Array.isArray(entriesRes.data)
+        ? entriesRes.data
+        : [];
+      if (candidateEntries.length > 0) {
+        rawTasks = candidateEntries;
       }
     }
-  }
 
-  // 2. Filter to active, valid Disconnection consumer rows from the Google Sheet Disconnection tab
-  const activeEntries: any[] = [];
-  for (const [cId, e] of canonicalByConsumerMap.entries()) {
-    const st = String(e.status || e.disconStatus || e['Discon Status'] || e.taskStatus || '').trim().toUpperCase();
-    if (st === 'DELETED' || st === '[DELETED_BY_ADMIN]') {
-      deletedTombstoneSet.add(cId);
-      continue;
-    }
-    if (!isValidDisconnectionConsumerRow(e)) continue;
-    if (deletedTombstoneSet.has(cId) || deletedTombstoneSet.has(`task-disc-${cId}`) || deletedTombstoneSet.has(`pwr-dis-${cId}`)) {
-      deletedTombstoneSet.delete(cId);
-      deletedTombstoneSet.delete(`task-disc-${cId}`);
-      deletedTombstoneSet.delete(`pwr-dis-${cId}`);
-      saveTombstonesToDisk();
-    }
-    activeEntries.push(e);
-  }
-
-  let idx = 1;
-  const sheetTasks = activeEntries.map((e: any) => convertSheetEntryToDisconnectionTask(e, idx++));
-
-  // Reconcile local overlay with Google Sheet Source of Truth
-  const sheetTaskMap = new Map<string, any>();
-  for (const t of sheetTasks) {
-    const k = String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase();
-    if (k) sheetTaskMap.set(k, t);
-  }
-  let overlayChanged = false;
-  const now = Date.now();
-  for (const [k, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
-    if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) {
-      localDisconnectionOverlayMap.delete(k);
-      overlayChanged = true;
-      continue;
-    }
-    const sheetTask = sheetTaskMap.get(k);
-    const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
-    if (sheetTask) {
-      const sheetStatus = String(sheetTask.taskStatus || sheetTask.disconStatus || sheetTask['Discon Status'] || '').trim().toUpperCase();
-      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || '').trim().toUpperCase();
-      const sheetNotes = String(sheetTask.workerRemarks || sheetTask.notes || sheetTask['Notes'] || '').trim();
-      const ovNotes = String(ov.workerRemarks || ov.notes || ov['Notes'] || '').trim();
-      const sheetMatchesOverlay = (sheetStatus === ovStatus) && (sheetNotes === ovNotes);
-
-      if (!ov._syncedToSheet && isRecent) {
-        enqueueGasWrite(async () => {
-          const ok = await syncSingleDisconnectionRowToSheet(ov);
-          if (ok) {
-            ov._syncedToSheet = true;
-            saveDiscOverlayToDisk();
-          }
-        });
-      } else if (ov._syncedToSheet && (sheetMatchesOverlay || !isRecent)) {
-        localDisconnectionOverlayMap.delete(k);
-        overlayChanged = true;
-      }
-    } else {
-      if (!ov._syncedToSheet && isRecent) {
-        enqueueGasWrite(async () => {
-          const ok = await syncSingleDisconnectionRowToSheet(ov);
-          if (ok) {
-            ov._syncedToSheet = true;
-            saveDiscOverlayToDisk();
-          }
-        });
-      } else if (!isRecent) {
-        localDisconnectionOverlayMap.delete(k);
-        overlayChanged = true;
+    if (rawTasks.length === 0) {
+      const gasRes = await callGoogleAppsScript('getDisconnectionTasks', {}, 'GET', 20000);
+      if (gasRes && gasRes.success !== false) {
+        const candidate = Array.isArray(gasRes.tasks)
+          ? gasRes.tasks
+          : Array.isArray(gasRes.data?.tasks)
+          ? gasRes.data.tasks
+          : Array.isArray(gasRes.data)
+          ? gasRes.data
+          : [];
+        if (candidate.length > 0) {
+          rawTasks = candidate;
+        }
       }
     }
-  }
-  if (overlayChanged) saveDiscOverlayToDisk();
 
-  const merged = mergeSheetDisconnectionTasksWithOverlay(sheetTasks);
-  cachedDisconnectionState = { tasks: merged, timestamp: Date.now() };
-  try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), 'utf-8'); } catch {}
-  return merged;
+    if (rawTasks.length > 0) {
+      const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
+      const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
+
+      // Repair any sheet rows where Discon Status is PAID but Payment Status was left as PENDING (or vice-versa)
+      validRawTasks.forEach((rawT, idx) => {
+        const conv = convertedList[idx];
+        const rawPaySt = String(rawT['Payment Status'] ?? rawT.paymentStatus ?? '').trim().toUpperCase();
+        const expectedPaySt = conv.status === 'PAID' ? 'PAID' : 'PENDING';
+        if (conv.status === 'PAID' && rawPaySt !== 'PAID') {
+          enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(conv)).catch(() => {});
+        } else if (conv.status !== 'PAID' && rawPaySt === 'PAID') {
+          enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(conv)).catch(() => {});
+        }
+      });
+
+      const merged = mergeSheetDisconnectionTasksWithOverlay(convertedList);
+      cachedDisconnectionState = {
+        tasks: merged,
+        timestamp: Date.now()
+      };
+      try {
+        fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), 'utf-8');
+      } catch {}
+
+      // If any local overlay records haven't been synced to the sheet yet, push them gently in background
+      for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
+        if (ov && !ov._syncedToSheet && isValidDisconnectionConsumerRow(ov)) {
+          enqueueGasWrite(async () => {
+            const ok = await syncSingleDisconnectionRowToSheet(ov);
+            if (ok) {
+              localDisconnectionOverlayMap.delete(k);
+              saveDiscOverlayToDisk();
+            }
+            return ok;
+          }).catch(() => {});
+        }
+      }
+
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[fetchDisconnectionTasksFromGoogleSheet] Notice:', err);
+  }
+  return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
 }
 
 function refreshDisconnectionFromSheetInBackground() {
@@ -4304,7 +4783,6 @@ function refreshDisconnectionFromSheetInBackground() {
   isRefreshingDiscInBg = true;
   (async () => {
     try {
-      gasCache.clear();
       await fetchDisconnectionTasksFromGoogleSheet();
     } catch (err) {
       console.warn('[Background Disconnection Sync] Notice:', err);
@@ -4314,18 +4792,51 @@ function refreshDisconnectionFromSheetInBackground() {
   })();
 }
 
-// Keep server caches warm and synced with Google Sheets without rate-limiting GAS
+// Keep Disconnection cache synced with Google Sheet every 10 seconds
 setInterval(() => {
   if (activeGasWriteCount === 0) {
     refreshDisconnectionFromSheetInBackground();
   }
-}, 60000);
+}, 10000);
 
+// Keep other module caches warm every 90 seconds
 setInterval(() => {
   if (activeGasWriteCount === 0) {
     refreshEntriesFromSheetInBackground();
   }
 }, 90000);
+
+app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    gasCache.clear();
+    const tasks = await fetchDisconnectionTasksFromGoogleSheet();
+    const stats = computeLocalStats(tasks);
+    return res.json({
+      success: true,
+      sheetConnected: true,
+      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetUrl: GOOGLE_SHEET_URL,
+      sheetName: 'Disconnection',
+      fetchedCount: tasks.length,
+      tasks,
+      stats
+    });
+  } catch (err: any) {
+    const fallbackTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+    return res.json({
+      success: false,
+      sheetConnected: false,
+      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetUrl: GOOGLE_SHEET_URL,
+      sheetName: 'Disconnection',
+      fetchedCount: fallbackTasks.length,
+      tasks: fallbackTasks,
+      stats: computeLocalStats(fallbackTasks),
+      error: err?.message || 'Failed to refresh from Google Sheet'
+    });
+  }
+});
 
 app.get('/api/disconnection-tasks', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -4334,33 +4845,56 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const workerName = String(query.workerName || '').toLowerCase().trim();
   const forceRefresh = query.refresh === 'true' || query.force === 'true';
 
-  const applyFilterAndStats = (allTasks: any[]) => {
-    const cleanList = mergeSheetDisconnectionTasksWithOverlay(allTasks);
-    const stats = computeLocalStats(cleanList, workerId, workerName);
-    return { success: true, tasks: cleanList, stats };
-  };
-
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-    const age = Date.now() - cachedDisconnectionState.timestamp;
-    if (forceRefresh || age > 45000) {
+    const isStale = Date.now() - cachedDisconnectionState.timestamp > DISCONNECTION_CACHE_TTL_MS;
+    if (forceRefresh || isStale) {
+      if (forceRefresh) {
+        gasCache.delete('getDisconnectionTasks_{}');
+        gasCache.delete('entries_{"category":"Disconnection"}');
+        gasCache.delete('entries:{"category":"Disconnection"}');
+        const freshTasks = await Promise.race([
+          fetchDisconnectionTasksFromGoogleSheet(),
+          new Promise<any[]>(resolve =>
+            setTimeout(() => resolve(mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState!.tasks)), 5000)
+          )
+        ]);
+        const stats = computeLocalStats(freshTasks, workerId, workerName);
+        return res.json({
+          success: true,
+          sheetConnected: true,
+          spreadsheetId: GOOGLE_SHEET_ID,
+          spreadsheetUrl: GOOGLE_SHEET_URL,
+          sheetName: 'Disconnection',
+          tasks: freshTasks,
+          stats
+        });
+      }
       refreshDisconnectionFromSheetInBackground();
     }
-    return res.json(applyFilterAndStats(cachedDisconnectionState.tasks));
+    const cleanList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks);
+    const stats = computeLocalStats(cleanList, workerId, workerName);
+    return res.json({
+      success: true,
+      sheetConnected: true,
+      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetUrl: GOOGLE_SHEET_URL,
+      sheetName: 'Disconnection',
+      tasks: cleanList,
+      stats
+    });
   }
 
-  try {
-    // Bound foreground wait to 3.5s so UI refresh never hangs; if GAS takes longer, return merged cache + overlay while fetch finishes in background
-    const tasks = await Promise.race([
-      fetchDisconnectionTasksFromGoogleSheet(),
-      new Promise<any[]>(resolve =>
-        setTimeout(() => resolve(cachedDisconnectionState?.tasks || []), 3500)
-      )
-    ]);
-    return res.json(applyFilterAndStats(tasks));
-  } catch (err: any) {
-    const fallbackTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
-    return res.json(applyFilterAndStats(fallbackTasks));
-  }
+  const freshTasks = await fetchDisconnectionTasksFromGoogleSheet();
+  const stats = computeLocalStats(freshTasks, workerId, workerName);
+  return res.json({
+    success: true,
+    sheetConnected: true,
+    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetUrl: GOOGLE_SHEET_URL,
+    sheetName: 'Disconnection',
+    tasks: freshTasks,
+    stats
+  });
 });
 
 function buildComplete33ColumnPayload(t: any): Record<string, any> {
@@ -4383,7 +4917,7 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
   const disconDate = String(t['Discon Date'] ?? t.disconDate ?? t.reportDate ?? '').trim();
   const reading = String(t['Reading'] ?? t.reading ?? t.meterReading ?? '').trim();
   const image = String(t['Image'] ?? t.image ?? t.photoUrl ?? '').trim();
-  const paymentStatus = String(t['Payment Status'] ?? t.paymentStatus ?? '').trim();
+  const paymentStatus = status === 'PAID' ? 'PAID' : 'PENDING';
   const gisPole = String(t['Gis Pole'] ?? t.gisPole ?? t.poleNo ?? '').trim();
   const agency = String(t['Agency'] ?? t.agency ?? t.assignedAgency ?? '').trim();
   const natureOfConn = String(t['Nature of Conn'] ?? t.natureOfConn ?? '').trim();
@@ -4567,11 +5101,8 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
       enqueueGasWrite(async () => {
         const ok = await syncSingleDisconnectionRowToSheet(rowPayload);
         if (ok) {
-          const ov = localDisconnectionOverlayMap.get(k);
-          if (ov) {
-            ov._syncedToSheet = true;
-            saveDiscOverlayToDisk();
-          }
+          localDisconnectionOverlayMap.delete(k);
+          saveDiscOverlayToDisk();
           gasCache.clear();
         }
         return ok;
@@ -4870,10 +5401,7 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     report.reading !== undefined || report['Reading'] !== undefined || report.meterReading !== undefined
       ? String(report.reading ?? report['Reading'] ?? report.meterReading ?? '').trim()
       : String(existingTask.reading ?? existingTask['Reading'] ?? '').trim();
-  const updatedPaymentStatus =
-    report.paymentStatus !== undefined || report['Payment Status'] !== undefined
-      ? String(report.paymentStatus ?? report['Payment Status'] ?? '').trim()
-      : String(existingTask.paymentStatus ?? existingTask['Payment Status'] ?? (newStatus === 'PAID' ? 'PAID' : '')).trim();
+  const updatedPaymentStatus = newStatus === 'PAID' ? 'PAID' : 'PENDING';
   const updatedPaidAmount =
     report.paidAmount !== undefined || report['Paid Amount'] !== undefined
       ? String(report.paidAmount ?? report['Paid Amount'] ?? '').trim()
@@ -4898,10 +5426,20 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     report.agency !== undefined || report['Agency'] !== undefined || report.assignedAgency !== undefined
       ? String(report.agency ?? report['Agency'] ?? report.assignedAgency ?? '').trim()
       : String(existingTask.agency ?? existingTask['Agency'] ?? existingTask.assignedAgency ?? '').trim();
-  const updatedImage =
+  const rawUpdatedImage =
     report.photoUrl !== undefined || report['Image'] !== undefined || report.photoDataUrl !== undefined
       ? String(report.photoUrl ?? report['Image'] ?? report.photoDataUrl ?? '').trim()
       : String(existingTask.photoUrl ?? existingTask['Image'] ?? '').trim();
+
+  let updatedImage = rawUpdatedImage;
+  if (rawUpdatedImage && rawUpdatedImage.startsWith('data:')) {
+    const imgHash = crypto.createHash('sha1').update(rawUpdatedImage).digest('hex').slice(0, 16);
+    const safeHint = String(cId || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const imgKey = `${safeHint}_${imgHash}`;
+    largeImagesMap.set(imgKey, rawUpdatedImage);
+    saveLargeImagesToDisk();
+    updatedImage = uploadedPhotoLinksMap.get(imgHash) || `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+  }
 
   const effectiveHistoryDate = (newStatus === 'PAID' && updatedPaidDate) ? updatedPaidDate : (updatedDisconDate || dateStr);
 
@@ -4918,23 +5456,110 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     action: 'UPDATE'
   };
 
+  const reqTagMatch = remarksStr.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
+  const hasApproveTag =
+    /\[REISSUE_APPROVED/i.test(remarksStr) ||
+    newStatus === 'REISSUE' ||
+    report.reissueAction === 'APPROVE' ||
+    report.reissueApproved === true;
+  const hasRejectTag =
+    !hasApproveTag &&
+    (/\[REISSUE_REJECTED/i.test(remarksStr) ||
+      report.reissueAction === 'REJECT' ||
+      report.reissueRejected === true);
+  const hasRequestTag =
+    !hasApproveTag &&
+    !hasRejectTag &&
+    (Boolean(reqTagMatch) ||
+      report.reissueAction === 'REQUEST' ||
+      report.reissueRequested === true);
+
+  const cleanBaseRemarks = remarksStr
+    .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
+    .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
+    .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
+    .replace(/\s*\|\s*$/, '')
+    .trim();
+
+  let finalStatus = hasApproveTag ? 'REISSUE' : newStatus;
+  let finalRemarks = cleanBaseRemarks;
+  let isReissueReq = false;
+  let isReissueApp = false;
+  let isReissueRej = false;
+  let reqByStr = String(report.reissueRequestedBy || (reqTagMatch && reqTagMatch[1]) || existingTask.reissueRequestedBy || report.workerName || 'Worker').trim();
+  let reqAtStr = String(report.reissueRequestedAt || (reqTagMatch && reqTagMatch[2]) || existingTask.reissueRequestedAt || dateStr).trim();
+
+  if (cIdKey) {
+    if (hasApproveTag) {
+      isReissueApp = true;
+      const prevReq = reissueRequestsMap.get(cIdKey);
+      reqByStr = prevReq?.requestedBy || reqByStr;
+      reqAtStr = prevReq?.requestedAt || reqAtStr;
+      finalRemarks = `${cleanBaseRemarks} [REISSUE_APPROVED]`.trim();
+      reissueRequestsMap.set(cIdKey, {
+        consumerId: cId,
+        status: 'APPROVED',
+        requestedBy: reqByStr,
+        requestedAt: reqAtStr,
+        updatedAt: Date.now()
+      });
+      saveReissueRequestsToDisk();
+    } else if (hasRejectTag) {
+      isReissueRej = true;
+      const prevReq = reissueRequestsMap.get(cIdKey);
+      reqByStr = prevReq?.requestedBy || reqByStr;
+      reqAtStr = prevReq?.requestedAt || reqAtStr;
+      finalRemarks = `${cleanBaseRemarks} [REISSUE_REJECTED]`.trim();
+      reissueRequestsMap.set(cIdKey, {
+        consumerId: cId,
+        status: 'REJECTED',
+        requestedBy: reqByStr,
+        requestedAt: reqAtStr,
+        updatedAt: Date.now()
+      });
+      saveReissueRequestsToDisk();
+    } else if (hasRequestTag) {
+      isReissueReq = true;
+      finalRemarks = `${cleanBaseRemarks} [REISSUE_REQ:${reqByStr}|${reqAtStr}]`.trim();
+      reissueRequestsMap.set(cIdKey, {
+        consumerId: cId,
+        status: 'PENDING',
+        requestedBy: reqByStr,
+        requestedAt: reqAtStr,
+        updatedAt: Date.now()
+      });
+      saveReissueRequestsToDisk();
+    } else {
+      // Normal status update (e.g. Worker updated status after Reissue approval) -> mark COMPLETED in reissueRequestsMap
+      finalRemarks = cleanBaseRemarks;
+      reissueRequestsMap.set(cIdKey, {
+        consumerId: cId,
+        status: 'COMPLETED',
+        requestedBy: '',
+        requestedAt: '',
+        updatedAt: Date.now()
+      });
+      saveReissueRequestsToDisk();
+    }
+  }
+
   // Preserve ALL existing consumer identity columns 100% unchanged; update operational report fields
   const updatedTaskObj = {
     ...existingTask,
     taskId: existingTask.taskId || taskId || `TASK-DISC-${cId}`,
     consumerId: cId,
     'Consumer Id': cId,
-    taskStatus: newStatus,
-    disconStatus: newStatus,
-    status: newStatus,
-    'Discon Status': newStatus,
-    'Status': newStatus,
-    workerRemarks: remarksStr,
-    workerReport: remarksStr,
-    notes: remarksStr,
-    'Notes': remarksStr,
-    'Remark': remarksStr,
-    'Remarks': remarksStr,
+    taskStatus: finalStatus,
+    disconStatus: finalStatus,
+    status: finalStatus,
+    'Discon Status': finalStatus,
+    'Status': finalStatus,
+    workerRemarks: finalRemarks,
+    workerReport: finalRemarks,
+    notes: finalRemarks,
+    'Notes': finalRemarks,
+    'Remark': finalRemarks,
+    'Remarks': finalRemarks,
     reading: updatedReading,
     meterReading: updatedReading,
     'Reading': updatedReading,
@@ -4959,9 +5584,15 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     photoUrl: updatedImage,
     imageUrl: updatedImage,
     'Image': updatedImage,
+    photoDataUrl: rawUpdatedImage && rawUpdatedImage.startsWith('data:') ? rawUpdatedImage : undefined,
     lastUpdated: nowIso,
     'Last Updated': nowIso,
     updatedAt: nowIso,
+    reissueRequested: isReissueReq,
+    reissueApproved: isReissueApp,
+    reissueRejected: isReissueRej,
+    reissueRequestedBy: reqByStr,
+    reissueRequestedAt: reqAtStr,
     statusHistory: [newHistoryEntry, ...(Array.isArray(existingTask.statusHistory) ? existingTask.statusHistory : [])],
     _onlyUpdateStatusAndRemark: true,
     _localUpdatedAt: Date.now(),
@@ -4975,13 +5606,15 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   }
 
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+    const cacheCopy = { ...updatedTaskObj };
+    delete cacheCopy.photoDataUrl;
     const foundIdx = cachedDisconnectionState.tasks.findIndex(
       (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey || String(t.taskId) === taskId
     );
     if (foundIdx !== -1) {
-      cachedDisconnectionState.tasks[foundIdx] = updatedTaskObj;
+      cachedDisconnectionState.tasks[foundIdx] = cacheCopy;
     } else {
-      cachedDisconnectionState.tasks.push(updatedTaskObj);
+      cachedDisconnectionState.tasks.push(cacheCopy);
     }
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
   }
@@ -4990,11 +5623,8 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   enqueueGasWrite(async () => {
     const ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
     if (ok && cIdKey) {
-      const ov = localDisconnectionOverlayMap.get(cIdKey);
-      if (ov) {
-        ov._syncedToSheet = true;
-        saveDiscOverlayToDisk();
-      }
+      localDisconnectionOverlayMap.delete(cIdKey);
+      saveDiscOverlayToDisk();
     }
     gasCache.clear();
     return ok;
@@ -5002,13 +5632,16 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     console.warn(`[Disconnection Report Sync] Background sync notice for ${cId}:`, err);
   });
 
+  const responseTask = { ...updatedTaskObj };
+  delete responseTask.photoDataUrl;
   const responseObj = {
     success: true,
     message: `Consumer ${cId} remark & status (${newStatus}) saved to Disconnection sheet`,
     taskId: updatedTaskObj.taskId,
     consumerId: cId,
     status: newStatus,
-    task: updatedTaskObj
+    imageUrl: updatedImage,
+    task: responseTask
   };
   submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
 

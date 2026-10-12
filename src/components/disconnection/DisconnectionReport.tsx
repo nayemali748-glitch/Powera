@@ -52,17 +52,39 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
     return Array.from(set).sort();
   }, [tasks]);
 
-  // Tasks that have reports or non-pending status
+  // Agency-wise performance summary
+  const agencyPerformance = useMemo(() => {
+    const map = new Map<string, { agencyName: string; assigned: number; disconnected: number; paid: number; pending: number; other: number }>();
+    tasks.forEach(t => {
+      const agency = cleanWorkerOrAgencyName(t.assignedAgency || t.assignedWorkerName || t.Agency || t.submittedBy || '');
+      if (!agency) return;
+      const entry = map.get(agency) || { agencyName: agency, assigned: 0, disconnected: 0, paid: 0, pending: 0, other: 0 };
+      entry.assigned += 1;
+      const st = String(t.taskStatus || t.disconStatus || 'PENDING').toUpperCase();
+      if (st === 'DISCONNECT' || st === 'DISCONNECTED' || st === 'COMPLETED') {
+        entry.disconnected += 1;
+      } else if (st === 'PAID') {
+        entry.paid += 1;
+      } else if (st === 'PENDING' || st === 'IN PROGRESS') {
+        entry.pending += 1;
+      } else {
+        entry.other += 1;
+      }
+      map.set(agency, entry);
+    });
+    return Array.from(map.values()).sort((a, b) => b.assigned - a.assigned);
+  }, [tasks]);
+
+  // Tasks that have reports, non-pending status, or are assigned to an Agency
   const reportedTasks = useMemo(() => {
     return tasks.filter(t => {
-      // Must have some status update or report
-      const st = String(t.taskStatus || '').toUpperCase();
-      const hasReport = t.workerReport || t.workerRemarks || t.reportDate || t.photoUrl || (st !== 'PENDING' && st !== 'IN PROGRESS');
+      const st = String(t.taskStatus || t.disconStatus || 'PENDING').toUpperCase();
+      const w = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '');
+      const hasReport = Boolean(t.workerReport || t.workerRemarks || t.reportDate || t.photoUrl || (st !== 'PENDING' && st !== 'IN PROGRESS') || w);
       if (!hasReport) return false;
 
-      // Filter Worker
+      // Filter Worker / Agency
       if (selectedWorker !== 'ALL') {
-        const w = cleanWorkerOrAgencyName(t.assignedWorkerName || t.assignedAgency || t.Agency || t.submittedBy || '');
         if (w !== selectedWorker) return false;
       }
 
@@ -87,6 +109,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
           (t.consumerId && t.consumerId.toLowerCase().includes(q)) ||
           (t.accountNumber && t.accountNumber.toLowerCase().includes(q)) ||
           (t.taskId && t.taskId.toLowerCase().includes(q)) ||
+          (w && w.toLowerCase().includes(q)) ||
           (t.workerRemarks && t.workerRemarks.toLowerCase().includes(q)) ||
           (t.workerReport && t.workerReport.toLowerCase().includes(q));
         if (!match) return false;
@@ -222,6 +245,69 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
         </div>
       </div>
 
+      {/* Agency-wise Performance Summary Cards */}
+      {agencyPerformance.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <Building2 className="w-4 h-4 text-indigo-600" />
+              <span>Agency-wise Performance Summary</span>
+            </h3>
+            {selectedWorker !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => setSelectedWorker('ALL')}
+                className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+              >
+                Show All Agencies
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {agencyPerformance.map((ap, i) => {
+              const isSelected = selectedWorker === ap.agencyName;
+              const completionPct = ap.assigned > 0 ? Math.round(((ap.disconnected + ap.paid) / ap.assigned) * 100) : 0;
+              return (
+                <div
+                  key={`${ap.agencyName}-${i}`}
+                  onClick={() => setSelectedWorker(isSelected ? 'ALL' : ap.agencyName)}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    isSelected
+                      ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500'
+                      : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-xs font-black text-slate-900 truncate">{ap.agencyName}</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                      {completionPct}% Done
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-[11px] text-center pt-1.5 border-t border-slate-200/80">
+                    <div>
+                      <span className="text-[9px] text-slate-500 block uppercase">Assigned</span>
+                      <strong className="text-slate-900">{ap.assigned}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-rose-600 block uppercase">Discon</span>
+                      <strong className="text-rose-700">{ap.disconnected}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-teal-600 block uppercase">Paid</span>
+                      <strong className="text-teal-700">{ap.paid}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-amber-600 block uppercase">Pending</span>
+                      <strong className="text-amber-700">{ap.pending}</strong>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Filters Bar */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
@@ -237,14 +323,14 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
             />
           </div>
 
-          {/* Worker Filter */}
+          {/* Agency Filter */}
           <div>
             <select
               value={selectedWorker}
               onChange={e => setSelectedWorker(e.target.value)}
               className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
             >
-              <option value="ALL">{lang === 'bn' ? 'সকল কর্মী / এজেন্সি' : 'All Workers / Agencies'}</option>
+              <option value="ALL">{lang === 'bn' ? 'সকল এজেন্সি' : 'All Agencies'}</option>
               {workers.map((w, idx) => (
                 <option key={idx} value={w}>
                   {w}
@@ -263,6 +349,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
               <option value="ALL">{lang === 'bn' ? 'সকল স্ট্যাটাস' : 'All Statuses'}</option>
               <option value="DISCONNECT">DISCONNECT (Power Cut)</option>
               <option value="PAID">PAID (Collected)</option>
+              <option value="PENDING">PENDING (Assigned)</option>
               <option value="DISPUTE">DISPUTE (Objection)</option>
               <option value="OFFICE TEAM">OFFICE TEAM (Special Squad)</option>
               <option value="NOT FOUND">NOT FOUND (Locked/Moved)</option>

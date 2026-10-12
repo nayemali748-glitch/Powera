@@ -40,6 +40,7 @@ import { resolveWorkOrderImageUrl } from './WorkOrderNoticeSection';
 import { compressImageFile } from '../utils/imageCompressor';
 import { DisconnectionTaskManagement } from './DisconnectionTaskManagement';
 import { formatDateDDMMYYYY, formatTime12Hour, formatDateTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
+import { GpsCameraModal } from './GpsCameraModal';
 
 interface EntryFormProps {
   category: CategoryType;
@@ -98,6 +99,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const [notes, setNotes] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isVideo, setIsVideo] = useState<boolean>(false);
+  const [showGpsCameraModal, setShowGpsCameraModal] = useState<boolean>(false);
   const [isCompressing, setIsCompressing] = useState<boolean>(false);
 
   // Category-specific states
@@ -291,8 +293,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       setIsCompressing(true);
       try {
         const compressed = await compressImageFile(file, {
-          maxDimension: 1024,
-          quality: 0.72,
+          maxDimension: 1920,
+          quality: 0.92,
           watermarkText: `WBSEDCL [${category}]`,
           subText: `${getNowDateDDMMYYYY()} ${getNowTime12Hour()} • Lineman: ${worker || 'Staff'}`,
         });
@@ -1964,19 +1966,16 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 )}
               </label>
               <div className="flex flex-wrap gap-2">
-                {/* Direct Camera Button */}
-                <label className="flex-1 min-w-[120px] px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors">
+                {/* Direct Live GPS Camera Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowGpsCameraModal(true)}
+                  disabled={isCompressing}
+                  className="flex-1 min-w-[120px] px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                >
                   <Camera className="w-3.5 h-3.5" />
-                  <span>ক্যামেরা (Photo)</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handlePhotoUpload}
-                    className="hidden"
-                    disabled={isCompressing}
-                  />
-                </label>
+                  <span>GPS ক্যামেরা (HD)</span>
+                </button>
 
                 {/* File / Gallery Upload */}
                 <label className="flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-300 hover:border-slate-400 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
@@ -2244,6 +2243,23 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           </div>
         </div>
       )}
+
+      {/* Live Full HD GPS Camera Modal */}
+      <GpsCameraModal
+        isOpen={showGpsCameraModal}
+        onClose={() => setShowGpsCameraModal(false)}
+        onCapture={(hdDataUrl, gpsCoords) => {
+          setPhotoPreview(hdDataUrl);
+          setIsVideo(false);
+          if (gpsCoords && !locationGps) {
+            setLocationGps(gpsCoords);
+          }
+          clearError('photo');
+        }}
+        watermarkTitle={`WBSEDCL [${category}]`}
+        workerName={worker || currentUser?.name || 'Staff'}
+        lang={lang}
+      />
     </div>
   );
 };

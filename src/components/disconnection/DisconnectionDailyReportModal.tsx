@@ -7,6 +7,7 @@ import {
   getTaskConnectionClass,
   ConnectionClassFilterType,
   cleanDisconnectionNotes,
+  cleanWorkerOrAgencyName,
   matchesDisconnectionStatusFilter
 } from '../../utils/disconnectionClassifier';
 
@@ -553,7 +554,15 @@ export function downloadDailyDisconnectionReportPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(15, 15, 15);
-  doc.text('BISHAL ENTERPRISE', pageWidth / 2, y, { align: 'center' });
+  const uniquePdfAgencies = Array.from(
+    new Set(
+      reportTasks
+        .map(t => cleanWorkerOrAgencyName(t.assignedAgency || t.assignedWorkerName || (t as any)['Agency'] || ''))
+        .filter(Boolean)
+        .map(a => a.toUpperCase())
+    )
+  );
+  doc.text(uniquePdfAgencies.length === 1 ? uniquePdfAgencies[0] : 'BISHAL ENTERPRISE', pageWidth / 2, y, { align: 'center' });
 
   y += 6;
   doc.setFont('helvetica', 'normal');
@@ -778,7 +787,17 @@ const ReportDocumentView: React.FC<ReportDocumentViewProps> = ({
             </h2>
           </div>
           <h1 className="text-xl sm:text-2xl font-black tracking-wider text-slate-950 uppercase pt-1">
-            BISHAL ENTERPRISE
+            {(() => {
+              const uniqueAgencies = Array.from(
+                new Set(
+                  tasks
+                    .map(t => cleanWorkerOrAgencyName(t.assignedAgency || t.assignedWorkerName || (t as any)['Agency'] || ''))
+                    .filter(Boolean)
+                    .map(a => a.toUpperCase())
+                )
+              );
+              return uniqueAgencies.length === 1 ? uniqueAgencies[0] : 'BISHAL ENTERPRISE';
+            })()}
           </h1>
           <p className="text-[10px] sm:text-xs font-medium tracking-[0.22em] text-slate-600 uppercase">
             DISCONNECTION &amp; RECOVERY SERVICES

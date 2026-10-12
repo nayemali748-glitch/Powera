@@ -26,6 +26,7 @@ import {
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
 import { formatDateTime12Hour, formatTime12Hour, getNowDateDDMMYYYY } from './utils/dateTimeFormat';
+import { filterDisconnectionTasksForUser } from './utils/disconnectionClassifier';
 import { 
   Zap, 
   ShieldCheck, 
@@ -77,11 +78,10 @@ function computeJsonChangeHash(data: unknown): string {
   if (!Array.isArray(data)) return '0_empty';
   if (data.length === 0) return '0_empty';
   let sig = `${data.length}`;
-  const maxCheck = Math.min(data.length, 50);
-  for (let i = 0; i < maxCheck; i++) {
+  for (let i = 0; i < data.length; i++) {
     const item = data[i];
     if (item) {
-      sig += `|${item.id || item.consumerId || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${item.updatedAt || item.date || ''}`;
+      sig += `|${item.id || item.consumerId || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${item.assignedAgency || ''}:${item.reissueRequested ? '1' : '0'}:${item.reissueApproved ? '1' : '0'}:${item.reissueRejected ? '1' : '0'}:${item.updatedAt || item.date || ''}`;
     }
   }
   return sig;
@@ -117,7 +117,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed?.role === 'worker') return false;
+        if (parsed?.role === 'worker' || parsed?.role === 'agency') return false;
         return parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration';
       } catch (e) {}
     }
@@ -131,6 +131,7 @@ export default function App() {
         const parsed = JSON.parse(saved);
         const isAdm =
           parsed?.role !== 'worker' &&
+          parsed?.role !== 'agency' &&
           (parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration');
         return isAdm ? 'admin' : 'entry';
       } catch (e) {}
@@ -210,6 +211,7 @@ export default function App() {
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent && entries.length === 0 && disconnectionTasks.length === 0) setLoading(true);
+
       const [data, orders, discRes] = await Promise.all([
         fetchEntries({ refresh: forceRefresh }),
         fetchWorkOrders(),
@@ -246,9 +248,14 @@ export default function App() {
         }
       }
       setLastSyncedAt(new Date());
+      if (throwOnError) {
+        setForceRefreshState('completed');
+      }
     } catch (err) {
-      console.error('Failed to load power entries:', err);
-      if (throwOnError) throw err;
+      console.warn('Power entries sync notice:', err);
+      if (throwOnError) {
+        setForceRefreshState('failed');
+      }
     } finally {
       inFlightRef.current = false;
       setIsSyncing(false);
@@ -326,21 +333,24 @@ export default function App() {
       } catch {}
       lastDataHashRef.current = '';
       lastOrdersHashRef.current = '';
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
 
       // 2-5. Request fresh production data from backend Google Sheets & rebuild state
       await loadData(true, true, true);
-      setForceRefreshState('completed');
     } catch (err) {
-      console.error('Force system refresh failed:', err);
+      console.warn('Force system refresh notice:', err);
       setForceRefreshState('failed');
     }
   };
 
-  // Strict role sync: Workers NEVER have admin privileges
+  // Strict role sync: Workers NEVER have Admin privileges
   useEffect(() => {
     const isUserAdmin = Boolean(
       currentUser && 
       currentUser.role !== 'worker' && 
+      currentUser.role !== 'agency' && 
       (currentUser.role === 'admin' || currentUser.idNo === '8695716192' || currentUser.idNo === 'controller' || currentUser.idNo === 'administration')
     );
     setIsAdmin(isUserAdmin);
@@ -399,6 +409,7 @@ export default function App() {
     localStorage.setItem('power_worker_name', session.name);
     const isUserAdmin = Boolean(
       session.role !== 'worker' && 
+      session.role !== 'agency' && 
       (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
     );
     setIsAdmin(isUserAdmin);
@@ -490,10 +501,14 @@ export default function App() {
     setSidebarOpen(false);
   };
 
-  // Helper count badges (strictly 1-to-1 per backend Google Sheet tab)
+  const userVisibleDisconnectionTasks = isAdmin
+    ? disconnectionTasks
+    : filterDisconnectionTasksForUser(disconnectionTasks, currentUser);
+
+  // Helper count badges (strictly 1-to-1 per backend Google Sheet tab, scoped for Agency accounts)
   const categoryCounts: Record<CategoryType, number> = {
     'NSC': entries.filter(e => e.category === 'NSC').length,
-    'DISCONNECTION': disconnectionTasks.length,
+    'DISCONNECTION': userVisibleDisconnectionTasks.length,
     'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
     'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
     'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
@@ -879,456 +894,456 @@ export default function App() {
 
         {/* Content Container */}
         <section className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
-          {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
-          {activeTab === 'entry' && (
-            <div className="space-y-6">
-              {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
-              {activeFormCategory === null ? (
+              {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
+              {activeTab === 'entry' && (
                 <div className="space-y-6">
-                  {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
-                  <div className="space-y-4">
-                    <div 
-                      onClick={() => setIsHomeDashboardExpanded(!isHomeDashboardExpanded)}
-                      className="bg-linear-to-r from-blue-900/90 via-slate-900 to-indigo-950 text-white rounded-2xl p-4 sm:p-5 border border-blue-500/30 shadow-md hover:shadow-xl hover:border-blue-400/60 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none"
-                      role="button"
-                      tabIndex={0}
-                      aria-expanded={isHomeDashboardExpanded}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsHomeDashboardExpanded(!isHomeDashboardExpanded); }}
-                    >
-                      {/* Background glow accents */}
-                      <div className="absolute top-0 right-0 -mt-8 -mr-8 w-44 h-44 bg-blue-500/10 rounded-full blur-2xl pointer-events-none group-hover:bg-blue-500/20 transition-all"></div>
-                      
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
-                        {/* Left: Icon, Title, Subtitle, Live Badge */}
+                  {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
+                  {activeFormCategory === null ? (
+                    <div className="space-y-6">
+                      {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
+                      <div className="space-y-4">
+                        <div 
+                          onClick={() => setIsHomeDashboardExpanded(!isHomeDashboardExpanded)}
+                          className="bg-linear-to-r from-blue-900/90 via-slate-900 to-indigo-950 text-white rounded-2xl p-4 sm:p-5 border border-blue-500/30 shadow-md hover:shadow-xl hover:border-blue-400/60 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none"
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={isHomeDashboardExpanded}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsHomeDashboardExpanded(!isHomeDashboardExpanded); }}
+                        >
+                          {/* Background glow accents */}
+                          <div className="absolute top-0 right-0 -mt-8 -mr-8 w-44 h-44 bg-blue-500/10 rounded-full blur-2xl pointer-events-none group-hover:bg-blue-500/20 transition-all"></div>
+                          
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                            {/* Left: Icon, Title, Subtitle, Live Badge */}
+                            <div className="flex items-center gap-3.5">
+                              <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shadow-inner shrink-0 transition-all duration-300 ${
+                                isHomeDashboardExpanded 
+                                  ? 'bg-blue-600 text-white scale-105 ring-2 ring-blue-400' 
+                                  : 'bg-blue-600/30 text-blue-400 border border-blue-500/40 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white'
+                              }`}>
+                                <BarChart3 className="w-6 h-6" />
+                              </div>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h2 className="text-sm sm:text-base font-black tracking-wide text-white flex items-center gap-1.5 uppercase">
+                                    <span>{t.performanceDashboard}</span>
+                                  </h2>
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    LIVE METRICS
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-300 mt-0.5 line-clamp-1">
+                                  {isHomeDashboardExpanded
+                                    ? (currentLanguage === 'bn' 
+                                        ? 'ক্লিক করে ড্যাশবোর্ড সংক্ষেপ বা বন্ধ করুন' 
+                                        : 'Click to collapse performance dashboard')
+                                    : (currentLanguage === 'bn' 
+                                        ? 'ক্লিক করুন — অ্যানিমেশনের সাহায্যে লাইভ পারফরম্যান্স ড্যাশবোর্ড ওপেন হবে' 
+                                        : 'Click to open real-time performance dashboard with animation')}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Right: Quick Micro-Stats & Action CTA Button with Rotating Chevron */}
+                            <div className="flex items-center gap-3 self-end md:self-auto shrink-0">
+                              {/* Micro Stats Pills */}
+                              <div className="hidden sm:flex items-center gap-2 text-xs">
+                                <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-slate-200 text-center">
+                                  <span className="text-[10px] text-slate-400 block leading-tight">Total</span>
+                                  <strong className="text-white font-bold">{entries.length}</strong>
+                                </div>
+                                <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-emerald-300 text-center">
+                                  <span className="text-[10px] text-slate-400 block leading-tight">Status</span>
+                                  <strong className="font-bold">Active</strong>
+                                </div>
+                              </div>
+
+                              {/* CTA Open / Close Button with rotating chevron */}
+                              <div className={`px-4 py-2.5 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all duration-300 ${
+                                isHomeDashboardExpanded
+                                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-amber-300'
+                                  : 'bg-blue-600 group-hover:bg-blue-500 text-white'
+                              }`}>
+                                <span>
+                                  {isHomeDashboardExpanded
+                                    ? (currentLanguage === 'bn' ? 'ড্যাশবোর্ড বন্ধ করুন' : 'Close Dashboard')
+                                    : (currentLanguage === 'bn' ? 'ড্যাশবোর্ড খুলুন' : 'Open Dashboard')}
+                                </span>
+                                <ChevronDown className={`w-4 h-4 transition-transform duration-300 ease-out ${
+                                  isHomeDashboardExpanded ? 'rotate-180 text-slate-950' : 'text-white'
+                                }`} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Smooth Animated Accordion Container for Performance Dashboard on Home Screen */}
+                        {isHomeDashboardExpanded && (
+                          <div className="overflow-hidden transition-all duration-500 ease-in-out animate-in fade-in slide-in-from-top-4 duration-300">
+                            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-md space-y-4">
+                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                <div className="flex items-center gap-2">
+                                  <BarChart3 className="w-5 h-5 text-blue-600" />
+                                  <h3 className="text-sm font-bold text-slate-900">
+                                    {t.performanceDashboard} - {currentLanguage === 'bn' ? '৫টি ক্যাটাগরির লাইভ পরিসংখ্যান' : '5 Categories Live Analytics'}
+                                  </h3>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => setActiveTab('performance')}
+                                    className="text-xs text-blue-600 hover:text-blue-800 font-bold px-3 py-1 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                                    title={currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ডেডিকেটেড পেজে দেখুন' : 'View full dedicated page'}
+                                  >
+                                    <span>{currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ভিউ' : 'Fullscreen'}</span>
+                                    <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setIsHomeDashboardExpanded(false)}
+                                    className="text-xs text-slate-600 hover:text-slate-900 font-bold px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>{currentLanguage === 'bn' ? 'বন্ধ করুন' : 'Close'}</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <PerformanceDashboard
+                                entries={entries}
+                                categoryCounts={categoryCounts}
+                                onSelectCategory={navToCategory}
+                                currentLanguage={currentLanguage}
+                                disconnectionTasks={userVisibleDisconnectionTasks}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 5 Work Category Cards Selector */}
+                      <CategorySelector
+                        selectedCategory={selectedCategory}
+                        onSelectCategory={(cat) => {
+                          setSelectedCategory(cat);
+                          setActiveFormCategory(cat);
+                        }}
+                        categoryCounts={categoryCounts}
+                        currentLanguage={currentLanguage}
+                      />
+
+                      {/* Work Order & Khata Quick Access Banner on Home Screen */}
+                      <div className="bg-linear-to-r from-amber-500/15 via-amber-50 to-orange-500/10 border-2 border-amber-400/80 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="flex items-center gap-3.5">
-                          <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shadow-inner shrink-0 transition-all duration-300 ${
-                            isHomeDashboardExpanded 
-                              ? 'bg-blue-600 text-white scale-105 ring-2 ring-blue-400' 
-                              : 'bg-blue-600/30 text-blue-400 border border-blue-500/40 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white'
-                          }`}>
-                            <BarChart3 className="w-6 h-6" />
+                          <div className="w-11 h-11 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
+                            <FileSpreadsheet className="w-6 h-6" />
                           </div>
                           <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h2 className="text-sm sm:text-base font-black tracking-wide text-white flex items-center gap-1.5 uppercase">
-                                <span>{t.performanceDashboard}</span>
-                              </h2>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                LIVE METRICS
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-sm sm:text-base font-black text-slate-900">
+                                {t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata)'}
+                              </h3>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
+                                {workOrders.filter(w => isAdmin || !w.isHidden).length} Live
                               </span>
                             </div>
-                            <p className="text-xs text-slate-300 mt-0.5 line-clamp-1">
-                              {isHomeDashboardExpanded
-                                ? (currentLanguage === 'bn' 
-                                    ? 'ক্লিক করে ড্যাশবোর্ড সংক্ষেপ বা বন্ধ করুন' 
-                                    : 'Click to collapse performance dashboard')
-                                : (currentLanguage === 'bn' 
-                                    ? 'ক্লিক করুন — অ্যানিমেশনের সাহায্যে লাইভ পারফরম্যান্স ড্যাশবোর্ড ওপেন হবে' 
-                                    : 'Click to open real-time performance dashboard with animation')}
+                            <p className="text-xs text-slate-600 mt-0.5">
+                              {t.workOrderNoticeDesc}
                             </p>
                           </div>
                         </div>
-
-                        {/* Right: Quick Micro-Stats & Action CTA Button with Rotating Chevron */}
-                        <div className="flex items-center gap-3 self-end md:self-auto shrink-0">
-                          {/* Micro Stats Pills */}
-                          <div className="hidden sm:flex items-center gap-2 text-xs">
-                            <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-slate-200 text-center">
-                              <span className="text-[10px] text-slate-400 block leading-tight">Total</span>
-                              <strong className="text-white font-bold">{entries.length}</strong>
-                            </div>
-                            <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-emerald-300 text-center">
-                              <span className="text-[10px] text-slate-400 block leading-tight">Status</span>
-                              <strong className="font-bold">Active</strong>
-                            </div>
-                          </div>
-
-                          {/* CTA Open / Close Button with rotating chevron */}
-                          <div className={`px-4 py-2.5 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all duration-300 ${
-                            isHomeDashboardExpanded
-                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-amber-300'
-                              : 'bg-blue-600 group-hover:bg-blue-500 text-white'
-                          }`}>
-                            <span>
-                              {isHomeDashboardExpanded
-                                ? (currentLanguage === 'bn' ? 'ড্যাশবোর্ড বন্ধ করুন' : 'Close Dashboard')
-                                : (currentLanguage === 'bn' ? 'ড্যাশবোর্ড খুলুন' : 'Open Dashboard')}
-                            </span>
-                            <ChevronDown className={`w-4 h-4 transition-transform duration-300 ease-out ${
-                              isHomeDashboardExpanded ? 'rotate-180 text-slate-950' : 'text-white'
-                            }`} />
-                          </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('work-orders')}
+                            className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
+                          >
+                            <FileSpreadsheet className="w-4 h-4" />
+                            <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata'}</span>
+                          </button>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Smooth Animated Accordion Container for Performance Dashboard on Home Screen */}
-                    {isHomeDashboardExpanded && (
-                      <div className="overflow-hidden transition-all duration-500 ease-in-out animate-in fade-in slide-in-from-top-4 duration-300">
-                        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-md space-y-4">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      {/* Recent Submissions */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
-                              <BarChart3 className="w-5 h-5 text-blue-600" />
-                              <h3 className="text-sm font-bold text-slate-900">
-                                {t.performanceDashboard} - {currentLanguage === 'bn' ? '৫টি ক্যাটাগরির লাইভ পরিসংখ্যান' : '5 Categories Live Analytics'}
-                              </h3>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => setActiveTab('performance')}
-                                className="text-xs text-blue-600 hover:text-blue-800 font-bold px-3 py-1 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                                title={currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ডেডিকেটেড পেজে দেখুন' : 'View full dedicated page'}
-                              >
-                                <span>{currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ভিউ' : 'Fullscreen'}</span>
-                                <ChevronRight className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => setIsHomeDashboardExpanded(false)}
-                                className="text-xs text-slate-600 hover:text-slate-900 font-bold px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                                <span>{currentLanguage === 'bn' ? 'বন্ধ করুন' : 'Close'}</span>
-                              </button>
+                              <Clock className="w-4 h-4 text-slate-600" />
+                              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                                {t.recordsCount} ({entries.length})
+                              </h4>
                             </div>
                           </div>
-
-                          <PerformanceDashboard
-                            entries={entries}
-                            categoryCounts={categoryCounts}
-                            onSelectCategory={navToCategory}
-                            currentLanguage={currentLanguage}
-                            disconnectionTasks={disconnectionTasks}
+                          <WorkerRecentSubmissions
+                            entries={entries.slice(0, 6)}
+                            workerName={workerName}
+                            currentUser={currentUser}
+                            onLogout={handleUserLogout}
+                            onSelectEntry={(entry) => setPreviewEntry(entry)}
+                            onNewEntry={() => {
+                              setSelectedCategory('NSC');
+                              setActiveFormCategory('NSC');
+                            }}
+                            lang={currentLanguage}
                           />
                         </div>
                       </div>
-                    )}
-                  </div>
-
-                  {/* 5 Work Category Cards Selector */}
-                  <CategorySelector
-                    selectedCategory={selectedCategory}
-                    onSelectCategory={(cat) => {
-                      setSelectedCategory(cat);
-                      setActiveFormCategory(cat);
-                    }}
-                    categoryCounts={categoryCounts}
-                    currentLanguage={currentLanguage}
-                  />
-
-                  {/* Work Order & Khata Quick Access Banner on Home Screen */}
-                  <div className="bg-linear-to-r from-amber-500/15 via-amber-50 to-orange-500/10 border-2 border-amber-400/80 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-3.5">
-                      <div className="w-11 h-11 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
-                        <FileSpreadsheet className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-sm sm:text-base font-black text-slate-900">
-                            {t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata)'}
-                          </h3>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
-                            {workOrders.filter(w => isAdmin || !w.isHidden).length} Live
+                    </div>
+                  ) : (
+                    /* INSIDE FORM VIEW */
+                    <div className="space-y-4">
+                      {/* Category Switcher & Back Navigation Bar */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => setActiveFormCategory(null)}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <ArrowLeft className="w-4 h-4" />
+                            <span>← {t.filterAll} {t.fiveCategories}</span>
+                          </button>
+                          <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
+                          <span className="text-xs font-bold text-slate-700 hidden sm:inline">
+                            {t.category}: <span className="text-blue-600 font-black">{activeFormCategory}</span>
                           </span>
                         </div>
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          {t.workOrderNoticeDesc}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('work-orders')}
-                        className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
-                      >
-                        <FileSpreadsheet className="w-4 h-4" />
-                        <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata'}</span>
-                      </button>
-                    </div>
-                  </div>
 
-                  {/* Recent Submissions */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-600" />
-                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                            {t.recordsCount} ({entries.length})
-                          </h4>
+                        {/* Quick Switch Pills */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full">
+                          {(['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'] as CategoryType[]).map((cat, idx) => (
+                            <button
+                              key={`${cat}-${idx}`}
+                              onClick={() => {
+                                setSelectedCategory(cat);
+                                setActiveFormCategory(cat);
+                              }}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
+                                activeFormCategory === cat
+                                  ? 'bg-slate-900 text-white shadow-xs'
+                                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+                              }`}
+                            >
+                              {cat}
+                            </button>
+                          ))}
                         </div>
                       </div>
-                      <WorkerRecentSubmissions
-                        entries={entries.slice(0, 6)}
+
+                      {/* Dynamic Form customized for the selected category */}
+                      <EntryForm
+                        category={activeFormCategory}
                         workerName={workerName}
                         currentUser={currentUser}
-                        onLogout={handleUserLogout}
-                        onSelectEntry={(entry) => setPreviewEntry(entry)}
-                        onNewEntry={() => {
-                          setSelectedCategory('NSC');
-                          setActiveFormCategory('NSC');
+                        initialNotice={selectedWorkOrderForEntry}
+                        availableWorkOrders={workOrders}
+                        onSuccess={(newEntry) => {
+                          handleEntrySuccess(newEntry);
+                          setSelectedWorkOrderForEntry(null);
                         }}
+                        onBack={() => {
+                          setActiveFormCategory(null);
+                          setSelectedWorkOrderForEntry(null);
+                        }}
+                        onDataUpdated={() => loadData(false)}
                         lang={currentLanguage}
                       />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                /* INSIDE FORM VIEW */
-                <div className="space-y-4">
-                  {/* Category Switcher & Back Navigation Bar */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => setActiveFormCategory(null)}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <ArrowLeft className="w-4 h-4" />
-                        <span>← {t.filterAll} {t.fiveCategories}</span>
-                      </button>
-                      <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
-                      <span className="text-xs font-bold text-slate-700 hidden sm:inline">
-                        {t.category}: <span className="text-blue-600 font-black">{activeFormCategory}</span>
-                      </span>
-                    </div>
 
-                    {/* Quick Switch Pills */}
-                    <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full">
-                      {(['NSC', 'DISCONNECTION', 'POLE CASE', 'METER REPLESMENT', 'DTR REPLESMENT'] as CategoryType[]).map((cat, idx) => (
-                        <button
-                          key={`${cat}-${idx}`}
-                          onClick={() => {
-                            setSelectedCategory(cat);
-                            setActiveFormCategory(cat);
-                          }}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
-                            activeFormCategory === cat
-                              ? 'bg-slate-900 text-white shadow-xs'
-                              : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
-                          }`}
-                        >
-                          {cat}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Dynamic Form customized for the selected category */}
-                  <EntryForm
-                    category={activeFormCategory}
-                    workerName={workerName}
-                    currentUser={currentUser}
-                    initialNotice={selectedWorkOrderForEntry}
-                    availableWorkOrders={workOrders}
-                    onSuccess={(newEntry) => {
-                      handleEntrySuccess(newEntry);
-                      setSelectedWorkOrderForEntry(null);
-                    }}
-                    onBack={() => {
-                      setActiveFormCategory(null);
-                      setSelectedWorkOrderForEntry(null);
-                    }}
-                    onDataUpdated={() => loadData(false)}
-                    lang={currentLanguage}
-                  />
-
-                  {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
-                  {activeFormCategory !== 'DISCONNECTION' && (
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-600" />
-                          <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                            {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
-                          </h4>
+                      {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
+                      {activeFormCategory !== 'DISCONNECTION' && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-slate-600" />
+                              <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                                {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
+                              </h4>
+                            </div>
+                            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                              Live {activeFormCategory} Sheet Data
+                            </span>
+                          </div>
+                          <WorkerRecentSubmissions
+                            entries={entries.filter(e => e.category === activeFormCategory)}
+                            workerName={workerName}
+                            currentUser={currentUser}
+                            onSelectEntry={(entry) => setPreviewEntry(entry)}
+                            onNewEntry={() => {
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            lang={currentLanguage}
+                          />
                         </div>
-                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                          Live {activeFormCategory} Sheet Data
-                        </span>
-                      </div>
-                      <WorkerRecentSubmissions
-                        entries={entries.filter(e => e.category === activeFormCategory)}
-                        workerName={workerName}
-                        currentUser={currentUser}
-                        onSelectEntry={(entry) => setPreviewEntry(entry)}
-                        onNewEntry={() => {
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        lang={currentLanguage}
-                      />
+                      )}
                     </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
 
-          {/* VIEW: PERFORMANCE DASHBOARD (DEDICATED FULL VIEW) */}
-          {activeTab === 'performance' && (
-            <div className="space-y-6 animate-in fade-in duration-200">
-              {/* Back to Home & Actions Bar */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setActiveTab('entry')}
-                    className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-xs"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                    <span>{currentLanguage === 'bn' ? '← হোম স্ক্রিনে ফিরে যান' : '← Back to Home'}</span>
-                  </button>
-                  <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      <span>{t.performanceDashboard}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        Live Analytics
-                      </span>
-                    </h2>
-                    <p className="text-[11px] text-slate-500">
-                      {currentLanguage === 'bn' ? 'WBSEDCL ৫টি ক্যাটাগরির কাজের বিস্তারিত রিপোর্ট' : 'WBSEDCL 5 Categories Field Performance Report'}
-                    </p>
+              {/* VIEW: PERFORMANCE DASHBOARD (DEDICATED FULL VIEW) */}
+              {activeTab === 'performance' && (
+                <div className="space-y-6 animate-in fade-in duration-200">
+                  {/* Back to Home & Actions Bar */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setActiveTab('entry')}
+                        className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-xs"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        <span>{currentLanguage === 'bn' ? '← হোম স্ক্রিনে ফিরে যান' : '← Back to Home'}</span>
+                      </button>
+                      <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                          <span>{t.performanceDashboard}</span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Live Analytics
+                          </span>
+                        </h2>
+                        <p className="text-[11px] text-slate-500">
+                          {currentLanguage === 'bn' ? 'WBSEDCL ৫টি ক্যাটাগরির কাজের বিস্তারিত রিপোর্ট' : 'WBSEDCL 5 Categories Field Performance Report'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={loadData}
+                        className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                        <span>Refresh</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedCategory('NSC');
+                          setActiveFormCategory('NSC');
+                          setActiveTab('entry');
+                        }}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ New Entry</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={loadData}
-                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                    <span>Refresh</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('NSC');
-                      setActiveFormCategory('NSC');
+                  {/* Full Performance Dashboard Component */}
+                  <PerformanceDashboard
+                    entries={entries}
+                    categoryCounts={categoryCounts}
+                    onSelectCategory={(cat) => {
+                      setSelectedCategory(cat);
+                      setActiveFormCategory(cat);
                       setActiveTab('entry');
                     }}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ New Entry</span>
-                  </button>
-                </div>
-              </div>
+                    currentLanguage={currentLanguage}
+                    disconnectionTasks={userVisibleDisconnectionTasks}
+                  />
 
-              {/* Full Performance Dashboard Component */}
-              <PerformanceDashboard
-                entries={entries}
-                categoryCounts={categoryCounts}
-                onSelectCategory={(cat) => {
-                  setSelectedCategory(cat);
-                  setActiveFormCategory(cat);
-                  setActiveTab('entry');
-                }}
-                currentLanguage={currentLanguage}
-                disconnectionTasks={disconnectionTasks}
-              />
+                  {/* Recent Activity in Performance view */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-slate-600" />
+                        <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                          {t.recordsCount} ({entries.length})
+                        </h3>
+                      </div>
+                      <span className="text-xs text-slate-400">All Field Logs</span>
+                    </div>
 
-              {/* Recent Activity in Performance view */}
-              <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-slate-600" />
-                    <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                      {t.recordsCount} ({entries.length})
-                    </h3>
+                    <WorkerRecentSubmissions
+                      entries={entries}
+                      workerName={workerName}
+                      currentUser={currentUser}
+                      onLogout={handleUserLogout}
+                      onSelectEntry={(entry) => setPreviewEntry(entry)}
+                      onNewEntry={() => {
+                        setSelectedCategory('NSC');
+                        setActiveFormCategory('NSC');
+                        setActiveTab('entry');
+                      }}
+                      lang={currentLanguage}
+                    />
                   </div>
-                  <span className="text-xs text-slate-400">All Field Logs</span>
                 </div>
+              )}
 
-                <WorkerRecentSubmissions
-                  entries={entries}
-                  workerName={workerName}
-                  currentUser={currentUser}
-                  onLogout={handleUserLogout}
-                  onSelectEntry={(entry) => setPreviewEntry(entry)}
-                  onNewEntry={() => {
-                    setSelectedCategory('NSC');
-                    setActiveFormCategory('NSC');
-                    setActiveTab('entry');
-                  }}
-                  lang={currentLanguage}
-                />
-              </div>
-            </div>
-          )}
+              {/* VIEW 2: ADMIN DASHBOARD (EXCLUSIVELY FOR LOGGED-IN ADMINS) */}
+              {activeTab === 'admin' && isAdmin && (
+                <div>
+                  <AdminDashboard
+                    entries={entries}
+                    disconnectionTasks={disconnectionTasks}
+                    onRefresh={() => loadData(true, true)}
+                    onExportCsv={handleExportCsv}
+                    onLogout={handleUserLogout}
+                    lang={currentLanguage}
+                    onOpenLanguageModal={() => setShowLanguageModal(true)}
+                    syncMode="auto"
+                    onNavigateToDisconnection={(tab) => {
+                      setDisconnectionInitialTab(tab || 'VIEW_LIST');
+                      setActiveTab('disconnection');
+                    }}
+                    isSyncing={isSyncing}
+                    lastSyncedTimeStr={formatTimeHHMMSS(lastSyncedAt)}
+                    onPowerAppSheetsRefresh={handlePowerAppSheetsRefresh}
+                    forceRefreshState={forceRefreshState}
+                    onForceSystemRefresh={handleForceSystemRefresh}
+                  />
+                </div>
+              )}
 
-          {/* VIEW 2: ADMIN DASHBOARD (EXCLUSIVELY FOR LOGGED-IN ADMINS) */}
-          {activeTab === 'admin' && isAdmin && (
-            <div>
-              <AdminDashboard
-                entries={entries}
-                disconnectionTasks={disconnectionTasks}
-                onRefresh={() => loadData(true, true)}
-                onExportCsv={handleExportCsv}
-                onLogout={handleUserLogout}
-                lang={currentLanguage}
-                onOpenLanguageModal={() => setShowLanguageModal(true)}
-                syncMode="auto"
-                onNavigateToDisconnection={(tab) => {
-                  setDisconnectionInitialTab(tab || 'VIEW_LIST');
-                  setActiveTab('disconnection');
-                }}
-                isSyncing={isSyncing}
-                lastSyncedTimeStr={formatTimeHHMMSS(lastSyncedAt)}
-                onPowerAppSheetsRefresh={handlePowerAppSheetsRefresh}
-                forceRefreshState={forceRefreshState}
-                onForceSystemRefresh={handleForceSystemRefresh}
-              />
-            </div>
-          )}
+              {/* VIEW 3: WORKER'S RECENT SUBMISSIONS (MAIN MODULE) */}
+              {activeTab === 'my-submissions' && (
+                <div className="space-y-6">
+                  <WorkerRecentSubmissions
+                    entries={entries}
+                    workerName={workerName}
+                    currentUser={currentUser}
+                    onLogout={handleUserLogout}
+                    onSelectEntry={(entry) => setPreviewEntry(entry)}
+                    onNewEntry={() => setActiveTab('entry')}
+                    lang={currentLanguage}
+                  />
+                </div>
+              )}
 
-          {/* VIEW 3: WORKER'S RECENT SUBMISSIONS (MAIN MODULE) */}
-          {activeTab === 'my-submissions' && (
-            <div className="space-y-6">
-              <WorkerRecentSubmissions
-                entries={entries}
-                workerName={workerName}
-                currentUser={currentUser}
-                onLogout={handleUserLogout}
-                onSelectEntry={(entry) => setPreviewEntry(entry)}
-                onNewEntry={() => setActiveTab('entry')}
-                lang={currentLanguage}
-              />
-            </div>
-          )}
+              {/* VIEW 4: OFFICIAL WORK ORDER & KHATA NOTICE BOARD */}
+              {activeTab === 'work-orders' && (
+                <div className="space-y-6 animate-in fade-in duration-200">
+                  <WorkOrderNoticeSection
+                    category="ALL"
+                    currentUser={currentUser}
+                    isAdmin={isAdmin}
+                    lang={currentLanguage}
+                    standalonePage={true}
+                    syncMode="auto"
+                    onStartWorkWithNotice={(notice) => {
+                      setSelectedWorkOrderForEntry(notice);
+                      const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
+                      setSelectedCategory(targetCat);
+                      setActiveFormCategory(targetCat);
+                      setActiveTab('entry');
+                    }}
+                  />
+                </div>
+              )}
 
-          {/* VIEW 4: OFFICIAL WORK ORDER & KHATA NOTICE BOARD */}
-          {activeTab === 'work-orders' && (
-            <div className="space-y-6 animate-in fade-in duration-200">
-              <WorkOrderNoticeSection
-                category="ALL"
-                currentUser={currentUser}
-                isAdmin={isAdmin}
-                lang={currentLanguage}
-                standalonePage={true}
-                syncMode="auto"
-                onStartWorkWithNotice={(notice) => {
-                  setSelectedWorkOrderForEntry(notice);
-                  const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
-                  setSelectedCategory(targetCat);
-                  setActiveFormCategory(targetCat);
-                  setActiveTab('entry');
-                }}
-              />
-            </div>
-          )}
-
-          {/* VIEW 5: DISCONNECTION MODULE (TWO-WAY SYNC WITH GOOGLE SHEET) */}
-          {activeTab === 'disconnection' && (
-            <div className="space-y-4 animate-in fade-in duration-150">
-              <DisconnectionTaskManagement
-                currentUser={currentUser}
-                lang={currentLanguage}
-                initialTab={disconnectionInitialTab}
-                onBack={() => setActiveTab('entry')}
-                onTasksChange={() => loadData(true)}
-                externalTasks={disconnectionTasks}
-              />
-            </div>
-          )}
+              {/* VIEW 5: DISCONNECTION MODULE (TWO-WAY SYNC WITH GOOGLE SHEET) */}
+              {activeTab === 'disconnection' && (
+                <div className="space-y-4 animate-in fade-in duration-150">
+                  <DisconnectionTaskManagement
+                    currentUser={currentUser}
+                    lang={currentLanguage}
+                    initialTab={disconnectionInitialTab}
+                    onBack={() => setActiveTab('entry')}
+                    onTasksChange={() => loadData(true)}
+                    externalTasks={disconnectionTasks}
+                  />
+                </div>
+              )}
         </section>
       </main>
 

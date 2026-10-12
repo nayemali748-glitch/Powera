@@ -8,12 +8,12 @@ import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12H
 // CENTRAL API CONFIGURATION
 // Google Sheets via Google Apps Script is the SINGLE SOURCE OF TRUTH
 // ============================================================================
-export const GOOGLE_SCRIPT_WEB_APP_URL = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GOOGLE_APPS_SCRIPT_URL) ||
+export const GOOGLE_SCRIPT_WEB_APP_URL =
+  String((typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GOOGLE_APPS_SCRIPT_URL) || '').trim() ||
   'https://script.google.com/macros/s/AKfycbzVV5sqqypop3sr19hstcti76QXw4aGIKHqAut31pcYMcOuffGwsAmtfbbOnx3KVB_7/exec';
 
 export const SPREADSHEET_ID = '1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY';
-export const SPREADSHEET_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
+export const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY/edit?usp=drivesdk';
 
 const LOCAL_STORAGE_KEY = 'power_app_entries_cache';
 const USERS_CACHE_KEY = 'power_app_users_cache';
@@ -32,8 +32,26 @@ try {
   }
 } catch {}
 
+function hasActiveUserSession(): boolean {
+  try {
+    const raw = localStorage.getItem('power_user_session');
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return Boolean(parsed && (parsed.idNo || parsed.loginId || parsed.id));
+  } catch {
+    return false;
+  }
+}
+
+const nativeFetch = typeof window !== 'undefined' && typeof window.fetch === 'function'
+  ? window.fetch.bind(window)
+  : globalThis.fetch.bind(globalThis);
+
 function readCache<T>(key: string, fallback: T): T {
   try {
+    if (!hasActiveUserSession() && key !== USERS_CACHE_KEY) {
+      return fallback;
+    }
     const x = localStorage.getItem(key);
     return x ? JSON.parse(x) : fallback;
   } catch {
@@ -166,6 +184,10 @@ export async function callGasApi<T = any>(
   }
 
   // 2. Direct Google Apps Script Web App Connection (Resilient failover & serverless execution)
+  if (!GOOGLE_SCRIPT_WEB_APP_URL) {
+    throw proxyError || new Error('Google Apps Script URL is not configured');
+  }
+
   const directController = new AbortController();
   const directTimeoutId = setTimeout(() => {
     try { directController.abort(); } catch {}
@@ -229,7 +251,7 @@ export async function callGasApi<T = any>(
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      console.error(`[GoogleAppsScript] Non-JSON response for action "${action}". Status: ${finalRes.status}. Body:`, trimmed.slice(0, 300));
+      console.warn(`[GoogleAppsScript] Non-JSON response for action "${action}". Status: ${finalRes.status}. Body:`, trimmed.slice(0, 300));
       throw new Error(`Google Sheets সার্ভিসের সাথে যোগাযোগে সমস্যা হয়েছে (Status: ${finalRes.status})। অনুগ্রহ করে আবার চেষ্টা করুন।`);
     }
 
@@ -555,7 +577,7 @@ export async function cleanupDuplicatesApi(sheetName?: string): Promise<{ succes
     await fetchEntries();
     return res;
   } catch (err: any) {
-    console.error('cleanupDuplicates error:', err);
+    console.warn('cleanupDuplicates error:', err);
     throw err;
   }
 }
@@ -833,7 +855,8 @@ function buildClientUserSyncTag(u: { idNo?: string; password?: string; phone?: s
   const phone = String(u.phone || '').trim();
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
-  const role = String(u.role || 'worker').trim().toLowerCase() === 'admin' ? 'admin' : 'worker';
+  const rawRole = String(u.role || 'worker').trim().toLowerCase();
+  const role = rawRole === 'admin' ? 'admin' : rawRole === 'agency' ? 'agency' : 'worker';
   const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
   return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
@@ -877,6 +900,7 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
   if (!finalIdNo) return null;
 
   const rawRole = String(tagRole || merged.role || merged['Role'] || 'worker').trim().toLowerCase();
+  const desigStr = String(merged.designation || merged['Designation'] || '').trim();
   const isAdm =
     rawRole === 'admin' ||
     rawRole === 'controller' ||
@@ -886,6 +910,11 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     finalIdNo.toLowerCase() === 'admin' ||
     rawId === 'adm_8695716192' ||
     /^adm[-_0-9]/i.test(finalIdNo);
+  const isAgency =
+    !isAdm &&
+    (rawRole === 'agency' ||
+      /^agn[-_0-9]/i.test(finalIdNo) ||
+      /^agency[-_0-9]/i.test(finalIdNo));
 
   const finalPass = String(
     merged.password !== undefined && merged.password !== null
@@ -893,10 +922,16 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
       : (merged['Password'] !== undefined && merged['Password'] !== null ? merged['Password'] : '')
   ).trim();
   const finalHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
-  const finalDesig = String(merged.designation || merged['Designation'] || (isAdm ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')).trim();
+  const defaultDesig = isAdm
+    ? 'Sub-Divisional Controller'
+    : isAgency
+      ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)'
+      : 'লাইনম্যান / Worker (WBSEDCL)';
+  const finalDesig = desigStr || defaultDesig;
   const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
   const rawSt = String(tagStatus || merged.status || merged['Status'] || 'active').trim().toLowerCase();
   const finalSt = (rawSt === 'hold' ? 'hold' : 'active') as 'active' | 'hold';
+  const resolvedRole: UserAccount['role'] = isAdm ? 'admin' : isAgency ? 'agency' : 'worker';
 
   const result: UserAccount & { passwordHash?: string; loginId?: string; userId?: string } = {
     id: rawId || `usr_${finalIdNo}`,
@@ -908,11 +943,11 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     passwordHash: finalHash,
     name: String(merged.name || merged['Full Name'] || merged['Name'] || merged.consumerName || finalIdNo || 'কর্মী').trim(),
     phone: rawPhone,
-    role: (isAdm ? 'admin' : 'worker') as 'admin' | 'worker',
+    role: resolvedRole,
     status: finalSt,
     designation: finalDesig,
     badgeNo: finalBadge,
-    createdAt: createdRaw || buildClientUserSyncTag({ idNo: finalIdNo, password: finalPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: isAdm ? 'admin' : 'worker', status: finalSt }),
+    createdAt: createdRaw || buildClientUserSyncTag({ idNo: finalIdNo, password: finalPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: resolvedRole, status: finalSt }),
     updatedAt: String(merged.updatedAt || ''),
     lastLogin: String(merged.lastLogin || '')
   };
@@ -1063,24 +1098,32 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
   }
 }
 
-export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount> {
-  const cleanId = normalizeUniversalText(userData.idNo || '').trim();
+export async function createUserAccount(userData: Partial<UserAccount>): Promise<UserAccount & { success?: boolean; message?: string }> {
+  const cleanName = normalizeUniversalText(userData.name || userData.idNo || '').trim() || 'Worker';
+  const cleanId = normalizeUniversalText(userData.idNo || cleanName).trim();
   const cleanPhone = normalizeUniversalText(userData.phone || '').replace(/[^0-9]/g, '');
-  const cleanName = normalizeUniversalText(userData.name || cleanId) || 'কর্মী';
   const cleanPassword = normalizePassword(userData.password || '1234');
 
-  if (!cleanId && !cleanPhone) throw new Error('ইউজার আইডি বা মোবাইল নম্বর আবশ্যক');
+  if (!cleanId && !cleanPhone) throw new Error('User ID or Phone Number is required');
 
-  const finalId = cleanId || `LM-${cleanPhone.slice(-4)}`;
-  const cleanDesig = userData.designation || (userData.role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)');
+  const finalId = cleanId || (userData.role === 'agency' ? `AGN-${cleanPhone.slice(-4)}` : `LM-${cleanPhone.slice(-4)}`);
+  const defaultDesig =
+    userData.role === 'admin'
+      ? 'Assistant Engineer / Admin (WBSEDCL)'
+      : userData.role === 'agency'
+        ? 'Agency Partner (WBSEDCL)'
+        : 'Lineman / Worker (WBSEDCL)';
+  const cleanDesig = userData.designation || defaultDesig;
   const cleanBadge = userData.badgeNo || finalId;
+  const resolvedRole: 'admin' | 'worker' | 'agency' =
+    userData.role === 'admin' ? 'admin' : userData.role === 'agency' ? 'agency' : 'worker';
   const syncTag = buildClientUserSyncTag({
     idNo: finalId,
     password: cleanPassword,
     phone: cleanPhone,
     designation: cleanDesig,
     badgeNo: cleanBadge,
-    role: userData.role || 'worker',
+    role: resolvedRole,
     status: userData.status || 'active'
   });
 
@@ -1096,8 +1139,8 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
     consumerName: cleanName,
     password: cleanPassword,
     'Password': cleanPassword,
-    role: (userData.role || 'worker') as 'admin' | 'worker' | 'supervisor',
-    'Role': userData.role || 'worker',
+    role: resolvedRole as 'admin' | 'worker' | 'agency' | 'supervisor',
+    'Role': resolvedRole,
     status: (userData.status || 'active') as 'active' | 'hold',
     'Status': userData.status || 'active',
     designation: cleanDesig,
@@ -1122,7 +1165,7 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
       if (resp.ok && ct.includes('application/json')) {
         const resData = await resp.json();
         const rawCreated = (resData?.user || resData?.data?.user || payload) as UserAccount;
-        const created = { ...rawCreated, password: cleanPassword };
+        const created = { ...rawCreated, name: cleanName, idNo: finalId, password: cleanPassword, role: resolvedRole, success: true };
         const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
         writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
         return created;
@@ -1133,13 +1176,13 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
   // 2. Direct GAS failover via submitRecord with category Users ONLY
   const gasRes = await callGasApi<any>('submitRecord', { category: 'Users', ...payload, data: { category: 'Users', ...payload } }, 'POST');
   const rawCreated = (gasRes?.user || gasRes?.entry || gasRes?.data?.entry || payload) as UserAccount;
-  const created = { ...rawCreated, id: payload.id, idNo: finalId, password: cleanPassword, role: payload.role === 'admin' ? 'admin' : 'worker', status: payload.status } as UserAccount;
+  const created = { ...rawCreated, id: payload.id, name: cleanName, idNo: finalId, password: cleanPassword, role: resolvedRole, status: payload.status, success: true } as UserAccount & { success: boolean };
   const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
   return created;
 }
 
-export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount> {
+export async function updateUserAccount(id: string, updates: Partial<UserAccount>): Promise<UserAccount & { success?: boolean; message?: string }> {
   const cleanId = String(id || '').trim();
   const safeUpdates = { ...updates };
   if (safeUpdates.phone) {
@@ -1161,7 +1204,7 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
       if (resp.ok && ct.includes('application/json')) {
         const resData = await resp.json();
         const rawUpdated = (resData?.user || resData?.data?.user || { id: cleanId, ...safeUpdates }) as UserAccount;
-        const updated = { ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}) };
+        const updated = { ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}), success: true };
         const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
         writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
         return updated;
@@ -1198,7 +1241,8 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
     data: mergedPayload
   }, 'POST');
   const rawUpdated = (gasRes?.user || gasRes?.entry || gasRes?.data?.entry || mergedPayload) as UserAccount;
-  const updated = sanitizeClientUserRecord({ ...mergedPayload, ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}) }) || (mergedPayload as UserAccount);
+  const baseUpdated = sanitizeClientUserRecord({ ...mergedPayload, ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}) }) || (mergedPayload as UserAccount);
+  const updated = { ...baseUpdated, success: true };
   const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
   writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
   return updated;
@@ -1209,9 +1253,10 @@ export async function deleteUserAccount(
   options?: {
     confirmDelete?: boolean;
     confirmAdminDelete?: boolean;
+    confirmText?: string;
     reason?: string;
   }
-): Promise<boolean> {
+): Promise<{ success: boolean; deleted?: boolean; message?: string }> {
   const cleanId = String(id || '').toLowerCase().trim();
   if (cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin' || cleanId === 'nayem') {
     throw new Error('PRIMARY_ADMIN_PROTECTED: The Primary Admin account (8695716192) is permanently protected and cannot be deleted.');
@@ -1237,7 +1282,7 @@ export async function deleteUserAccount(
       if (resp.ok && ct.includes('application/json')) {
         const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
         writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
-        return true;
+        return { success: true, deleted: true };
       }
       const postResp = await fetch(`/api/users/${encodeURIComponent(id)}/delete`, {
         method: 'POST',
@@ -1247,7 +1292,7 @@ export async function deleteUserAccount(
       if (postResp.ok) {
         const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
         writeCache(USERS_CACHE_KEY, cached.filter(u => u.id !== id && u.idNo !== id));
-        return true;
+        return { success: true, deleted: true };
       }
     } catch {}
   }
@@ -1259,10 +1304,10 @@ export async function deleteUserAccount(
   await callGasApi<any>('deleteUser', { id: rowId, idNo: target?.idNo || id, category: 'Users', ...reqPayload }, 'POST').catch(() => {});
   await callGasApi<any>('deleteEntry', { id: rowId, category: 'Users', ...reqPayload }, 'POST').catch(() => {});
   writeCache(USERS_CACHE_KEY, cachedList.filter(u => u.id !== id && u.idNo !== id));
-  return true;
+  return { success: true, deleted: true };
 }
 
-export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount> {
+export async function updateUserStatus(id: string, status: 'active' | 'hold'): Promise<UserAccount & { success?: boolean; message?: string }> {
   const cleanId = id.toLowerCase().trim();
   if ((cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin') && status === 'hold') {
     throw new Error('Primary Admin account cannot be placed on hold');
@@ -1395,6 +1440,8 @@ export async function loginUser(loginId: string, password: string): Promise<User
       const uInternalId = normalizeUniversalText(u.id || '').trim().toLowerCase();
       const uBadge = normalizeUniversalText(u.badgeNo || '').trim().toLowerCase();
       const uBadgeAlnum = uBadge.replace(/[^a-z0-9]/g, '');
+      const uName = normalizeUniversalText(u.name || (u as any)['Full Name'] || '').trim().toLowerCase();
+      const uNameAlnum = uName.replace(/[^a-z0-9]/g, '');
       const uPhoneDigits = normalizeUniversalText(u.phone || '').replace(/\D/g, '');
       const uPhone10 = uPhoneDigits.length >= 10 ? uPhoneDigits.slice(-10) : uPhoneDigits;
 
@@ -1402,6 +1449,7 @@ export async function loginUser(loginId: string, password: string): Promise<User
       if (cleanIdAlnum && uIdNoAlnum && uIdNoAlnum === cleanIdAlnum) return true;
       if (uInternalId && uInternalId === lowerId) return true;
       if (uBadge && (uBadge === lowerId || (cleanIdAlnum && uBadgeAlnum === cleanIdAlnum))) return true;
+      if (uName && (uName === lowerId || (cleanIdAlnum.length >= 3 && uNameAlnum === cleanIdAlnum))) return true;
       if (cleanPhone10 && uPhone10 && uPhone10 === cleanPhone10) return true;
       if (cleanDigits && cleanDigits.length >= 4 && uPhoneDigits && cleanDigits === uPhoneDigits) return true;
       return false;
@@ -1438,18 +1486,27 @@ export async function loginUser(loginId: string, password: string): Promise<User
       matchedUser.id === 'adm_8695716192' ||
       /^adm[-_0-9]/i.test(idNoStr);
 
+    const isRoleAgency =
+      !isRoleAdmin &&
+      (matchedUser.role === 'agency' ||
+        /^agn[-_0-9]/i.test(idNoStr) ||
+        /^agency[-_0-9]/i.test(idNoStr));
+    const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+
     resData = {
       success: true,
       session: {
         id: String(matchedUser.id || `usr_${idNoStr}`),
         idNo: idNoStr,
-        name: String(matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : 'কর্মী')),
+        name: String(matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
         phone: String(matchedUser.phone || ''),
-        role: (isRoleAdmin ? 'admin' : 'worker') as 'admin' | 'worker',
+        role: resolvedRole,
         status: 'active' as const,
-        designation: String(matchedUser.designation || (isRoleAdmin ? 'Sub-Divisional Controller' : 'লাইনম্যান / Worker (WBSEDCL)')),
+        designation: String(
+          matchedUser.designation ||
+          (isRoleAdmin ? 'Sub-Divisional Controller' : isRoleAgency ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)')
+        ),
         badgeNo: String(matchedUser.badgeNo || idNoStr),
-        token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         loggedInAt: new Date().toISOString()
       }
     };
@@ -1466,8 +1523,9 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
   try {
     localStorage.setItem('power_user_session', JSON.stringify(session));
-    const isAdm = session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
-    if (isAdm) {
+    const isSuperAdmin =
+      session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
+    if (isSuperAdmin) {
       localStorage.setItem('power_is_admin', 'true');
     } else {
       localStorage.removeItem('power_is_admin');
@@ -1478,6 +1536,9 @@ export async function loginUser(loginId: string, password: string): Promise<User
 }
 
 export async function logoutUser(): Promise<void> {
+  try {
+    await nativeFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  } catch {}
   try {
     localStorage.removeItem('power_user_session');
     localStorage.removeItem('power_is_admin');
@@ -1896,6 +1957,18 @@ export function saveClientDisconnectionOverlay(consumerId: string, patch: Record
   } catch {}
 }
 
+export function removeClientDisconnectionOverlay(consumerId: string) {
+  try {
+    const key = String(consumerId || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim().toLowerCase();
+    if (!key) return;
+    const map = readCache<Record<string, any>>(DISCONNECTION_CLIENT_OVERLAY_KEY, {});
+    if (map && typeof map === 'object' && key in map) {
+      delete map[key];
+      writeCache(DISCONNECTION_CLIENT_OVERLAY_KEY, map);
+    }
+  } catch {}
+}
+
 export function mergeClientDisconnectionOverlay(tasks: DisconnectionTask[]): DisconnectionTask[] {
   try {
     const overlayMap = readCache<Record<string, any>>(DISCONNECTION_CLIENT_OVERLAY_KEY, {});
@@ -1903,26 +1976,34 @@ export function mergeClientDisconnectionOverlay(tasks: DisconnectionTask[]): Dis
       return tasks;
     }
     const now = Date.now();
-    const seenKeys = new Set<string>();
-    const merged = tasks.map(t => {
+    let mapChanged = false;
+    for (const [k, v] of Object.entries(overlayMap)) {
+      if (!v || !v._localUpdatedAt || (now - Number(v._localUpdatedAt) > 8000)) {
+        delete overlayMap[k];
+        mapChanged = true;
+      }
+    }
+    if (mapChanged) {
+      if (Object.keys(overlayMap).length === 0) {
+        try { localStorage.removeItem(DISCONNECTION_CLIENT_OVERLAY_KEY); } catch {}
+        return tasks;
+      }
+      writeCache(DISCONNECTION_CLIENT_OVERLAY_KEY, overlayMap);
+    }
+    return tasks.map(t => {
       const cId = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '')
         .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
         .trim()
         .toLowerCase();
       if (!cId) return t;
-      seenKeys.add(cId);
       const ov = overlayMap[cId];
       if (!ov) return t;
-      // Keep client overlay active for 24 hours so recent updates never disappear during background sheet syncs
-      const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
-      if (!isRecent) return t;
       return cleanDisconnectionTask({
         ...t,
         ...ov,
         serialNumber: t.serialNumber || ov.serialNumber
       });
     });
-    return merged;
   } catch {
     return tasks;
   }
@@ -1965,14 +2046,29 @@ export function isValidDisconnectionTaskOrRow(r: any): boolean {
   return true;
 }
 
+function purgeAllLocalDisconnectionCacheKeys() {
+  try {
+    localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+    localStorage.removeItem(DISCONNECTION_CLIENT_OVERLAY_KEY);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith(DISCONNECTION_TASKS_CACHE_KEY) || k.startsWith(DISCONNECTION_CLIENT_OVERLAY_KEY))) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch {}
+}
+
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
     const raw = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
     if (Array.isArray(raw) && raw.length > 0) {
-      const valid = raw.filter(isValidDisconnectionTaskOrRow).map((t, idx) => ({
-        ...cleanDisconnectionTask(t),
-        serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-      }));
+      const valid = raw
+        .filter((t: any) => isValidDisconnectionTaskOrRow(t))
+        .map((t, idx) => ({
+          ...cleanDisconnectionTask(t),
+          serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+        }));
       return mergeClientDisconnectionOverlay(valid);
     }
   } catch {}
@@ -1981,7 +2077,9 @@ export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
 
 export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
   try {
-    const valid = mergeClientDisconnectionOverlay((Array.isArray(tasks) ? tasks : []).filter(isValidDisconnectionTaskOrRow));
+    const valid = mergeClientDisconnectionOverlay(
+      (Array.isArray(tasks) ? tasks : []).filter((t: any) => isValidDisconnectionTaskOrRow(t))
+    );
     // Strip heavy base64 images before writing to localStorage so quota is never exceeded
     const light = valid.map(t => {
       const clone: any = { ...t };
@@ -2040,16 +2138,73 @@ export function cleanDisconnectionTask(t: any): DisconnectionTask {
     const m = text.match(/(?:^|\D)([6-9]\d{9})(?:\D|$)/);
     if (m && m[1]) phone = m[1];
   }
-  const cleanRemarks = String(t.workerRemarks || t.workerReport || t.notes || t['Notes'] || '')
+  let cleanRemarks = String(t.workerRemarks || t.workerReport || t.notes || t['Notes'] || '')
     .replace(/\[DELETED_BY_ADMIN\]/gi, '')
     .trim();
+  const rawStatus = String(t['Discon Status'] || t.disconStatus || t.taskStatus || 'PENDING').trim().toUpperCase();
+  const normalizedStatus =
+    !rawStatus ||
+    rawStatus === 'CONNECTED' ||
+    rawStatus === 'COMPLETED'
+      ? 'PENDING'
+      : rawStatus;
+  const resolvedPhoto = String(t.photoUrl || t['Image'] || t.imageUrl || t.image || '').trim();
+  const reqMatch = cleanRemarks.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
+  const hasRejectTag = /\[REISSUE_REJECTED/i.test(cleanRemarks);
+  const hasApproveTag = /\[REISSUE_APPROVED/i.test(cleanRemarks);
+
+  const reissueApproved = Boolean(
+    t.reissueApproved === true ||
+    hasApproveTag ||
+    normalizedStatus === 'REISSUE'
+  );
+  const reissueRejected = Boolean(
+    !reissueApproved &&
+    (t.reissueRejected === true || hasRejectTag)
+  );
+  const reissueRequested = Boolean(
+    !reissueApproved &&
+    !reissueRejected &&
+    (t.reissueRequested === true || Boolean(reqMatch))
+  );
+
+  if (reissueApproved) {
+    cleanRemarks = cleanRemarks
+      .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
+      .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
+      .trim();
+    if (!/\[REISSUE_APPROVED/i.test(cleanRemarks)) {
+      cleanRemarks = `${cleanRemarks} [REISSUE_APPROVED]`.trim();
+    }
+  } else if (reissueRejected) {
+    cleanRemarks = cleanRemarks
+      .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
+      .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
+      .trim();
+    if (!/\[REISSUE_REJECTED/i.test(cleanRemarks)) {
+      cleanRemarks = `${cleanRemarks} [REISSUE_REJECTED]`.trim();
+    }
+  }
+
+  const effectiveStatus = reissueApproved ? 'REISSUE' : normalizedStatus;
+
   return {
     ...t,
+    taskStatus: effectiveStatus as DisconnectionTaskStatus,
+    disconStatus: effectiveStatus,
+    'Discon Status': effectiveStatus,
     phoneNumber: phone || t.phoneNumber || '',
     workerRemarks: cleanRemarks,
     workerReport: cleanRemarks,
     notes: cleanRemarks,
-    Notes: cleanRemarks
+    Notes: cleanRemarks,
+    photoUrl: resolvedPhoto,
+    Image: resolvedPhoto,
+    reissueRequested,
+    reissueApproved,
+    reissueRejected,
+    reissueRequestedBy: t.reissueRequestedBy || (reqMatch && reqMatch[1]) || '',
+    reissueRequestedAt: t.reissueRequestedAt || (reqMatch && reqMatch[2]) || ''
   };
 }
 
@@ -2062,7 +2217,7 @@ export async function fetchDisconnectionTasks(params: {
   includeArchived?: boolean;
   refresh?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
-  // Step 1: Call Backend API (/api/disconnection-tasks) with fast server-side memory cache (<10ms)
+  // Step 1: Call Backend API (/api/disconnection-tasks)
   try {
     const query = new URLSearchParams();
     if (params.workerId) query.set('workerId', params.workerId);
@@ -2080,188 +2235,24 @@ export async function fetchDisconnectionTasks(params: {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.tasks)) {
         const validTasks = data.tasks.filter(isValidDisconnectionTaskOrRow);
-        const cleaned = mergeClientDisconnectionOverlay(
-          validTasks.map((t: any, idx: number) => ({
-            ...cleanDisconnectionTask(t),
-            serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-          }))
-        );
+        const mappedList = validTasks.map((t: any, idx: number) => ({
+          ...cleanDisconnectionTask(t),
+          serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+        }));
+        const cleaned = mergeClientDisconnectionOverlay(mappedList);
         if (!params.search && (!params.status || params.status === 'ALL')) {
           setCachedDisconnectionTasksSync(cleaned);
         }
         return { tasks: cleaned, stats: computeStats(cleaned) };
       }
     }
-  } catch (apiErr: any) {
-    console.warn('[Disconnection] Backend API fetch notice, trying GAS failover:', apiErr?.message || apiErr);
+  } catch (apiErr) {
+    console.warn('Disconnection tasks fetch fallback to cache:', apiErr);
   }
-
-  // Step 2: Direct read from Google Sheet via 'entries' (Disconnection category)
-  try {
-    const rawRes = await callGasApi<{ success: boolean; entries: any[] }>('entries', { category: 'Disconnection' }, 'GET');
-    const rawEntries = rawRes && (Array.isArray(rawRes.entries) ? rawRes.entries : (Array.isArray(rawRes) ? rawRes : []));
-    if (rawEntries && Array.isArray(rawEntries)) {
-      const canonicalByConsumer = new Map<string, any>();
-      for (const e of rawEntries) {
-        const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim().toLowerCase();
-        if (!cId) continue;
-        if (!canonicalByConsumer.has(cId)) {
-          canonicalByConsumer.set(cId, e);
-        }
-      }
-      const discEntries = Array.from(canonicalByConsumer.values()).filter((e: any) => {
-        if (!isValidDisconnectionTaskOrRow(e)) return false;
-        const cat = String(e.category || e.Category || e._sheet || '').toUpperCase().trim();
-        const isDiscCat = (cat === 'DISCONNECTION' || cat === 'DISCONNECT');
-        const isCoreDisc = Boolean(e['Consumer Id'] && (e['D2 Net O/S'] || e.d2NetOs || e['O/S Duedate Range'] || e.disconStatus || e['Discon Status']));
-        return isDiscCat || isCoreDisc;
-      });
-
-      const sortedDiscEntries = [...discEntries].sort((a, b) => {
-        const idA = String(a['Consumer Id'] || a['Consumer ID'] || a.consumerId || a.accountNumber || '').trim();
-        const idB = String(b['Consumer Id'] || b['Consumer ID'] || b.consumerId || b.accountNumber || '').trim();
-        return idA.localeCompare(idB, undefined, { numeric: true });
-      });
-      if (true) {
-        const mappedTasks: DisconnectionTask[] = sortedDiscEntries.map((e, idx) => {
-          const cId = String(e['Consumer Id'] || e['Consumer ID'] || e.consumerId || e.accountNumber || '').trim();
-          const mru = String(e['MRU'] || e.mru || e.mruSection || '').trim();
-          const name = String(e['Name'] || e['Consumer Name'] || e.consumerName || e.name || '').trim();
-          const address = String(e['Address'] || e.consumerAddress || e.address || '').trim();
-          const rawBaseClass = String(e['Base Class'] ?? e.baseClass ?? '').trim();
-          const consumerClass = String(e['Class'] ?? e.class ?? '').trim();
-          const rawDevice = String(e['Device'] ?? e.device ?? '').trim();
-          const govNonGov = String(e['Gov/Non-Gov'] ?? e.govNonGov ?? '').trim();
-          const meter = String(
-            (rawDevice && rawDevice.toUpperCase() !== 'I' && rawDevice.toUpperCase() !== 'III' ? rawDevice : '') ||
-            e['Number'] || e['Meter'] || e.meterNumber || e.meterNo || ''
-          ).trim();
-          const dueDateRange = String(e['O/S Duedate Range'] || e['O/S Due date Range'] || e.dueDateRange || '').trim();
-          const d2NetOs = String(e['D2 Net O/S'] || e.outstandingDue || e.arrearAmount || '').trim();
-          const disconStatus = (String(e['Discon Status'] || e.disconStatus || e.status || 'PENDING').trim().toUpperCase() || 'PENDING') as DisconnectionTaskStatus;
-          const disconDate = String(e['Discon Date'] || e.disconDate || e.reportDate || '').trim();
-          const mobile = String(e['Mobile'] || e['Mobile Number'] || e.phoneNumber || e.mobile || '').trim();
-          const notesVal = String(e['Notes'] || e.notes || e['Remarks'] || e.workerRemarks || e.workerReport || '').trim();
-          const readingVal = String(e['Reading'] || e.reading || e.meterReading || '').trim();
-          const paymentStatusVal = String(e['Payment Status'] || e.paymentStatus || '').trim();
-          const paymentSourceVal = String(e['Payment Source'] || e.paymentSource || '').trim();
-          const paidAmountVal = String(e['Paid Amount'] || e.paidAmount || (disconStatus === 'PAID' ? d2NetOs : '')).trim();
-          const paidDateVal = String(e['Paid Date'] || e['Payment Date'] || e.paidDate || e.paymentDate || (disconStatus === 'PAID' ? disconDate : '')).trim();
-          const paidTypeVal = String(e['Paid Type'] || e['Payment Reference'] || e.paidType || e.paymentReference || '').trim();
-          const gisPoleVal = String(e['Gis Pole'] || e.gisPole || '').trim();
-          const agencyVal = String(e['Agency'] || e['Agency Name'] || e.agency || e.assignedAgency || '').trim();
-          const lastUpdatedVal = String(e['Last Updated'] || e.lastUpdated || e['Updated At'] || e.updatedAt || '').trim();
-          const slNumber = `SL ${String(idx + 1).padStart(3, '0')}`;
-
-          return cleanDisconnectionTask({
-            off_code: String(e['off_code'] || e.offCode || '').trim(),
-            MRU: mru,
-            'Consumer Id': cId,
-            Name: name,
-            Address: address,
-            'Base Class': rawBaseClass,
-            Class: consumerClass,
-            Device: rawDevice,
-            'Gov/Non-Gov': govNonGov,
-            Number: String(e['Number'] || '').trim(),
-            Meter: String(e['Meter'] || '').trim(),
-            'O/S Duedate Range': dueDateRange,
-            'O/S Due date Range': dueDateRange,
-            'D2 Net O/S': d2NetOs,
-            'Discon Status': disconStatus,
-            'Discon Date': disconDate,
-            'Notes': notesVal,
-            notes: notesVal,
-            'Reading': readingVal,
-            reading: readingVal,
-            'Payment Status': paymentStatusVal,
-            paymentStatus: paymentStatusVal,
-            'Payment Source': paymentSourceVal,
-            paymentSource: paymentSourceVal,
-            'Paid Amount': paidAmountVal,
-            'Paid Date': paidDateVal,
-            'Paid Type': paidTypeVal,
-            'Gis Pole': gisPoleVal,
-            gisPole: gisPoleVal,
-            'Agency': agencyVal,
-            agency: agencyVal,
-            'Last Updated': lastUpdatedVal,
-            lastUpdated: lastUpdatedVal,
-            Mobile: mobile,
-            'Mobile Number': mobile,
-            serialNumber: slNumber,
-            taskId: `TASK-DISC-${cId}`,
-            consumerId: cId,
-            consumerName: name,
-            accountNumber: cId,
-            meterNumber: meter,
-            consumerAddress: address,
-            phoneNumber: mobile,
-            mobileNumber: mobile,
-            area: String(e['off_code'] || '').trim(),
-            disconnectionReason: `Outstanding Bill (D2 Net O/S: ${d2NetOs})`,
-            assignedWorkerId: String(e['Worker ID'] || e.assignedWorkerId || '').trim(),
-            assignedWorkerName: String(e['Worker Name'] || e.assignedWorkerName || agencyVal || '').trim(),
-            taskStatus: disconStatus,
-            disconStatus: disconStatus,
-            disconDate: disconDate,
-            workerReport: notesVal,
-            workerRemarks: notesVal,
-            reportDate: disconDate,
-            reportTime: '',
-            submittedBy: String(e['Submitted By'] || e.submittedBy || '').trim(),
-            createdAt: String(e['Created At'] || e.createdAt || disconDate || '').trim(),
-            updatedAt: lastUpdatedVal,
-            photoUrl: String(e['Image'] || e['Photo Evidence'] || e.photoUrl || '').trim(),
-            mruSection: mru,
-            cccFeeder: mru,
-            outstandingDue: d2NetOs,
-            dueDateRange: dueDateRange,
-            baseClass: rawBaseClass,
-            classType: consumerClass,
-            deviceType: rawDevice,
-            device: rawDevice,
-            priority: parseFloat(d2NetOs.replace(/[^0-9.]/g, '')) > 10000 ? 'URGENT' : 'NORMAL',
-            assignedAgency: agencyVal,
-            paidAmount: paidAmountVal,
-            paidDate: paidDateVal,
-            paymentDate: paidDateVal,
-            paidType: paidTypeVal,
-            paymentReference: paidTypeVal,
-            meterReading: readingVal,
-            statusHistory: []
-          });
-        });
-
-        let filtered = mergeClientDisconnectionOverlay(mappedTasks);
-        if (params.status && params.status !== 'ALL') {
-          const filterSt = params.status.toUpperCase().trim();
-          filtered = filtered.filter(t => String(t.taskStatus).toUpperCase() === filterSt);
-        }
-        if (params.search) {
-          const q = params.search.toLowerCase().trim();
-          filtered = filtered.filter(t =>
-            `${t.serialNumber} ${t.consumerId} ${t.consumerName} ${t.meterNumber} ${t.consumerAddress} ${t.phoneNumber}`
-              .toLowerCase()
-              .includes(q)
-          );
-        }
-
-        if (!params.search && (!params.status || params.status === 'ALL')) {
-          setCachedDisconnectionTasksSync(filtered);
-        }
-        const stats = computeStats(filtered);
-        return { tasks: filtered, stats };
-      }
-    }
-  } catch (err: any) {
-    console.warn('[Disconnection] Google Sheet fallback read notice:', err?.message || err);
-  }
-
-  const fallbackCached = getCachedDisconnectionTasksSync();
+  const fallback = getCachedDisconnectionTasksSync();
   return {
-    tasks: fallbackCached,
-    stats: computeStats(fallbackCached)
+    tasks: fallback,
+    stats: computeStats(fallback)
   };
 }
 
@@ -2336,7 +2327,7 @@ export async function uploadDisconnectionTasks(
     const disconDate = String((t as any)['Discon Date'] || t.disconDate || t.reportDate || '').trim();
     const image = String((t as any)['Image'] || t.photoUrl || t.imageUrl || '').trim();
     const reading = String((t as any)['Reading'] || t.meterReading || '').trim();
-    const paymentStatus = String((t as any)['Payment Status'] || t.paymentStatus || '').trim();
+    const paymentStatus = disconStatus === 'PAID' ? 'PAID' : 'PENDING';
     const gisPole = String((t as any)['Gis Pole'] || t.gisPole || '').trim();
     const agency = String((t as any)['Agency'] || t.assignedAgency || t.assignedWorkerName || '').trim();
     const notes = String((t as any)['Notes'] || t.workerRemarks || t.workerReport || '').trim();
@@ -2557,7 +2548,7 @@ export async function submitDisconnectionTaskReport(report: {
     report.consumerName || report['Name'] || existingCachedTask.consumerName || existingCachedTask['Name'] || `Consumer ${cId}`
   ).trim();
   const effectiveReading = String(report.reading ?? report['Reading'] ?? report.meterReading ?? existingCachedTask.reading ?? existingCachedTask['Reading'] ?? '').trim();
-  const effectivePaymentStatus = String(report.paymentStatus ?? report['Payment Status'] ?? existingCachedTask.paymentStatus ?? existingCachedTask['Payment Status'] ?? '').trim();
+  const effectivePaymentStatus = newStatus === 'PAID' ? 'PAID' : 'PENDING';
   const effectivePaymentSource = String(report.paymentSource ?? report['Payment Source'] ?? existingCachedTask.paymentSource ?? existingCachedTask['Payment Source'] ?? '').trim();
   const effectivePaidAmount = String(report.paidAmount ?? report['Paid Amount'] ?? existingCachedTask.paidAmount ?? existingCachedTask['Paid Amount'] ?? '').trim();
   const effectivePaidDate = String(report.paidDate ?? report['Paid Date'] ?? report.paymentDate ?? existingCachedTask.paidDate ?? existingCachedTask['Paid Date'] ?? '').trim();
@@ -2566,12 +2557,16 @@ export async function submitDisconnectionTaskReport(report: {
   const effectiveGisPole = String(report.gisPole ?? report['Gis Pole'] ?? existingCachedTask.gisPole ?? existingCachedTask['Gis Pole'] ?? '').trim();
   const effectiveAgency = String(report.agency ?? report['Agency'] ?? report.assignedAgency ?? existingCachedTask.agency ?? existingCachedTask['Agency'] ?? '').trim();
 
+  const isActionApprove = (report as any).reissueAction === 'APPROVE' || newStatus === 'REISSUE' || /\[REISSUE_APPROVED/i.test(remarksStr);
+  const isActionReject = !isActionApprove && ((report as any).reissueAction === 'REJECT' || /\[REISSUE_REJECTED/i.test(remarksStr));
+  const isActionRequest = !isActionApprove && !isActionReject && ((report as any).reissueAction === 'REQUEST' || /\[REISSUE_REQ:/i.test(remarksStr));
+
   // Preserve consumer fields as fallback if missing from server cache while updating Status and Remark/Notes
   const payload: Record<string, any> = {
     ...existingCachedTask,
     ...report,
     id: discId,
-    submissionId: discId,
+    submissionId: reqId,
     category: 'Disconnection',
     Category: 'Disconnection',
     taskId: report.taskId || `TASK-DISC-${cId}`,
@@ -2620,6 +2615,10 @@ export async function submitDisconnectionTaskReport(report: {
     workerId: report.workerId,
     workerName: report.workerName,
     requestId: reqId,
+    reissueRequested: isActionRequest,
+    reissueApproved: isActionApprove,
+    reissueRejected: isActionReject,
+    reissueAction: (report as any).reissueAction || (isActionApprove ? 'APPROVE' : isActionReject ? 'REJECT' : isActionRequest ? 'REQUEST' : 'CLEAR'),
     _localUpdatedAt: Date.now(),
     _hasUserRemarkUpdate: true
   };
@@ -2642,10 +2641,10 @@ export async function submitDisconnectionTaskReport(report: {
     }
   } catch {}
 
-  // Try Express backend /api/disconnection-tasks/report with a fast timeout
+  // Try Express backend /api/disconnection-tasks/report
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), 15000);
     const res = await fetch('/api/disconnection-tasks/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2655,6 +2654,22 @@ export async function submitDisconnectionTaskReport(report: {
     clearTimeout(timer);
     const data = await res.json().catch(() => null);
     if (res.ok && data && data.success) {
+      if (data.imageUrl && typeof data.imageUrl === 'string' && data.imageUrl.startsWith('http')) {
+        try {
+          const curCache = getCachedDisconnectionTasksSync();
+          if (curCache.length > 0) {
+            const nextCache = curCache.map(t => {
+              const tCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+              if ((cId && tCId === cId) || (report.taskId && t.taskId === report.taskId)) {
+                return { ...t, photoUrl: data.imageUrl, Image: data.imageUrl };
+              }
+              return t;
+            });
+            setCachedDisconnectionTasksSync(nextCache);
+          }
+        } catch {}
+      }
+      removeClientDisconnectionOverlay(cId);
       return data;
     }
   } catch {}
@@ -2693,12 +2708,106 @@ export async function submitDisconnectionTaskReport(report: {
   };
 }
 
+export async function assignDisconnectionTasksBatch(
+  consumerIds: string[],
+  workerId: string,
+  workerName: string
+): Promise<{ success: boolean; assignedCount: number; message: string; tasks?: DisconnectionTask[] }> {
+  const cleanIds = (Array.isArray(consumerIds) ? consumerIds : [consumerIds])
+    .map(v => String(v || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim())
+    .filter(Boolean);
+  const cleanWId = String(workerId || '').trim();
+  const cleanWName = String(workerName || '').trim();
+  const nowIso = new Date().toISOString();
+
+  // Immediately update local cache and client overlay
+  try {
+    for (const cId of cleanIds) {
+      saveClientDisconnectionOverlay(cId, {
+        assignedAgency: cleanWName,
+        Agency: cleanWName,
+        agency: cleanWName,
+        assignedWorkerName: cleanWName,
+        assignedWorkerId: cleanWId,
+        'Worker ID': cleanWId,
+        'Worker Name': cleanWName,
+        updatedAt: nowIso,
+        lastUpdated: nowIso,
+        'Last Updated': nowIso
+      });
+    }
+    const cached = getCachedDisconnectionTasksSync();
+    if (cached.length > 0) {
+      const idSet = new Set(cleanIds.map(id => id.toLowerCase()));
+      const updated = cached.map(t => {
+        const tCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim().toLowerCase();
+        if (idSet.has(tCId)) {
+          return {
+            ...t,
+            assignedAgency: cleanWName,
+            Agency: cleanWName,
+            agency: cleanWName,
+            assignedWorkerName: cleanWName,
+            assignedWorkerId: cleanWId,
+            'Worker ID': cleanWId,
+            'Worker Name': cleanWName,
+            updatedAt: nowIso,
+            lastUpdated: nowIso,
+            'Last Updated': nowIso
+          };
+        }
+        return t;
+      });
+      setCachedDisconnectionTasksSync(updated);
+    }
+  } catch {}
+
+  try {
+    const res = await fetch('/api/disconnection-tasks/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        consumerIds: cleanIds,
+        taskIds: cleanIds.map(id => `TASK-DISC-${id}`),
+        workerId: cleanWId,
+        workerName: cleanWName
+      })
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        if (Array.isArray(data.tasks)) {
+          setCachedDisconnectionTasksSync(data.tasks);
+        }
+        return data;
+      }
+    }
+  } catch {}
+
+  try {
+    await callGasApi('assignDisconnectionTask', {
+      consumerIds: cleanIds,
+      taskId: cleanIds[0] ? `TASK-DISC-${cleanIds[0]}` : '',
+      workerId: cleanWId,
+      workerName: cleanWName,
+      requestId: 'REQ-ASG-' + Date.now()
+    }, 'POST');
+  } catch {}
+
+  return {
+    success: true,
+    assignedCount: cleanIds.length,
+    message: `Assigned ${cleanIds.length} consumer(s) to ${cleanWName || 'Unassigned'}`
+  };
+}
+
 export async function assignDisconnectionTask(
   taskId: string,
   workerId: string,
   workerName: string
 ): Promise<{ success: boolean; message: string }> {
-  return callGasApi('assignDisconnectionTask', { taskId, workerId, workerName, requestId: 'REQ-ASG-' + Date.now() }, 'POST');
+  const res = await assignDisconnectionTasksBatch([taskId], workerId, workerName);
+  return { success: res.success, message: res.message };
 }
 
 export async function archiveDisconnectionTask(

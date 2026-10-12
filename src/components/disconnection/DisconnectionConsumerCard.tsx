@@ -11,9 +11,14 @@ import {
   Lock,
   RotateCcw,
   MessageSquareWarning,
-  CheckCircle2
+  CheckCircle2,
+  XCircle,
+  Eye,
+  X
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
+import { submitDisconnectionTaskReport } from '../../services/api';
+import { getNowDateDDMMYYYY, getNowTime12Hour } from '../../utils/dateTimeFormat';
 import {
   getTaskPhase,
   getTaskConnectionClass,
@@ -27,6 +32,7 @@ interface DisconnectionConsumerCardProps {
   onUpdateStatus: (task: DisconnectionTask) => void;
   onRequestReissue?: (task: DisconnectionTask) => Promise<void> | void;
   onApproveReissue?: (task: DisconnectionTask) => Promise<void> | void;
+  onRejectReissue?: (task: DisconnectionTask) => Promise<void> | void;
   isAdmin?: boolean;
   onDeleteTask?: (task: DisconnectionTask) => Promise<void> | void;
   lang?: 'en' | 'bn';
@@ -37,6 +43,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   onUpdateStatus,
   onRequestReissue,
   onApproveReissue,
+  onRejectReissue,
   isAdmin = false,
   onDeleteTask,
   lang = 'en'
@@ -45,11 +52,29 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSendingReissue, setIsSendingReissue] = useState(false);
   const [isApprovingReissue, setIsApprovingReissue] = useState(false);
+  const [isRejectingReissue, setIsRejectingReissue] = useState(false);
+  const [optimisticReissueRequested, setOptimisticReissueRequested] = useState(false);
+  const [optimisticAdminDecision, setOptimisticAdminDecision] = useState<'APPROVED' | 'REJECTED' | null>(null);
+  const [showHdPhotoModal, setShowHdPhotoModal] = useState(false);
 
   const isUrgent = String(task.priority || '').toUpperCase() === 'URGENT';
   const rawStatus = String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
   const phaseType = getTaskPhase(task);
-  const lockState = getReissueLockState(task);
+  const baseLockState = getReissueLockState(task);
+
+  const effectiveApproved = optimisticAdminDecision === 'APPROVED' || (optimisticAdminDecision !== 'REJECTED' && baseLockState.isReissueApproved);
+  const effectiveRejected = optimisticAdminDecision === 'REJECTED' || (optimisticAdminDecision !== 'APPROVED' && baseLockState.isReissueRejected);
+  const effectiveRequested = !effectiveApproved && !effectiveRejected && (baseLockState.isReissueRequested || optimisticReissueRequested);
+
+  const lockState = {
+    ...baseLockState,
+    isReissueApproved: effectiveApproved,
+    isReissueRejected: effectiveRejected,
+    reissueRejected: effectiveRejected,
+    isReissueRequested: effectiveRequested,
+    reissueRequested: effectiveRequested,
+    isLockedForWorker: baseLockState.isUpdatedOnce && !effectiveApproved
+  };
   const cleanRemarks = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes']);
   const agencyOrWorkerName = cleanWorkerOrAgencyName(
     task.assignedAgency ||
@@ -234,10 +259,49 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   };
 
   const handleWorkerRequestReissue = async () => {
-    if (!onRequestReissue || isSendingReissue) return;
+    if (isSendingReissue) return;
     setIsSendingReissue(true);
+    setOptimisticAdminDecision(null);
+    setOptimisticReissueRequested(true);
     try {
-      await onRequestReissue(task);
+      if (onRequestReissue) {
+        await onRequestReissue(task);
+      } else {
+        let sessionWorkerName = 'Worker';
+        let sessionWorkerId = 'WORKER';
+        try {
+          const saved = localStorage.getItem('power_user_session');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            sessionWorkerName = cleanWorkerOrAgencyName(parsed?.name || parsed?.username || 'Worker') || 'Worker';
+            sessionWorkerId = parsed?.idNo || 'WORKER';
+          }
+        } catch {}
+        const timeStr = `${getNowDateDDMMYYYY()} ${getNowTime12Hour()}`;
+        const existingNotes = cleanDisconnectionNotes(task.workerRemarks || task.workerReport || task.notes || (task as any)['Notes'] || '');
+        const taggedNotes = `${existingNotes} [REISSUE_REQ:${sessionWorkerName}|${timeStr}]`.trim();
+        await submitDisconnectionTaskReport({
+          ...task,
+          taskId: task.taskId || `TASK-DISC-${displayId}`,
+          consumerId: displayId,
+          workerId: sessionWorkerId,
+          workerName: sessionWorkerName,
+          taskStatus: task.taskStatus,
+          disconStatus: task.disconStatus || task.taskStatus,
+          workerRemarks: taggedNotes,
+          workerReport: taggedNotes,
+          notes: taggedNotes,
+          reissueRequested: true,
+          reissueApproved: false,
+          reissueRejected: false,
+          reissueRequestedBy: sessionWorkerName,
+          reissueRequestedAt: timeStr,
+          reissueAction: 'REQUEST'
+        });
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
     } finally {
       setIsSendingReissue(false);
     }
@@ -246,10 +310,30 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   const handleAdminApproveReissue = async () => {
     if (!onApproveReissue || isApprovingReissue) return;
     setIsApprovingReissue(true);
+    setOptimisticReissueRequested(false);
+    setOptimisticAdminDecision('APPROVED');
     try {
       await onApproveReissue(task);
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
     } finally {
       setIsApprovingReissue(false);
+    }
+  };
+
+  const handleAdminRejectReissue = async () => {
+    if (!onRejectReissue || isRejectingReissue) return;
+    setIsRejectingReissue(true);
+    setOptimisticReissueRequested(false);
+    setOptimisticAdminDecision('REJECTED');
+    try {
+      await onRejectReissue(task);
+      try {
+        window.dispatchEvent(new CustomEvent('power-app-sheets-refresh'));
+      } catch {}
+    } finally {
+      setIsRejectingReissue(false);
     }
   };
 
@@ -288,12 +372,6 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             {(task.mru || (task as any)['MRU'] || task.mruSection) && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-semibold text-[11px]">
                 MRU: {task.mru || (task as any)['MRU'] || task.mruSection}
-              </span>
-            )}
-
-            {(task.baseClass || (task as any)['Base Class'] || (task as any)['Class']) && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[11px]">
-                {task.baseClass || (task as any)['Base Class'] || (task as any)['Class']}
               </span>
             )}
 
@@ -407,14 +485,26 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             </div>
           )}
           {task.photoUrl && (
-            <div className="flex items-center gap-2 pt-1">
-              <img
-                src={task.photoUrl}
-                alt="Site Evidence"
-                referrerPolicy="no-referrer"
-                className="w-10 h-10 object-cover rounded-lg border border-slate-300"
-              />
-              <span className="text-[10px] text-emerald-700 font-bold">Photo Evidence Attached</span>
+            <div
+              onClick={() => setShowHdPhotoModal(true)}
+              className="flex items-center justify-between gap-2 pt-1 cursor-pointer group"
+              title="Click to view Full HD Evidence Photo"
+            >
+              <div className="flex items-center gap-2.5">
+                <img
+                  src={task.photoUrl}
+                  alt="Site Evidence"
+                  referrerPolicy="no-referrer"
+                  className="w-14 h-14 object-cover rounded-lg border border-slate-300 shadow-2xs group-hover:ring-2 group-hover:ring-emerald-500 transition-all"
+                />
+                <div>
+                  <span className="text-[11px] text-emerald-700 font-bold block">HD Photo Evidence Attached</span>
+                  <span className="text-[10px] text-blue-600 font-semibold flex items-center gap-1 mt-0.5">
+                    <Eye className="w-3 h-3" />
+                    <span>Tap to view Full HD</span>
+                  </span>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -422,7 +512,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
 
       {/* Re-issue Status Banner on Card */}
       {lockState.isReissueRequested && (
-        <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-2">
+        <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
             <MessageSquareWarning className="w-4 h-4 text-purple-600 shrink-0" />
             <div className="text-[11px] text-purple-900 leading-tight">
@@ -436,30 +526,56 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
               </span>
             </div>
           </div>
-          {isAdmin && onApproveReissue && (
-            <button
-              type="button"
-              onClick={handleAdminApproveReissue}
-              disabled={isApprovingReissue}
-              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-[11px] font-black shrink-0 cursor-pointer flex items-center gap-1 shadow-2xs"
-            >
-              {isApprovingReissue ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <RotateCcw className="w-3.5 h-3.5" />
+          {isAdmin && (onApproveReissue || onRejectReissue) && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              {onApproveReissue && (
+                <button
+                  type="button"
+                  onClick={handleAdminApproveReissue}
+                  disabled={isApprovingReissue || isRejectingReissue}
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-black shrink-0 cursor-pointer flex items-center gap-1 shadow-2xs"
+                >
+                  {isApprovingReissue ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>Approve</span>
+                </button>
               )}
-              <span>{lang === 'bn' ? 'Re-issue করুন' : 'Approve Re-issue'}</span>
-            </button>
+              {onRejectReissue && (
+                <button
+                  type="button"
+                  onClick={handleAdminRejectReissue}
+                  disabled={isApprovingReissue || isRejectingReissue}
+                  className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[11px] font-black shrink-0 cursor-pointer flex items-center gap-1 shadow-2xs"
+                >
+                  {isRejectingReissue ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <XCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>Reject</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
 
-      {!isAdmin && lockState.isReissueApproved && !lockState.isReissueRequested && (
+      {lockState.isReissueRejected && (
+        <div className="px-3 py-2.5 rounded-xl bg-rose-50 border border-rose-300 flex items-center gap-2 text-xs font-black text-rose-700 shadow-2xs">
+          <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>Your Reissue Request Rejected</span>
+        </div>
+      )}
+
+      {!isAdmin && lockState.isReissueApproved && !lockState.isReissueRequested && !lockState.isReissueRejected && (
         <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2 text-[11px] font-bold text-emerald-800">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>
             {lang === 'bn'
-              ? 'অ্যাডমিন Re-issue করেছেন — আপনি আবার ১ বার স্ট্যাটাস আপডেট করতে পারবেন'
+              ? 'অ্যাডমিন Re-issue অনুমোদন করেছেন — আপনি আবার স্ট্যাটাস আপডেট করতে পারবেন'
               : 'Re-issued by Admin — You can update status once'}
           </span>
         </div>
@@ -505,7 +621,16 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
       ) : (
         <div className="pt-1 flex items-center gap-2">
           {!isAdmin && lockState.isLockedForWorker ? (
-            lockState.isReissueRequested ? (
+            lockState.isReissueRejected ? (
+              <button
+                type="button"
+                disabled
+                className="flex-1 py-3 px-4 bg-rose-100 text-rose-800 border border-rose-300 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 opacity-95 cursor-not-allowed"
+              >
+                <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>Your Reissue Request Rejected</span>
+              </button>
+            ) : lockState.isReissueRequested ? (
               <button
                 type="button"
                 disabled
@@ -533,8 +658,8 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
                 )}
                 <span>
                   {lang === 'bn'
-                    ? 'পুনরায় আপডেট করতে Re-issue রিকোয়েস্ট পাঠান'
-                    : 'Request Re-issue to Update Again'}
+                    ? 'Reissue (অ্যাডমিন রিকোয়েস্ট পাঠান)'
+                    : 'Reissue'}
                 </span>
               </button>
             )
@@ -561,6 +686,30 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
               <Trash2 className="w-4 h-4" />
             </button>
           )}
+        </div>
+      )}
+
+      {/* Full HD Evidence Lightbox Modal */}
+      {showHdPhotoModal && task.photoUrl && (
+        <div
+          className="fixed inset-0 z-70 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowHdPhotoModal(false)}
+        >
+          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setShowHdPhotoModal(false)}
+              className="absolute -top-10 right-0 p-1.5 text-white hover:text-slate-300 cursor-pointer"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <img
+              src={task.photoUrl}
+              alt="Full HD Evidence"
+              referrerPolicy="no-referrer"
+              className="w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-slate-700 bg-black"
+            />
+          </div>
         </div>
       )}
     </div>

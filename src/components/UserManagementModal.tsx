@@ -1,133 +1,172 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  UserPlus, 
-  X, 
-  ShieldCheck, 
-  HardHat, 
-  User, 
-  Phone, 
-  KeyRound, 
-  Eye, 
-  EyeOff, 
-  CheckCircle2, 
-  AlertCircle,
+import {
+  X,
+  UserPlus,
   Users,
   Trash2,
-  Lock,
-  Search,
-  Sparkles,
-  HelpCircle,
-  ShieldAlert,
-  Building2,
+  ShieldCheck,
+  HardHat,
+  KeyRound,
+  Phone,
+  User,
+  CheckCircle2,
+  AlertCircle,
   RefreshCw,
   PauseCircle,
   PlayCircle,
-  ShieldX,
+  Edit2,
+  Save,
+  Eye,
+  EyeOff,
+  Search,
+  ShieldAlert,
   AlertTriangle,
   Copy,
   Check,
-  Edit2,
-  Save
+  Sparkles,
+  Building2,
+  ArrowLeft,
+  LayoutGrid,
+  ChevronRight
 } from 'lucide-react';
 import { UserAccount } from '../types';
 import { fetchUsers, createUserAccount, deleteUserAccount, updateUserStatus, updateUserAccount } from '../services/api';
-import { normalizeUniversalText, normalizePassword } from '../utils/textNormalizer';
-import { Language, translations } from '../utils/translations';
 
 interface UserManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
-  lang?: Language;
-  initialTab?: 'create' | 'list' | 'change-password';
 }
 
-export const UserManagementModal: React.FC<UserManagementModalProps> = ({
-  isOpen,
-  onClose,
-  lang = 'en',
-  initialTab = 'create'
-}) => {
-  const t = translations[lang] || translations.en;
-  // Load users exclusively from Google Sheets backend
+type ModalPageOption = 'hub' | 'create' | 'agency' | 'list' | 'change-password';
+
+export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen, onClose }) => {
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'create' | 'list' | 'change-password'>(initialTab);
+  const [activeTab, setActiveTab] = useState<ModalPageOption>('hub');
   const [search, setSearch] = useState('');
-  const [filterRole, setFilterRole] = useState<'all' | 'worker' | 'admin' | 'hold'>('all');
+  const [filterRole, setFilterRole] = useState<'all' | 'worker' | 'agency' | 'admin' | 'hold'>('all');
 
-  // Form State (Create User)
-  const [role, setRole] = useState<'worker' | 'admin'>('worker');
-  const [idNo, setIdNo] = useState(() => `LM-${Math.floor(1000 + Math.random() * 9000)}`);
+  // Form states
+  const [idNo, setIdNo] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(true);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [designation, setDesignation] = useState('লাইনম্যান / Worker (WBSEDCL)');
-  const [password, setPassword] = useState('1234');
-  const [showPassword, setShowPassword] = useState(true);
-  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+  const [role, setRole] = useState<'worker' | 'agency' | 'admin'>('worker');
+  const [designation, setDesignation] = useState('Lineman / Worker (WBSEDCL)');
 
-  // Change Password Tab State
-  const [selectedChangeUserId, setSelectedChangeUserId] = useState<string>('');
-  const [newPasswordInput, setNewPasswordInput] = useState<string>('0000');
-  const [showNewPasswordInput, setShowNewPasswordInput] = useState<boolean>(true);
-  const [changePassSearch, setChangePassSearch] = useState<string>('');
+  // Newly created credentials highlight card
+  const [createdUserCard, setCreatedUserCard] = useState<{
+    name: string;
+    idNo: string;
+    password: string;
+    role: string;
+  } | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Editing state
+  // Edit Password / User inline states
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editPasswordValue, setEditPasswordValue] = useState('');
   const [editNameValue, setEditNameValue] = useState('');
   const [editPhoneValue, setEditPhoneValue] = useState('');
+  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
 
-  // Notifications & Copy state
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [createdUserCard, setCreatedUserCard] = useState<{ idNo: string; password: string; name: string; role: string } | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // Dedicated Change Password Tab States
+  const [selectedChangeUserId, setSelectedChangeUserId] = useState<string>('');
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
+  const [showNewPasswordInput, setShowNewPasswordInput] = useState<boolean>(true);
+  const [changePassSearch, setChangePassSearch] = useState<string>('');
 
-  // Mandatory User Deletion Confirmation State
+  // Mandatory User Deletion Confirmation Modal States
   const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
   const [userDeleteConfirmText, setUserDeleteConfirmText] = useState('');
   const [userDeleteReason, setUserDeleteReason] = useState('');
   const [userDeleteAcknowledge, setUserDeleteAcknowledge] = useState(false);
-  const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userDeleteError, setUserDeleteError] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
 
-  // Fetch users when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      loadUsersList();
-      setError(null);
-      setSuccess(null);
-      setCreatedUserCard(null);
-      if (initialTab) {
-        setActiveTab(initialTab);
-      }
-    }
-  }, [isOpen, initialTab]);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const loadUsersList = async () => {
     setLoading(true);
     try {
-      const data = await fetchUsers();
-      setUsers(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      console.warn('Failed to fetch users:', e);
-      setError(e.message || 'Google Sheets থেকে ইউজার তালিকা আনতে সমস্যা হয়েছে');
+      const list = await fetchUsers();
+      setUsers(Array.isArray(list) ? list : []);
+    } catch {
+      setError('Failed to load user list from server.');
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    if (isOpen) {
+      loadUsersList();
+      setError(null);
+      setSuccess(null);
+    }
+  }, [isOpen]);
+
+  const navigateToOption = (page: ModalPageOption) => {
+    setError(null);
+    setSuccess(null);
+    setCreatedUserCard(null);
+    if (page === 'agency') {
+      setRole('agency');
+      setDesignation('Agency Partner (WBSEDCL)');
+      if (!idNo.startsWith('AGN-')) {
+        setIdNo(`AGN-${Math.floor(1000 + Math.random() * 9000)}`);
+      }
+      if (!password) {
+        setPassword('1234');
+      }
+    } else if (page === 'create') {
+      if (!idNo) {
+        setIdNo(
+          role === 'admin'
+            ? `ADM-${Math.floor(100 + Math.random() * 900)}`
+            : role === 'agency'
+            ? `AGN-${Math.floor(1000 + Math.random() * 9000)}`
+            : `LM-${Math.floor(1000 + Math.random() * 9000)}`
+        );
+      }
+      if (!password) {
+        setPassword('1234');
+      }
+    } else if (page === 'change-password') {
+      if (!selectedChangeUserId && users.length > 0) {
+        setSelectedChangeUserId(users[0].id || users[0].idNo);
+      }
+    }
+    setActiveTab(page);
+  };
+
   if (!isOpen) return null;
 
   const copyToClipboard = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text).catch(() => {});
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleGenerateId = (prefix: 'LM' | 'ADM' | 'WRK') => {
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    setIdNo(`${prefix}-${randomNum}`);
+  const handleGenerateId = (prefix: 'LM' | 'WRK' | 'AGN' | 'ADM') => {
+    const random4 = Math.floor(1000 + Math.random() * 9000);
+    setIdNo(`${prefix}-${random4}`);
+  };
+
+  const handleSelectRolePreset = (newRole: 'worker' | 'agency' | 'admin') => {
+    setRole(newRole);
+    if (newRole === 'worker') {
+      setDesignation('Lineman / Worker (WBSEDCL)');
+      setIdNo(`LM-${Math.floor(1000 + Math.random() * 9000)}`);
+    } else if (newRole === 'agency') {
+      setDesignation('Agency Partner (WBSEDCL)');
+      setIdNo(`AGN-${Math.floor(1000 + Math.random() * 9000)}`);
+    } else {
+      setDesignation('Assistant Engineer / Admin (WBSEDCL)');
+      setIdNo(`ADM-${Math.floor(100 + Math.random() * 900)}`);
+    }
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -136,94 +175,226 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setSuccess(null);
     setCreatedUserCard(null);
 
-    const cleanId = normalizeUniversalText(idNo);
-    const cleanName = (name.trim() || cleanId || 'কর্মী');
-    const cleanPhone = normalizeUniversalText(phone).replace(/[^0-9]/g, '');
-    const cleanPass = normalizePassword(password);
+    const effectiveRole: 'worker' | 'agency' | 'admin' = activeTab === 'agency' ? 'agency' : role;
+    const rawIdInput = idNo.trim() || name.trim();
 
-    if (!cleanId) {
-      setError('User ID লিখুন (যেমন: LM-4085 বা ADM-102 বা কর্মীর মোবাইল নম্বর)');
+    if (!rawIdInput || !password.trim()) {
+      setError('Please enter both User ID and Password.');
       return;
     }
-
-    if (!cleanPass) {
-      setError('পাসওয়ার্ড / পিন দিন (Password / PIN required)');
-      return;
-    }
-
-    const isExisting = users.some(u => u && u.idNo && normalizeUniversalText(u.idNo).toLowerCase() === cleanId.toLowerCase());
 
     setLoading(true);
-
     try {
-      const savedUser = await createUserAccount({
+      const cleanId = rawIdInput;
+      const cleanPass = password.trim();
+      const roleDefaultName =
+        effectiveRole === 'admin'
+          ? `Admin (${cleanId})`
+          : effectiveRole === 'agency'
+          ? cleanId
+          : `Worker (${cleanId})`;
+      const cleanName = name.trim() || roleDefaultName;
+      const defaultDesig =
+        effectiveRole === 'admin'
+          ? 'Assistant Engineer / Admin (WBSEDCL)'
+          : effectiveRole === 'agency'
+          ? 'Agency Partner (WBSEDCL)'
+          : 'Lineman / Worker (WBSEDCL)';
+
+      const res = await createUserAccount({
         idNo: cleanId,
         password: cleanPass,
         name: cleanName,
-        phone: cleanPhone,
-        role,
-        status: 'active',
-        designation: designation || (role === 'admin' ? 'সহকারী প্রকৌশলী / Admin (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)'),
-        badgeNo: cleanId,
+        phone: phone.trim(),
+        role: effectiveRole,
+        designation: designation.trim() || defaultDesig,
       });
 
-      setUsers(prev => {
-        const filtered = prev.filter(u => u && normalizeUniversalText(u.idNo)?.toLowerCase() !== cleanId.toLowerCase() && u.id !== savedUser.id);
-        return [savedUser, ...filtered];
-      });
-
-      setCreatedUserCard({
-        idNo: cleanId,
-        password: cleanPass || '1234',
-        name: cleanName,
-        role: role === 'admin' ? 'এডমিন (Admin)' : 'ফিল্ড ওয়ার্কার (Worker)'
-      });
-
-      if (isExisting) {
-        setSuccess(`User ID "${cleanId}" (${cleanName}) এর পাসওয়ার্ড ও তথ্য সফলভাবে আপডেট করা হয়েছে!`);
+      if (res && res.success !== false) {
+        const roleLabel =
+          effectiveRole === 'admin'
+            ? 'Admin / Supervisor'
+            : effectiveRole === 'agency'
+            ? 'Agency Partner'
+            : 'Field Worker / Lineman';
+        setSuccess(
+          `New ${effectiveRole === 'agency' ? 'Agency' : effectiveRole === 'admin' ? 'Admin' : 'Worker'} ID "${cleanId}" (${cleanName}) created and saved successfully!`
+        );
+        setCreatedUserCard({
+          name: cleanName,
+          idNo: cleanId,
+          password: cleanPass,
+          role: roleLabel
+        });
+        setRevealedPasswords(prev => ({ ...prev, [cleanId]: true }));
+        setIdNo(
+          effectiveRole === 'agency'
+            ? `AGN-${Math.floor(1000 + Math.random() * 9000)}`
+            : effectiveRole === 'admin'
+            ? `ADM-${Math.floor(100 + Math.random() * 900)}`
+            : `LM-${Math.floor(1000 + Math.random() * 9000)}`
+        );
+        setPassword('1234');
+        setName('');
+        setPhone('');
+        await loadUsersList();
       } else {
-        setSuccess(`নতুন ${role === 'admin' ? 'এডমিন' : 'ওয়ার্কার'} আইডি "${cleanId}" সফলভাবে তৈরি হয়েছে!`);
+        setError(res?.message || 'Failed to create user account.');
       }
-      
-      // Reset form for next user
-      setName('');
-      setPhone('');
-      setPassword('1234');
-      setIdNo(role === 'worker' ? `LM-${Math.floor(1000 + Math.random() * 9000)}` : `ADM-${Math.floor(100 + Math.random() * 900)}`);
     } catch (err: any) {
-      setError(err.message || 'ইউজার তৈরি বা আপডেট করতে সমস্যা হয়েছে');
+      setError(err?.message || 'Failed to connect to the server.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleStartEdit = (userAcc: UserAccount) => {
-    setEditingUserId(userAcc.id || userAcc.idNo);
-    setEditPasswordValue(userAcc.password || '');
-    setEditNameValue(userAcc.name || '');
-    setEditPhoneValue(userAcc.phone || '');
+  const isAdminAccount = (u: UserAccount): boolean => {
+    const roleStr = String(u.role || '').toLowerCase();
+    const desigStr = String(u.designation || '').toLowerCase();
+    return (
+      roleStr === 'admin' ||
+      roleStr === 'supervisor' ||
+      desigStr.includes('admin') ||
+      desigStr.includes('প্রকৌশলী') ||
+      desigStr.includes('engineer')
+    );
   };
 
-  const handleSaveEdit = async (userAcc: UserAccount) => {
-    const cleanPass = normalizePassword(editPasswordValue);
-    if (!cleanPass) {
-      alert('পাসওয়ার্ড খালি রাখা যাবে না');
+  const handleDeleteUserClick = (user: UserAccount) => {
+    if (user.idNo === '8695716192' || user.idNo === 'admin') {
+      setError('Primary Master Admin ID cannot be deleted!');
       return;
     }
+    setError(null);
+    setSuccess(null);
+    setUserToDelete(user);
+    setUserDeleteConfirmText('');
+    setUserDeleteReason('');
+    setUserDeleteAcknowledge(false);
+    setUserDeleteError(null);
+  };
 
-    setLoading(true);
+  const executeDeleteUser = async () => {
+    if (!userToDelete) return;
+
+    const targetIsAdmin = isAdminAccount(userToDelete);
+
+    if (targetIsAdmin) {
+      const expectedId = String(userToDelete.idNo || '').trim();
+      if (
+        userDeleteConfirmText.trim() !== expectedId &&
+        userDeleteConfirmText.trim().toUpperCase() !== 'DELETE'
+      ) {
+        setUserDeleteError(
+          `Please type the exact User ID "${expectedId}" or "DELETE" to confirm deletion.`
+        );
+        return;
+      }
+
+      if (!userDeleteReason || userDeleteReason.trim().length < 3) {
+        setUserDeleteError(
+          'Please enter a valid administrative reason for deleting this Admin account.'
+        );
+        return;
+      }
+
+      if (!userDeleteAcknowledge) {
+        setUserDeleteError('Please check the confirmation checkbox to proceed.');
+        return;
+      }
+    } else {
+      if (!userDeleteAcknowledge) {
+        setUserDeleteError('Please check the confirmation checkbox to proceed.');
+        return;
+      }
+    }
+
+    setIsDeletingUser(true);
+    setUserDeleteError(null);
+
     try {
-      const updated = await updateUserAccount(userAcc.id || userAcc.idNo, {
-        password: cleanPass,
-        name: editNameValue.trim() || userAcc.name,
-        phone: normalizeUniversalText(editPhoneValue).replace(/[^0-9]/g, '')
+      const res = await deleteUserAccount(userToDelete.id || userToDelete.idNo, {
+        confirmText: targetIsAdmin ? userDeleteConfirmText.trim() : 'DELETE',
+        reason: targetIsAdmin ? userDeleteReason.trim() : 'Removed by Admin',
       });
 
-      setUsers(prev => prev.map(u => (u.id === userAcc.id || u.idNo === userAcc.idNo) ? { ...u, ...updated } : u));
-      setEditingUserId(null);
-      setSuccess(`User ID "${userAcc.idNo}" এর তথ্য ও পাসওয়ার্ড আপডেট সফল হয়েছে!`);
-    } catch (err: any) {
-      setError(err.message || 'আপডেট করতে সমস্যা হয়েছে');
+      if (res.success) {
+        const deletedName = userToDelete.name;
+        const deletedIdNo = userToDelete.idNo;
+        const deletedInternalId = userToDelete.id;
+        setUserToDelete(null);
+        setUsers(prev => prev.filter(u => u.id !== deletedInternalId && u.idNo !== deletedIdNo));
+        setSuccess(`"${deletedName}" (ID: ${deletedIdNo}) has been permanently deleted.`);
+        await loadUsersList();
+      } else {
+        setUserDeleteError(res.message || 'Failed to delete user account.');
+      }
+    } catch {
+      setUserDeleteError('Failed to connect to the server.');
+    } finally {
+      setIsDeletingUser(false);
+    }
+  };
+
+  const handleToggleStatus = async (user: UserAccount) => {
+    if (user.idNo === '8695716192' || user.idNo === 'admin') {
+      setError('Primary Master Admin ID cannot be placed on hold!');
+      return;
+    }
+    const newStatus = user.status === 'hold' ? 'active' : 'hold';
+    const actionName = newStatus === 'hold' ? 'placed on HOLD' : 'ACTIVATED';
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await updateUserStatus(user.id || user.idNo, newStatus);
+      if (res.success) {
+        setSuccess(`Account for "${user.name}" has been ${actionName} successfully.`);
+        await loadUsersList();
+      } else {
+        setError(res.message || 'Failed to update account status.');
+      }
+    } catch {
+      setError('Failed to connect to the server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStartEdit = (user: UserAccount) => {
+    setEditingUserId(user.id || user.idNo);
+    setEditPasswordValue(user.password || '');
+    setEditNameValue(user.name || '');
+    setEditPhoneValue(user.phone || '');
+    setError(null);
+    setSuccess(null);
+  };
+
+  const handleSaveEdit = async (user: UserAccount) => {
+    if (!editPasswordValue.trim()) {
+      setError('Password cannot be empty!');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await updateUserAccount(user.id || user.idNo, {
+        password: editPasswordValue.trim(),
+        name: editNameValue.trim() || user.name,
+        phone: editPhoneValue.trim(),
+      });
+      if (res.success) {
+        setSuccess(`Updated credentials for "${editNameValue.trim() || user.name}" (ID: ${user.idNo}) — New Password: "${editPasswordValue.trim()}"!`);
+        setEditingUserId(null);
+        setRevealedPasswords(prev => ({ ...prev, [user.idNo]: true }));
+        await loadUsersList();
+      } else {
+        setError(res.message || 'Failed to update user details.');
+      }
+    } catch {
+      setError('Failed to connect to the server.');
     } finally {
       setLoading(false);
     }
@@ -234,164 +405,52 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     setError(null);
     setSuccess(null);
 
-    const targetUser = users.find(u => (u.id === selectedChangeUserId || u.idNo === selectedChangeUserId));
-    if (!targetUser) {
-      setError('অনুগ্রহ করে একজন ইউজার সিলেক্ট করুন');
+    if (!selectedChangeUserId) {
+      setError('Please select a user account from the list.');
+      return;
+    }
+    if (!newPasswordInput.trim()) {
+      setError('Please enter a new Password or PIN.');
       return;
     }
 
-    if (!newPasswordInput.trim()) {
-      setError('নতুন পাসওয়ার্ড খালি রাখা যাবে না');
+    const targetUser = users.find(u => (u.id === selectedChangeUserId || u.idNo === selectedChangeUserId));
+    if (!targetUser) {
+      setError('Selected user account was not found.');
       return;
     }
 
     setLoading(true);
     try {
-      const updated = await updateUserAccount(targetUser.id || targetUser.idNo, {
-        password: newPasswordInput.trim()
+      const cleanNewPass = newPasswordInput.trim();
+      const res = await updateUserAccount(targetUser.id || targetUser.idNo, {
+        password: cleanNewPass,
+        name: targetUser.name,
+        phone: targetUser.phone,
+        designation: targetUser.designation,
+        role: targetUser.role,
+        status: targetUser.status || 'active',
       });
 
-      setUsers(prev => prev.map(u => (u.id === targetUser.id || u.idNo === targetUser.idNo) ? { ...u, ...updated, password: newPasswordInput.trim() } : u));
-      setSuccess(`User ID "${targetUser.idNo}" (${targetUser.name}) এর পাসওয়ার্ড সফলভাবে "${newPasswordInput.trim()}" পরিবর্তন করা হয়েছে!`);
-      setCreatedUserCard({
-        idNo: targetUser.idNo,
-        password: newPasswordInput.trim(),
-        name: targetUser.name,
-        role: targetUser.role === 'admin' ? 'এডমিন (Admin)' : 'ফিল্ড ওয়ার্কার (Worker)'
-      });
-    } catch (err: any) {
-      setError(err.message || 'পাসওয়ার্ড পরিবর্তন করতে সমস্যা হয়েছে');
+      if (res.success) {
+        setSuccess(`Password for "${targetUser.name}" (ID: ${targetUser.idNo}) has been updated to "${cleanNewPass}"!`);
+        setRevealedPasswords(prev => ({ ...prev, [targetUser.idNo]: true }));
+        setNewPasswordInput('');
+        await loadUsersList();
+      } else {
+        setError(res.message || 'Failed to change password.');
+      }
+    } catch {
+      setError('Failed to connect to the server.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleToggleStatus = async (userAcc: UserAccount) => {
-    if (userAcc.idNo === '8695716192' || userAcc.idNo === 'admin') {
-      alert('মুখ্য এডমিন আইডি (8695716192) হোল্ড করা যাবে না!');
-      return;
-    }
-
-    const nextStatus: 'active' | 'hold' = userAcc.status === 'hold' ? 'active' : 'hold';
-    const actionText = nextStatus === 'hold' ? 'HOLD (লগইন স্থগিত)' : 'ACTIVE (লগইন সক্রিয়)';
-    
-    if (window.confirm(`আপনি কি "${userAcc.name}" (ID: ${userAcc.idNo}) একাউন্টটি ${actionText} করতে চান? ${nextStatus === 'hold' ? 'হোল্ড করলে এই আইডি দিয়ে লগইন করা যাবে না।' : 'একটিভ করলে সাথে সাথে লগইন করতে পারবে।'}`)) {
-      setLoading(true);
-      try {
-        await updateUserStatus(userAcc.id || userAcc.idNo, nextStatus);
-        setUsers(prev => prev.map(u => (u.id === userAcc.id || u.idNo === userAcc.idNo) ? { ...u, status: nextStatus } : u));
-        
-        // If holding current user, handle session
-        if (nextStatus === 'hold') {
-          const currentSession = localStorage.getItem('power_user_session');
-          if (currentSession) {
-            try {
-              const parsed = JSON.parse(currentSession);
-              if (parsed.idNo === userAcc.idNo) {
-                localStorage.removeItem('power_user_session');
-              }
-            } catch {}
-          }
-        }
-
-        setSuccess(`User ID "${userAcc.idNo}" স্ট্যাটাস পরিবর্তন হয়েছে: ${nextStatus === 'hold' ? 'ON HOLD (লগইন ব্লক)' : 'ACTIVE (সক্রিয়)'}`);
-      } catch (err: any) {
-        setError(err.message || 'Failed to update user status');
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-
-  const isPrimaryAdminAccount = (user: UserAccount | null): boolean => {
-    if (!user) return false;
-    const cleanId = String(user.idNo || user.id || '').toLowerCase().trim();
-    return cleanId === '8695716192' || cleanId === 'adm_8695716192' || cleanId === 'admin' || cleanId === 'nayem';
-  };
-
-  const isAdminAccount = (user: UserAccount | null): boolean => {
-    if (!user) return false;
-    return String(user.role || '').toLowerCase() === 'admin';
-  };
-
-  const handleDeleteUserClick = (userAcc: UserAccount) => {
-    if (isPrimaryAdminAccount(userAcc)) {
-      alert('মুখ্য এডমিন আইডি (8695716192) সুরক্ষিত এবং কোনো অবস্থাতেই মুছে ফেলা যাবে না!');
-      return;
-    }
-
-    setUserToDelete(userAcc);
-    setUserDeleteConfirmText('');
-    setUserDeleteReason('');
-    setUserDeleteAcknowledge(false);
-    setUserDeleteError(null);
-  };
-
-  const executeDeleteUser = async () => {
-    if (!userToDelete) return;
-    if (isPrimaryAdminAccount(userToDelete)) {
-      setUserDeleteError('মুখ্য এডমিন একাউন্ট মুছে ফেলা সম্পূর্ণ নিষিদ্ধ');
-      return;
-    }
-
-    const isAdmin = isAdminAccount(userToDelete);
-
-    if (isAdmin) {
-      if (userDeleteConfirmText.trim() !== userToDelete.idNo.trim() && userDeleteConfirmText.trim().toUpperCase() !== 'DELETE') {
-        setUserDeleteError(`এডমিন একাউন্ট ডিলিট নিশ্চিত করতে হুবহু "${userToDelete.idNo}" অথবা "DELETE" টাইপ করুন`);
-        return;
-      }
-      if (userDeleteReason.trim().length < 3) {
-        setUserDeleteError('এডমিন একাউন্ট মুছে ফেলার সুনির্দিষ্ট কারণ উল্লেখ করা বাধ্যতামূলক (কমপক্ষে ৩ অক্ষর)');
-        return;
-      }
-      if (!userDeleteAcknowledge) {
-        setUserDeleteError('নিশ্চিতকরণ বক্সে টিক দিন');
-        return;
-      }
-    } else {
-      if (!userDeleteAcknowledge) {
-        setUserDeleteError('ইউজার ডিলিট নিশ্চিত করতে চেকবক্সে টিক দিন');
-        return;
-      }
-    }
-
-    setIsDeletingUser(true);
-    setUserDeleteError(null);
-
-    try {
-      await deleteUserAccount(userToDelete.id || userToDelete.idNo, {
-        confirmDelete: true,
-        confirmAdminDelete: isAdmin,
-        reason: userDeleteReason.trim() || 'Admin confirmed user removal'
-      });
-
-      setUsers(prev => prev.filter(u => u.id !== userToDelete.id && u.idNo !== userToDelete.idNo));
-      
-      // Invalidate active session if matching deleted user
-      const currentSession = localStorage.getItem('power_user_session');
-      if (currentSession) {
-        try {
-          const parsed = JSON.parse(currentSession);
-          if (parsed.idNo === userToDelete.idNo || parsed.id === userToDelete.id) {
-            localStorage.removeItem('power_user_session');
-            localStorage.removeItem('power_worker_name');
-          }
-        } catch {}
-      }
-
-      setSuccess(`User ID "${userToDelete.idNo}" (${userToDelete.name}) স্থায়ীভাবে মুছে ফেলা হয়েছে।`);
-      setUserToDelete(null);
-    } catch (err: any) {
-      setUserDeleteError(err.message || 'Failed to delete user account');
-    } finally {
-      setIsDeletingUser(false);
-    }
-  };
-
-  const filteredUsers = users.filter(u => {
+  const filteredUsers = (Array.isArray(users) ? users : []).filter(u => {
     if (!u) return false;
     if (filterRole === 'worker' && u.role !== 'worker') return false;
+    if (filterRole === 'agency' && u.role !== 'agency') return false;
     if (filterRole === 'admin' && u.role !== 'admin') return false;
     if (filterRole === 'hold' && u.status !== 'hold') return false;
 
@@ -404,126 +463,387 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     return nameMatch || idMatch || phoneMatch || desMatch;
   });
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Modal Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-between border-b border-slate-800">
+  const workerCount = users.filter(u => u && u.role === 'worker').length;
+  const agencyCount = users.filter(u => u && u.role === 'agency').length;
+  const adminCount = users.filter(u => u && u.role === 'admin').length;
+  const holdCount = users.filter(u => u && u.status === 'hold').length;
+
+  const renderUserCard = (u: UserAccount, idx: number) => {
+    const isPrimaryAdmin = u.idNo === '8695716192' || u.idNo === 'admin';
+    const isHold = u.status === 'hold';
+    const isEditing = editingUserId === (u.id || u.idNo);
+
+    return (
+      <div
+        key={`${u.id || u.idNo || 'user'}-${idx}`}
+        className={`p-3 sm:p-3.5 rounded-2xl border flex flex-col gap-2.5 transition-all shadow-2xs ${
+          isPrimaryAdmin
+            ? 'bg-gradient-to-r from-amber-50/90 via-white to-amber-50/50 border-amber-300 ring-1 ring-amber-400/30'
+            : isHold
+            ? 'bg-rose-50/50 border-rose-200 opacity-90'
+            : u.role === 'admin'
+            ? 'bg-gradient-to-r from-emerald-50/60 via-white to-teal-50/30 border-emerald-200/90'
+            : u.role === 'agency'
+            ? 'bg-gradient-to-r from-purple-50/70 via-white to-fuchsia-50/40 border-purple-200/90'
+            : 'bg-white border-slate-200/90 hover:border-blue-300'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
-              <UserPlus className="w-5 h-5" />
+            <div className={`w-10 h-10 rounded-xl flex flex-col items-center justify-center font-black text-[10px] shrink-0 shadow-xs ${
+              isPrimaryAdmin
+                ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950'
+                : isHold
+                ? 'bg-rose-500 text-white'
+                : u.role === 'admin'
+                ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white'
+                : u.role === 'agency'
+                ? 'bg-gradient-to-br from-purple-600 to-fuchsia-600 text-white'
+                : 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white'
+            }`}>
+              <span>{isPrimaryAdmin ? 'HQ' : isHold ? 'HLD' : u.role === 'admin' ? 'ADM' : u.role === 'agency' ? 'AGN' : 'WRK'}</span>
             </div>
+
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>User ID & Password Management</span>
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30 font-mono">
-                  WBSEDCL Admin
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h4 className={`text-xs sm:text-sm font-black ${isHold ? 'text-rose-900 line-through' : 'text-slate-900'}`}>
+                  {u.name}
+                </h4>
+                <span className="text-[11px] font-mono font-bold bg-slate-100 border border-slate-300 text-slate-900 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                  <span>ID: {u.idNo}</span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(u.idNo, `id_${u.idNo}`)}
+                    className="text-slate-400 hover:text-blue-600 cursor-pointer"
+                    title="Copy ID"
+                  >
+                    {copiedKey === `id_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  </button>
                 </span>
-              </h2>
-              <p className="text-xs text-slate-400">
-                নতুন ইউজার আইডি ও পাসওয়ার্ড তৈরি, এডিট এবং একটিভ/হোল্ড নিয়ন্ত্রণ
+
+                {/* Role Badge */}
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                  u.role === 'admin'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : u.role === 'agency'
+                    ? 'bg-purple-100 text-purple-800 border border-purple-300'
+                    : 'bg-blue-100 text-blue-800 border border-blue-300'
+                }`}>
+                  {u.role === 'admin' ? 'ADMIN' : u.role === 'agency' ? 'AGENCY' : 'WORKER'}
+                </span>
+
+                {/* Status Badge */}
+                {isHold ? (
+                  <span className="text-[9px] bg-rose-100 text-rose-700 font-black border border-rose-300 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <PauseCircle className="w-2.5 h-2.5" />
+                    <span>HOLD</span>
+                  </span>
+                ) : (
+                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-black border border-emerald-300 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                    <span>ACTIVE</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="text-[11px] text-slate-500 font-medium flex flex-wrap items-center gap-2 mt-0.5">
+                <span>{u.designation}</span>
+                {u.phone && (
+                  <>
+                    <span>•</span>
+                    <span className="font-mono text-slate-700">📞 {u.phone}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Password Vault Pill & Quick Actions */}
+          <div className="flex items-center gap-1.5 flex-wrap self-end sm:self-center">
+            <div className="flex items-center gap-1.5 bg-slate-900 text-white px-2.5 py-1.5 rounded-xl text-xs shadow-2xs" title="User Login Password / PIN">
+              <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-mono font-bold text-amber-300 text-xs tracking-wider">
+                {revealedPasswords[u.idNo] !== false ? (u.password || '••••') : '••••'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setRevealedPasswords(prev => ({ ...prev, [u.idNo]: prev[u.idNo] === false ? true : false }))}
+                className="text-slate-400 hover:text-white cursor-pointer ml-0.5"
+                title={revealedPasswords[u.idNo] !== false ? 'Hide Password' : 'Show Password'}
+              >
+                {revealedPasswords[u.idNo] !== false ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+              {u.password && (
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(String(u.password), `pass_${u.idNo}`)}
+                  className="text-slate-400 hover:text-emerald-400 cursor-pointer ml-0.5"
+                  title="Copy Password"
+                >
+                  {copiedKey === `pass_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const passCard = `WBSEDCL Login Pass\nRole: ${(u.role || 'worker').toUpperCase()}\nName: ${u.name}\nUser ID: ${u.idNo}\nPIN/Password: ${u.password || '1234'}`;
+                copyToClipboard(passCard, `card_${u.idNo}`);
+              }}
+              className="p-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+              title="Copy Full Login Credentials"
+            >
+              {copiedKey === `card_${u.idNo}` ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
+              <span className="hidden md:inline">{copiedKey === `card_${u.idNo}` ? 'Copied' : 'Pass'}</span>
+            </button>
+
+            {!isPrimaryAdmin && (
+              <button
+                type="button"
+                onClick={() => isEditing ? setEditingUserId(null) : handleStartEdit(u)}
+                className="p-1.5 px-2.5 text-blue-700 hover:bg-blue-50 bg-blue-50/50 border border-blue-200 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                title="Edit password or name"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isEditing ? 'Cancel' : 'Edit'}</span>
+              </button>
+            )}
+
+            {!isPrimaryAdmin && (
+              <button
+                type="button"
+                onClick={() => handleToggleStatus(u)}
+                className={`p-1.5 sm:px-2.5 sm:py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1 cursor-pointer ${
+                  isHold
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
+                }`}
+                title={isHold ? 'Activate ID' : 'Place ID on Hold'}
+              >
+                {isHold ? (
+                  <>
+                    <PlayCircle className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Activate</span>
+                  </>
+                ) : (
+                  <>
+                    <PauseCircle className="w-3.5 h-3.5 text-amber-700" />
+                    <span className="hidden sm:inline">Hold</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {!isPrimaryAdmin && (
+              <button
+                type="button"
+                onClick={() => handleDeleteUserClick(u)}
+                className="p-1.5 text-rose-600 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
+                title="Delete ID permanently"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Inline Edit Form */}
+        {isEditing && (
+          <div className="p-3 bg-blue-50/90 border border-blue-200 rounded-xl space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black text-blue-950 flex items-center gap-1.5">
+                <Edit2 className="w-3.5 h-3.5 text-blue-600" />
+                <span>Update Profile & Password (ID: {u.idNo})</span>
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">New Password / PIN</label>
+                <input
+                  type="text"
+                  value={editPasswordValue}
+                  onChange={(e) => setEditPasswordValue(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900"
+                  placeholder="New password"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Full Name</label>
+                <input
+                  type="text"
+                  value={editNameValue}
+                  onChange={(e) => setEditNameValue(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900"
+                  placeholder="Full Name"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Phone Number</label>
+                <input
+                  type="tel"
+                  value={editPhoneValue}
+                  onChange={(e) => setEditPhoneValue(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-semibold text-slate-900"
+                  placeholder="Phone Number"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setEditingUserId(null)}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEdit(u)}
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer shadow-xs"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col h-[95vh] sm:h-[90vh]">
+        {/* Sleek, Compact Top Header Bar */}
+        <div className="px-4 py-3 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {activeTab !== 'hub' ? (
+              <button
+                type="button"
+                onClick={() => navigateToOption('hub')}
+                className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0 shadow-xs"
+                title="Back to All Options"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>All Options</span>
+              </button>
+            ) : (
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center text-slate-950 shrink-0 shadow-xs">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+            )}
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm sm:text-base font-black text-white tracking-tight truncate">
+                  {activeTab === 'hub' && "Manage ID's & Access Control Hub"}
+                  {activeTab === 'create' && 'Create New User ID & Password'}
+                  {activeTab === 'agency' && 'Agency ID & Password Studio'}
+                  {activeTab === 'list' && `All User IDs & Passwords (ID Vault: ${users.length})`}
+                  {activeTab === 'change-password' && 'PIN & Password Reset Studio'}
+                </h2>
+              </div>
+              <p className="text-[11px] text-slate-400 truncate hidden sm:block">
+                Worker, Agency & Admin Identity and Password Management
               </p>
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {activeTab !== 'hub' && (
+              <div className="hidden md:flex items-center gap-1 bg-slate-800/90 p-1 rounded-xl border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('create')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                    activeTab === 'create' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  + Create ID
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('agency')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                    activeTab === 'agency' ? 'bg-purple-500 text-white' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Agency ID ({agencyCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('list')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                    activeTab === 'list' ? 'bg-blue-500 text-white' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  ID List ({users.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('change-password')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                    activeTab === 'change-password' ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Reset PIN
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-300 hover:text-white rounded-xl bg-white/10 hover:bg-rose-600 border border-white/10 transition-colors cursor-pointer shrink-0"
+              title="Close Modal"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-4 pt-2 gap-2 overflow-x-auto">
-          <button
-            onClick={() => setActiveTab('create')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
-              activeTab === 'create'
-                ? 'border-blue-600 text-blue-600 bg-white rounded-t-lg shadow-xs'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Create New User (নতুন আইডি তৈরি)</span>
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab('list');
-              loadUsersList();
-            }}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
-              activeTab === 'list'
-                ? 'border-blue-600 text-blue-600 bg-white rounded-t-lg shadow-xs'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>User List & Passwords ({users.length})</span>
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab('change-password');
-              loadUsersList();
-              if (!selectedChangeUserId && users.length > 0) {
-                setSelectedChangeUserId(users[0].id || users[0].idNo);
-              }
-            }}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
-              activeTab === 'change-password'
-                ? 'border-amber-600 text-amber-700 bg-white rounded-t-lg shadow-xs'
-                : 'border-transparent text-amber-700/80 hover:text-amber-900 bg-amber-50/60 rounded-t-lg'
-            }`}
-          >
-            <KeyRound className="w-4 h-4 text-amber-600" />
-            <span>Change Password (পাসওয়ার্ড পরিবর্তন)</span>
-          </button>
-        </div>
-
-        {/* Modal Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
+        {/* Spacious Full-Height Page Body */}
+        <div className="p-3.5 sm:p-5 overflow-y-auto flex-1 bg-slate-50/70 space-y-3.5">
           {/* Notifications */}
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-700 font-semibold animate-in fade-in duration-200">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-700 font-semibold animate-in fade-in duration-150">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {success && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2.5 text-xs text-emerald-800 font-semibold animate-in fade-in duration-200">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2.5 text-xs text-emerald-800 font-semibold animate-in fade-in duration-150">
               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
               <div className="leading-relaxed">{success}</div>
             </div>
           )}
 
-          {/* ========================================================= */}
-          {/* NEW CREATED USER CREDENTIALS CARD (COPYABLE) */}
-          {/* ========================================================= */}
+          {/* Newly Created Credentials Copy Card */}
           {createdUserCard && (
-            <div className="p-4 bg-emerald-50/80 border-2 border-emerald-500/50 rounded-2xl space-y-3 animate-in zoom-in-95 duration-200">
+            <div className="p-3.5 bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-2 border-emerald-500/70 rounded-2xl space-y-2.5 shadow-sm animate-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-emerald-600" />
-                  <span className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
-                    Login Credentials Ready (লগইন তথ্য)
+                  <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
+                    Smart Login Pass Issued & Ready
                   </span>
                 </div>
-                <span className="text-[11px] font-bold px-2 py-0.5 bg-emerald-200/60 text-emerald-800 rounded-md">
+                <span className="text-[11px] font-bold px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full">
                   {createdUserCard.role}
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
                 <div className="p-2.5 bg-white rounded-xl border border-emerald-200 flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] text-slate-500 font-bold block">USER ID</span>
-                    <span className="font-mono font-bold text-slate-900 text-sm">{createdUserCard.idNo}</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">USER LOGIN ID</span>
+                    <span className="font-mono font-black text-slate-900 text-sm">{createdUserCard.idNo}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => copyToClipboard(createdUserCard.idNo, 'new_id')}
-                    className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs flex items-center gap-1 font-semibold cursor-pointer"
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs flex items-center gap-1 font-bold cursor-pointer"
                   >
                     {copiedKey === 'new_id' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedKey === 'new_id' ? 'Copied' : 'Copy'}</span>
@@ -532,13 +852,13 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
                 <div className="p-2.5 bg-white rounded-xl border border-emerald-200 flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] text-slate-500 font-bold block">PASSWORD</span>
-                    <span className="font-mono font-bold text-slate-900 text-sm">{createdUserCard.password}</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">SECRET PIN / PASSWORD</span>
+                    <span className="font-mono font-black text-slate-900 text-sm">{createdUserCard.password}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => copyToClipboard(createdUserCard.password, 'new_pass')}
-                    className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs flex items-center gap-1 font-semibold cursor-pointer"
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs flex items-center gap-1 font-bold cursor-pointer"
                   >
                     {copiedKey === 'new_pass' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedKey === 'new_pass' ? 'Copied' : 'Copy'}</span>
@@ -546,218 +866,408 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] text-emerald-800">
-                  কর্মীর নাম: <strong>{createdUserCard.name}</strong>
+              <div className="flex items-center justify-between pt-0.5">
+                <span className="text-xs text-emerald-900">
+                  Name: <strong>{createdUserCard.name}</strong>
                 </span>
                 <button
                   type="button"
                   onClick={() => {
-                    const text = `WBSEDCL App Login:\nUser ID: ${createdUserCard.idNo}\nPassword: ${createdUserCard.password}\nName: ${createdUserCard.name}`;
+                    const text = `WBSEDCL App Login:\nRole: ${createdUserCard.role}\nUser ID: ${createdUserCard.idNo}\nPassword: ${createdUserCard.password}\nName: ${createdUserCard.name}`;
                     copyToClipboard(text, 'all_cred');
                   }}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
                   {copiedKey === 'all_cred' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedKey === 'all_cred' ? 'সব তথ্য কপি হয়েছে' : 'সব তথ্য কপি করুন'}</span>
+                  <span>{copiedKey === 'all_cred' ? 'Copied All Credentials' : 'Copy All Credentials'}</span>
                 </button>
               </div>
             </div>
           )}
 
           {/* ========================================================= */}
-          {/* TAB 1: CREATE USER FORM */}
+          {/* OPTION HUB VIEW: CLICK AN OPTION TO OPEN DEDICATED PAGE    */}
+          {/* ========================================================= */}
+          {activeTab === 'hub' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              {/* Top Quick Summary Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => { setFilterRole('all'); navigateToOption('list'); }}
+                  className="p-3 rounded-2xl bg-slate-900 text-white border border-slate-800 text-left hover:bg-slate-800 transition-all cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total IDs</span>
+                  <span className="text-lg font-black text-amber-400 font-mono">{users.length}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFilterRole('worker'); navigateToOption('list'); }}
+                  className="p-3 rounded-2xl bg-blue-50 border border-blue-200 text-left hover:bg-blue-100/70 transition-all cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 block">Workers</span>
+                  <span className="text-lg font-black text-blue-900 font-mono">{workerCount}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('agency')}
+                  className="p-3 rounded-2xl bg-purple-50 border border-purple-200 text-left hover:bg-purple-100/70 transition-all cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 block">Agency IDs</span>
+                  <span className="text-lg font-black text-purple-900 font-mono">{agencyCount}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFilterRole('admin'); navigateToOption('list'); }}
+                  className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-left hover:bg-emerald-100/70 transition-all cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">Admins</span>
+                  <span className="text-lg font-black text-emerald-900 font-mono">{adminCount}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFilterRole('hold'); navigateToOption('list'); }}
+                  className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-left hover:bg-rose-100/70 transition-all cursor-pointer col-span-2 sm:col-span-1"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 block">On Hold</span>
+                  <span className="text-lg font-black text-rose-900 font-mono">{holdCount}</span>
+                </button>
+              </div>
+
+              <div className="bg-amber-50/90 border border-amber-200/80 rounded-2xl px-4 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
+                  <LayoutGrid className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Select an option below to open its dedicated full-screen workspace:</span>
+                </div>
+              </div>
+
+              {/* 4 Dedicated Option Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* OPTION 1: CREATE NEW ID (WORKER / AGENCY / ADMIN) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectRolePreset('worker');
+                    navigateToOption('create');
+                  }}
+                  className="p-5 rounded-2xl bg-white hover:bg-blue-50/50 border-2 border-blue-200 hover:border-blue-500 text-left transition-all shadow-xs hover:shadow-md flex items-start justify-between gap-3 group cursor-pointer"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
+                      <UserPlus className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                        OPTION 1 • CREATE NEW ID
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 mt-1.5">
+                        Create New User ID & Password
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        Issue a new Login ID & PIN for Field Workers, Agency Partners, or Admins.
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
+                </button>
+
+                {/* OPTION 2: AGENCY ID & PASSWORD STUDIO */}
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('agency')}
+                  className="p-5 rounded-2xl bg-white hover:bg-purple-50/50 border-2 border-purple-200 hover:border-purple-500 text-left transition-all shadow-xs hover:shadow-md flex items-start justify-between gap-3 group cursor-pointer"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-600 to-fuchsia-600 text-white flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
+                      <Building2 className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                        OPTION 2 • AGENCY ID ({agencyCount})
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 mt-1.5">
+                        Agency ID & Password Studio
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        Create new Agency login credentials and manage all registered Agency IDs & PINs.
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
+                </button>
+
+                {/* OPTION 3: VIEW ALL IDS & PASSWORDS VAULT */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterRole('all');
+                    navigateToOption('list');
+                  }}
+                  className="p-5 rounded-2xl bg-white hover:bg-emerald-50/50 border-2 border-emerald-200 hover:border-emerald-500 text-left transition-all shadow-xs hover:shadow-md flex items-start justify-between gap-3 group cursor-pointer"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
+                      <Users className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                        OPTION 3 • ID & PASSWORD LIST ({users.length})
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 mt-1.5">
+                        View All IDs & Passwords (ID Vault)
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        Browse, search, copy, edit, or hold any Worker, Agency, or Admin ID & Password.
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
+                </button>
+
+                {/* OPTION 4: PIN & PASSWORD RESET STUDIO */}
+                <button
+                  type="button"
+                  onClick={() => navigateToOption('change-password')}
+                  className="p-5 rounded-2xl bg-white hover:bg-amber-50/50 border-2 border-amber-200 hover:border-amber-500 text-left transition-all shadow-xs hover:shadow-md flex items-start justify-between gap-3 group cursor-pointer"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-slate-950 flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
+                      <KeyRound className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
+                        OPTION 4 • RESET PASSWORD / PIN
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 mt-1.5">
+                        Change Password / PIN Studio
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        View the current PIN or set a new Password for any Worker, Agency, or Admin account.
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* PAGE 1: SPACIOUS CREATE USER ID PAGE (WORKER/AGENCY/ADMIN) */}
           {/* ========================================================= */}
           {activeTab === 'create' && (
-            <form onSubmit={handleCreateUser} className="space-y-4">
-              {/* Role Selection */}
+            <form onSubmit={handleCreateUser} className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4 animate-in fade-in duration-150">
+              {/* Step 1: Compact 3-Column Role Selector (Worker / Agency / Admin) */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  একাউন্ট টাইপ (Account Role) <span className="text-red-500">*</span>
+                <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-2">
+                  1. Select Account Role <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      setRole('worker');
-                      setDesignation('লাইনম্যান / Worker (WBSEDCL)');
-                      setIdNo(`LM-${Math.floor(1000 + Math.random() * 9000)}`);
-                    }}
-                    className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
+                    onClick={() => handleSelectRolePreset('worker')}
+                    className={`p-3 rounded-xl border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
                       role === 'worker'
-                        ? 'border-blue-500 bg-blue-50/70 ring-2 ring-blue-500/20'
-                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                        ? 'border-blue-600 bg-blue-50/90 ring-2 ring-blue-500/20'
+                        : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100'
                     }`}
                   >
-                    <div className={`p-2 rounded-lg ${role === 'worker' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                      <HardHat className="w-5 h-5" />
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-2 rounded-lg ${role === 'worker' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        <HardHat className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900">Worker / Lineman</h4>
+                        <p className="text-[10px] text-slate-500">Field Staff Account</p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900">Field Worker / Lineman</h4>
-                      <p className="text-[11px] text-slate-500">কাজের এন্ট্রি, ফটো আপলোড</p>
-                    </div>
+                    {role === 'worker' && <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setRole('admin');
-                      setDesignation('সহকারী প্রকৌশলী / Admin (WBSEDCL)');
-                      setIdNo(`ADM-${Math.floor(100 + Math.random() * 900)}`);
-                    }}
-                    className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
-                      role === 'admin'
-                        ? 'border-emerald-500 bg-emerald-50/70 ring-2 ring-emerald-500/20'
-                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                    onClick={() => handleSelectRolePreset('agency')}
+                    className={`p-3 rounded-xl border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                      role === 'agency'
+                        ? 'border-purple-600 bg-purple-50/90 ring-2 ring-purple-500/20'
+                        : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100'
                     }`}
                   >
-                    <div className={`p-2 rounded-lg ${role === 'admin' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                      <ShieldCheck className="w-5 h-5" />
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-2 rounded-lg ${role === 'agency' ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        <Building2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900">Agency ID</h4>
+                        <p className="text-[10px] text-slate-500">Agency Partner Login</p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900">Admin / Supervisor</h4>
-                      <p className="text-[11px] text-slate-500">অনুমোদন, রিপোর্ট, আইডি কন্ট্রোল</p>
+                    {role === 'agency' && <CheckCircle2 className="w-4 h-4 text-purple-600 shrink-0" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectRolePreset('admin')}
+                    className={`p-3 rounded-xl border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                      role === 'admin'
+                        ? 'border-emerald-600 bg-emerald-50/90 ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-2 rounded-lg ${role === 'admin' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900">Admin / Supervisor</h4>
+                        <p className="text-[10px] text-slate-500">Admin Control Access</p>
+                      </div>
                     </div>
+                    {role === 'admin' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
                   </button>
                 </div>
               </div>
 
-              {/* User ID Field with Quick Generators */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-slate-500" />
-                    <span>User ID (ইউজার আইডি) <span className="text-red-500">*</span></span>
-                  </label>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-slate-400 font-medium">Quick Auto ID:</span>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateId('LM')}
-                      className="px-1.5 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded text-[10px] font-mono font-bold cursor-pointer"
-                    >
-                      LM-XXXX
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateId('ADM')}
-                      className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-[10px] font-mono font-bold cursor-pointer"
-                    >
-                      ADM-XXX
-                    </button>
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  required
-                  value={idNo}
-                  onChange={(e) => setIdNo(e.target.value)}
-                  placeholder="যেমন: LM-4085, ADM-102, বা কর্মীর ফোন নম্বর"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-                />
-              </div>
-
-              {/* Password Field with Quick Presets */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                    <span>পাসওয়ার্ড (Password) <span className="text-red-500">*</span></span>
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-400">Presets:</span>
-                    {['1234', '1122', '8899'].map(p => (
+              {/* Step 2: User ID & Password in a Clean 2-Column Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-blue-600" />
+                      <span>User Login ID <span className="text-red-500">*</span></span>
+                    </label>
+                    <div className="flex items-center gap-1">
                       <button
-                        key={p}
                         type="button"
-                        onClick={() => setPassword(p)}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer ${
-                          password === p ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                        }`}
+                        onClick={() => handleGenerateId('LM')}
+                        className="px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded text-[10px] font-mono font-bold cursor-pointer"
                       >
-                        {p}
+                        LM-ID
                       </button>
-                    ))}
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateId('AGN')}
+                        className="px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 rounded text-[10px] font-mono font-bold cursor-pointer"
+                      >
+                        AGN-ID
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateId('ADM')}
+                        className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded text-[10px] font-mono font-bold cursor-pointer"
+                      >
+                        ADM-ID
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={idNo}
+                    onChange={(e) => setIdNo(e.target.value)}
+                    placeholder="e.g. LM-4085, AGN-2040 or Phone No"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Password / PIN <span className="text-red-500">*</span></span>
+                    </label>
+                    <div className="flex items-center gap-1">
+                      {['1234', '0000', '1122', '8899'].map(p => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setPassword(p)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer ${
+                            password === p ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter PIN or Password (e.g. 1234)"
+                      className="w-full pl-3.5 pr-16 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono tracking-wider"
+                    />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="text-[11px] text-blue-600 font-medium hover:underline ml-1"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-blue-600 font-bold hover:underline cursor-pointer px-1.5 py-0.5 rounded bg-blue-50"
                     >
                       {showPassword ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 </div>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="পাসওয়ার্ড লিখুন (যেমন: 1234)"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono tracking-wider"
-                  />
-                </div>
               </div>
 
-              {/* Name & Mobile Number */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Step 3: Name, Phone, Designation */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    পূর্ণ নাম (Full Name)
+                    {role === 'agency' ? 'Agency Name' : 'Full Name'}
                   </label>
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="যেমন: অসিত কুমার দাস"
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder={role === 'agency' ? 'e.g. Maa Tara Agency' : 'e.g. Asit Kumar Das'}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
                     <Phone className="w-3.5 h-3.5 text-slate-500" />
-                    <span>মোবাইল নম্বর (Phone)</span>
+                    <span>Phone Number</span>
                   </label>
                   <input
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="98300XXXXX"
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Designation
+                  </label>
+                  <input
+                    type="text"
+                    value={designation}
+                    onChange={(e) => setDesignation(e.target.value)}
+                    placeholder="e.g. Lineman / Agency (WBSEDCL)"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
               </div>
 
-              {/* Designation */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  পদবী (Designation)
-                </label>
-                <input
-                  type="text"
-                  value={designation}
-                  onChange={(e) => setDesignation(e.target.value)}
-                  placeholder="যেমন: লাইনম্যান (WBSEDCL) বা সহকারী প্রকৌশলী"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                />
-              </div>
-
-              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3.5 px-4 rounded-xl text-white font-bold text-sm bg-blue-600 hover:bg-blue-700 active:scale-[0.99] shadow-md shadow-blue-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer mt-3"
+                className="w-full py-3.5 px-4 rounded-xl text-white font-black text-sm bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] shadow-lg shadow-slate-900/15 transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                    <span>তৈরি হচ্ছে...</span>
+                    <span>Creating ID...</span>
                   </span>
                 ) : (
                   <>
-                    <UserPlus className="w-4 h-4" />
-                    <span>Create User ID & Password (তৈরি করুন)</span>
+                    <UserPlus className="w-4 h-4 text-amber-400" />
+                    <span>Create & Save {role === 'agency' ? 'Agency' : role === 'admin' ? 'Admin' : 'Worker'} ID & Password</span>
                   </>
                 )}
               </button>
@@ -765,30 +1275,147 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* TAB 2: REGISTERED USERS LIST & EDIT */}
+          {/* PAGE 2: DEDICATED AGENCY ID & PASSWORD STUDIO              */}
+          {/* ========================================================= */}
+          {activeTab === 'agency' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              {/* Create Agency ID Box */}
+              <form onSubmit={handleCreateUser} className="bg-white p-4 sm:p-5 rounded-2xl border-2 border-purple-200 shadow-xs space-y-3.5">
+                <div className="flex items-center justify-between border-b border-purple-100 pb-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-600 to-fuchsia-600 text-white flex items-center justify-center shrink-0">
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">Create New Agency ID & Password</h3>
+                      <p className="text-[11px] text-slate-500">Agency users can sign in with this ID and Password to access field tasks</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 border border-purple-300">
+                    ROLE: AGENCY
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700">Agency Login ID *</label>
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateId('AGN')}
+                        className="px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[10px] font-mono font-bold cursor-pointer"
+                      >
+                        Auto AGN-ID
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      value={idNo}
+                      onChange={(e) => setIdNo(e.target.value)}
+                      placeholder="e.g. AGN-2050"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700">Password / PIN *</label>
+                      <div className="flex gap-1">
+                        {['1234', '0000'].map(p => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setPassword(p)}
+                            className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-mono font-bold cursor-pointer"
+                          >
+                            {p}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="e.g. 1234"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Agency Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. R.K. Electrical Agency"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number (Optional)</label>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="98300XXXXX"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full py-2.5 px-4 rounded-xl text-white font-black text-xs sm:text-sm bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-700 hover:to-fuchsia-700 shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      <span>Create Agency ID & Password</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* Existing Agency IDs List */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between px-1">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-purple-600" />
+                    <span>Registered Agency IDs & Passwords ({agencyCount})</span>
+                  </h4>
+                </div>
+                {users.filter(u => u.role === 'agency').length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-xs bg-white rounded-2xl border border-dashed border-purple-200">
+                    No Agency IDs created yet. Use the form above to create a new Agency ID.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {users.filter(u => u.role === 'agency').map((u, idx) => renderUserCard(u, idx))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* PAGE 3: FULL-HEIGHT ID & PASSWORD VAULT LIST               */}
           {/* ========================================================= */}
           {activeTab === 'list' && (
-            <div className="space-y-3">
-              {/* Instructions Callout */}
-              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="space-y-0.5 text-[11px] text-amber-900 leading-relaxed">
-                  <p><strong>নিরাপত্তা ও একাউন্ট পরিচালনা:</strong></p>
-                  <p>• <strong>Edit Password:</strong> কর্মীর পাসওয়ার্ড ভুলে গেলে সরাসরি এখান থেকে পরিবর্তন করে দিন।</p>
-                  <p>• <strong>Hold ID:</strong> সাময়িক ব্লক করুন; <strong>Delete ID:</strong> স্থায়ীভাবে মুছে দিন।</p>
-                </div>
-              </div>
-
+            <div className="space-y-3 animate-in fade-in duration-150">
               {/* Search & Filter Controls */}
-              <div className="flex flex-col sm:flex-row gap-2">
+              <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row gap-2.5">
                 <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="নাম, ID নম্বর বা ফোন দিয়ে খুঁজুন..."
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder="Search by Name, User ID, or Phone Number..."
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
 
@@ -796,8 +1423,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setFilterRole('all')}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                      filterRole === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      filterRole === 'all' ? 'bg-slate-900 text-amber-400 shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
                     All ({users.length})
@@ -805,35 +1432,44 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setFilterRole('worker')}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                      filterRole === 'worker' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      filterRole === 'worker' ? 'bg-blue-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Worker ({users.filter(u => u.role === 'worker').length})
+                    Workers ({workerCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterRole('agency')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      filterRole === 'agency' ? 'bg-purple-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Agency ({agencyCount})
                   </button>
                   <button
                     type="button"
                     onClick={() => setFilterRole('admin')}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                      filterRole === 'admin' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      filterRole === 'admin' ? 'bg-emerald-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Admin ({users.filter(u => u.role === 'admin').length})
+                    Admins ({adminCount})
                   </button>
                   <button
                     type="button"
                     onClick={() => setFilterRole('hold')}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                      filterRole === 'hold' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      filterRole === 'hold' ? 'bg-rose-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Hold ({users.filter(u => u.status === 'hold').length})
+                    Hold ({holdCount})
                   </button>
 
                   <button
                     type="button"
                     onClick={loadUsersList}
-                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors cursor-pointer"
+                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer shrink-0"
                     title="Reload users"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -841,275 +1477,49 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </div>
               </div>
 
-              {/* Users Cards List */}
-              <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+              {/* Users Smart ID Cards List */}
+              <div className="space-y-2.5">
                 {filteredUsers.length === 0 ? (
-                  <div className="text-center py-8 text-slate-400 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                    কোনো ইউজার পাওয়া যায়নি।
+                  <div className="text-center py-12 text-slate-400 text-xs bg-white rounded-2xl border border-dashed border-slate-200">
+                    No matching user IDs found.
                   </div>
                 ) : (
-                  filteredUsers.map((u, idx) => {
-                    const isPrimaryAdmin = u.idNo === '8695716192' || u.idNo === 'admin';
-                    const isHold = u.status === 'hold';
-                    const isEditing = editingUserId === (u.id || u.idNo);
-
-                    return (
-                      <div
-                        key={`${u.id || u.idNo || 'user'}-${idx}`}
-                        className={`p-3.5 rounded-xl border flex flex-col gap-2.5 transition-all ${
-                          isPrimaryAdmin
-                            ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400/30'
-                            : isHold
-                            ? 'bg-red-50/40 border-red-200 opacity-90'
-                            : u.role === 'admin'
-                            ? 'bg-emerald-50/40 border-emerald-200'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                              isPrimaryAdmin
-                                ? 'bg-amber-500 text-slate-950 font-black'
-                                : isHold
-                                ? 'bg-red-500 text-white'
-                                : u.role === 'admin'
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-blue-600 text-white'
-                            }`}>
-                              {isPrimaryAdmin ? 'HQ' : isHold ? 'HLD' : u.role === 'admin' ? 'ADM' : 'WRK'}
-                            </div>
-
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h4 className={`text-xs font-bold ${isHold ? 'text-red-900 line-through' : 'text-slate-900'}`}>
-                                  {u.name}
-                                </h4>
-                                <span className="text-[11px] font-mono font-bold bg-slate-100 border border-slate-300 text-slate-800 px-2 py-0.5 rounded-md flex items-center gap-1">
-                                  <span>ID: {u.idNo}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => copyToClipboard(u.idNo, `id_${u.idNo}`)}
-                                    className="text-slate-400 hover:text-blue-600 cursor-pointer"
-                                    title="Copy ID"
-                                  >
-                                    {copiedKey === `id_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                                  </button>
-                                </span>
-
-                                {/* Status Badge */}
-                                {isHold ? (
-                                  <span className="text-[9px] bg-red-100 text-red-700 font-bold border border-red-300 px-1.5 py-0.2 rounded flex items-center gap-1">
-                                    <PauseCircle className="w-2.5 h-2.5" />
-                                    <span>ON HOLD</span>
-                                  </span>
-                                ) : (
-                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold border border-emerald-300 px-1.5 py-0.2 rounded flex items-center gap-1">
-                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                                    <span>ACTIVE</span>
-                                  </span>
-                                )}
-
-                                {isPrimaryAdmin && (
-                                  <span className="text-[9px] bg-amber-500 text-slate-950 font-black px-1.5 py-0.2 rounded">
-                                    Primary Admin
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-1">
-                                <span>{u.designation}</span>
-                                {u.phone && (
-                                  <>
-                                    <span>•</span>
-                                    <span>📞 {u.phone}</span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Password & Quick Actions */}
-                          <div className="flex items-center gap-2 self-end sm:self-center">
-                            {/* Security PIN Indicator with Reveal & Copy */}
-                            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg text-xs" title="User Login Password / PIN">
-                              <KeyRound className="w-3.5 h-3.5 text-amber-600" />
-                              <span className="font-mono font-bold text-slate-900 text-xs tracking-wider">
-                                {revealedPasswords[u.idNo] !== false ? (u.password || '••••') : '••••'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setRevealedPasswords(prev => ({ ...prev, [u.idNo]: prev[u.idNo] === false ? true : false }))}
-                                className="text-slate-400 hover:text-slate-700 cursor-pointer ml-0.5"
-                                title={revealedPasswords[u.idNo] !== false ? 'Hide Password' : 'Show Password'}
-                              >
-                                {revealedPasswords[u.idNo] !== false ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                              </button>
-                              {u.password && (
-                                <button
-                                  type="button"
-                                  onClick={() => copyToClipboard(String(u.password), `pass_${u.idNo}`)}
-                                  className="text-slate-400 hover:text-blue-600 cursor-pointer ml-0.5"
-                                  title="Copy Password"
-                                >
-                                  {copiedKey === `pass_${u.idNo}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Edit Password Button */}
-                            {!isPrimaryAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => isEditing ? setEditingUserId(null) : handleStartEdit(u)}
-                                className="p-1.5 text-blue-600 hover:bg-blue-50 border border-blue-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                                title="Edit password or name"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                                <span className="hidden sm:inline">{isEditing ? 'Cancel' : 'Edit'}</span>
-                              </button>
-                            )}
-
-                            {/* Toggle Hold / Active */}
-                            {!isPrimaryAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleToggleStatus(u)}
-                                className={`p-1.5 sm:px-2.5 sm:py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
-                                  isHold
-                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                    : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
-                                }`}
-                                title={isHold ? 'আইডি সক্রিয় করুন (Activate ID)' : 'আইডি স্থগিত করুন (Hold ID)'}
-                              >
-                                {isHold ? (
-                                  <>
-                                    <PlayCircle className="w-3.5 h-3.5" />
-                                    <span className="hidden sm:inline">Active</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <PauseCircle className="w-3.5 h-3.5 text-amber-700" />
-                                    <span className="hidden sm:inline">Hold</span>
-                                  </>
-                                )}
-                              </button>
-                            )}
-
-                            {/* Delete ID */}
-                            {!isPrimaryAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteUserClick(u)}
-                                className="p-1.5 text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                                title="Delete ID permanently"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Inline Edit Form */}
-                        {isEditing && (
-                          <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl space-y-2.5 animate-in slide-in-from-top-1 duration-150">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-                                <Edit2 className="w-3.5 h-3.5" />
-                                <span>তথ্য ও পাসওয়ার্ড আপডেট ({u.idNo})</span>
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                              <div>
-                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">নতুন পাসওয়ার্ড</label>
-                                <input
-                                  type="text"
-                                  value={editPasswordValue}
-                                  onChange={(e) => setEditPasswordValue(e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900"
-                                  placeholder="New password"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">নাম</label>
-                                <input
-                                  type="text"
-                                  value={editNameValue}
-                                  onChange={(e) => setEditNameValue(e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900"
-                                  placeholder="Worker name"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">মোবাইল নম্বর</label>
-                                <input
-                                  type="tel"
-                                  value={editPhoneValue}
-                                  onChange={(e) => setEditPhoneValue(e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900"
-                                  placeholder="Phone"
-                                />
-                              </div>
-                            </div>
-                            <div className="flex justify-end gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => setEditingUserId(null)}
-                                className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveEdit(u)}
-                                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer shadow-xs"
-                              >
-                                <Save className="w-3.5 h-3.5" />
-                                <span>Save Changes</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
+                  filteredUsers.map((u, idx) => renderUserCard(u, idx))
                 )}
               </div>
             </div>
           )}
 
           {/* ========================================================= */}
-          {/* TAB 3: CHANGE PASSWORD (পাসওয়ার্ড পরিবর্তন) */}
+          {/* PAGE 4: PIN & PASSWORD RESET STUDIO                        */}
           {/* ========================================================= */}
           {activeTab === 'change-password' && (
-            <div className="space-y-4 animate-in fade-in duration-200">
-              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4 animate-in fade-in duration-150">
+              <div className="p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 rounded-xl flex items-start gap-2.5 text-xs text-amber-950">
                 <KeyRound className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
-                  <strong>পাসওয়ার্ড পরিবর্তন প্যানেল:</strong> যেকোনো কর্মী বা এডমিন আইডির পাসওয়ার্ড তাৎক্ষণিকভাবে পরিবর্তন করুন। পরিবর্তন করার সাথে সাথে নতুন পাসওয়ার্ড দিয়ে সিস্টেমে লগইন করা যাবে।
+                  <strong>Instant PIN & Password Studio:</strong> Quickly view or reset the login password for any Worker, Agency, or Admin ID.
                 </div>
               </div>
 
               <form onSubmit={handleChangePasswordSubmit} className="space-y-4">
-                {/* 1. Select User Account */}
                 <div>
                   <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-600" />
-                      <span>ইউজার নির্বাচন করুন (Select User ID) <span className="text-red-500">*</span></span>
+                      <span>Select User Account <span className="text-red-500">*</span></span>
                     </span>
-                    <span className="text-[11px] text-slate-500">মোট ইউজার: {users.length}</span>
+                    <span className="text-[11px] text-slate-500 font-mono">Total IDs: {users.length}</span>
                   </label>
 
-                  {/* Filter / Quick Search */}
                   <div className="relative mb-2">
                     <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       value={changePassSearch}
                       onChange={(e) => setChangePassSearch(e.target.value)}
-                      placeholder="নাম, User ID বা মোবাইল দিয়ে ইউজার খুঁজুন..."
-                      className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+                      placeholder="Filter user by Name, Login ID, or Phone..."
+                      className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-medium"
                     />
                   </div>
 
@@ -1119,7 +1529,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     required
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all font-mono"
                   >
-                    <option value="">-- ইউজার নির্বাচন করুন (Select User) --</option>
+                    <option value="">-- Select User Account --</option>
                     {users
                       .filter(u => {
                         if (!changePassSearch.trim()) return true;
@@ -1133,43 +1543,48 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       })
                       .map((u, idx) => (
                         <option key={`${u.id || u.idNo || 'user'}-${idx}`} value={u.id || u.idNo}>
-                          {u.role === 'admin' ? '👑 [ADMIN]' : '👷 [WORKER]'} {u.name} (ID: {u.idNo}) {u.phone ? `- Tel: ${u.phone}` : ''} {u.status === 'hold' ? '⚠️ [ON HOLD]' : ''}
+                          {u.role === 'admin' ? '👑 [ADMIN]' : u.role === 'agency' ? '🏢 [AGENCY]' : '👷 [WORKER]'} {u.name} (Login ID: {u.idNo}) {u.status === 'hold' ? '⚠️ [ON HOLD]' : ''}
                         </option>
                       ))}
                   </select>
                 </div>
 
-                {/* 2. Selected User Overview Card */}
                 {(() => {
                   const currentSelected = users.find(u => (u.id === selectedChangeUserId || u.idNo === selectedChangeUserId));
                   if (!currentSelected) return null;
                   return (
-                    <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <div className="p-3.5 bg-slate-900 text-white border border-slate-800 rounded-2xl space-y-2.5 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentSelected.role === 'admin' ? 'bg-slate-900 text-amber-400' : 'bg-blue-600 text-white'}`}>
-                            {currentSelected.role === 'admin' ? <ShieldCheck className="w-4 h-4" /> : <HardHat className="w-4 h-4" />}
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                            currentSelected.role === 'admin'
+                              ? 'bg-amber-500 text-slate-950'
+                              : currentSelected.role === 'agency'
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-blue-600 text-white'
+                          }`}>
+                            {currentSelected.role === 'admin' ? <ShieldCheck className="w-4 h-4" /> : currentSelected.role === 'agency' ? <Building2 className="w-4 h-4" /> : <HardHat className="w-4 h-4" />}
                           </div>
                           <div>
-                            <div className="text-xs font-bold text-slate-900">{currentSelected.name}</div>
-                            <div className="text-[11px] text-slate-500 font-mono">User ID: <strong className="text-slate-800">{currentSelected.idNo}</strong></div>
+                            <div className="text-xs sm:text-sm font-black text-white">{currentSelected.name}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">Login ID: <strong className="text-amber-300">{currentSelected.idNo}</strong> • Role: <strong className="uppercase text-sky-300">{currentSelected.role}</strong></div>
                           </div>
                         </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${currentSelected.status === 'hold' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                        <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${currentSelected.status === 'hold' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}`}>
                           {currentSelected.status === 'hold' ? 'ON HOLD' : 'ACTIVE'}
                         </span>
                       </div>
 
-                      <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600">
-                        <span>বর্তমান পাসওয়ার্ড (Current Password):</span>
-                        <div className="flex items-center gap-1.5 font-mono font-bold bg-white px-2.5 py-1 rounded border border-slate-200 text-slate-900">
-                          <span>{revealedPasswords[currentSelected.idNo] ? (currentSelected.password || 'Secured in Auth') : '••••'}</span>
+                      <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs text-slate-300">
+                        <span>Current Password / PIN:</span>
+                        <div className="flex items-center gap-1.5 font-mono font-bold bg-white/10 px-2.5 py-1 rounded-lg border border-white/15 text-amber-300">
+                          <span>{revealedPasswords[currentSelected.idNo] !== false ? (currentSelected.password || 'Secured in Auth') : '••••'}</span>
                           <button
                             type="button"
-                            onClick={() => setRevealedPasswords(prev => ({ ...prev, [currentSelected.idNo]: !prev[currentSelected.idNo] }))}
-                            className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                            onClick={() => setRevealedPasswords(prev => ({ ...prev, [currentSelected.idNo]: prev[currentSelected.idNo] === false ? true : false }))}
+                            className="text-slate-300 hover:text-white cursor-pointer"
                           >
-                            {revealedPasswords[currentSelected.idNo] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            {revealedPasswords[currentSelected.idNo] !== false ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                           </button>
                         </div>
                       </div>
@@ -1177,12 +1592,11 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   );
                 })()}
 
-                {/* 3. New Password Input */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                       <KeyRound className="w-3.5 h-3.5 text-amber-600" />
-                      <span>নতুন পাসওয়ার্ড দিন (New Password) <span className="text-red-500">*</span></span>
+                      <span>New Password / PIN <span className="text-red-500">*</span></span>
                     </label>
                     <button
                       type="button"
@@ -1190,10 +1604,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                         const randomPin = String(Math.floor(1000 + Math.random() * 9000));
                         setNewPasswordInput(randomPin);
                       }}
-                      className="text-xs font-bold text-amber-700 hover:text-amber-800 cursor-pointer flex items-center gap-1"
+                      className="text-xs font-bold text-amber-700 hover:text-amber-800 cursor-pointer flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200"
                     >
                       <Sparkles className="w-3 h-3 text-amber-600" />
-                      <span>Generate 4-Digit PIN</span>
+                      <span>Auto 4-Digit PIN</span>
                     </button>
                   </div>
 
@@ -1203,7 +1617,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       required
                       value={newPasswordInput}
                       onChange={(e) => setNewPasswordInput(e.target.value)}
-                      placeholder="নতুন পাসওয়ার্ড লিখুন (যেমন: 0000, 1234, ইত্যাদি)"
+                      placeholder="Enter new Password or PIN (e.g. 0000, 1234)"
                       className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 font-mono tracking-wider focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all"
                     />
                     <button
@@ -1216,25 +1630,24 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   </div>
                 </div>
 
-                {/* Quick Presets Buttons */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                    দ্রুত পাসওয়ার্ড নির্বাচন (Quick Preset PINs)
+                    Quick Preset PINs
                   </label>
                   <div className="grid grid-cols-4 gap-2">
                     {[
-                      { label: '0000 (Worker)', val: '0000' },
-                      { label: '1234 (Standard)', val: '1234' },
-                      { label: '6293 (Admin)', val: '6293' },
-                      { label: '8899 (Custom)', val: '8899' },
+                      { label: '0000', val: '0000' },
+                      { label: '1234', val: '1234' },
+                      { label: '6293', val: '6293' },
+                      { label: '8899', val: '8899' },
                     ].map(preset => (
                       <button
                         key={preset.val}
                         type="button"
                         onClick={() => setNewPasswordInput(preset.val)}
-                        className={`py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-all cursor-pointer text-center ${
+                        className={`py-2 px-2 rounded-xl text-xs font-mono font-bold border transition-all cursor-pointer text-center ${
                           newPasswordInput === preset.val
-                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs'
                             : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                         }`}
                       >
@@ -1244,21 +1657,20 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   </div>
                 </div>
 
-                {/* Submit Action Button */}
                 <button
                   type="submit"
                   disabled={loading || !selectedChangeUserId || !newPasswordInput.trim()}
-                  className="w-full py-3 px-4 rounded-xl text-white font-bold text-sm bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 shadow-md shadow-amber-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full py-3.5 px-4 rounded-xl text-white font-black text-sm bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 shadow-md shadow-amber-600/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">
                       <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                      <span>আপডেট হচ্ছে...</span>
+                      <span>Updating...</span>
                     </span>
                   ) : (
                     <>
                       <Save className="w-4 h-4" />
-                      <span>Update Password (পাসওয়ার্ড সংরক্ষণ করুন)</span>
+                      <span>Update Password / PIN</span>
                     </>
                   )}
                 </button>
@@ -1267,17 +1679,41 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600 px-6">
-          <span>
-            Active: <strong>{users.filter(u => u.status !== 'hold').length}</strong> | On Hold: <strong>{users.filter(u => u.status === 'hold').length}</strong>
-          </span>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors cursor-pointer text-xs"
-          >
-            Close
-          </button>
+        {/* Compact Footer */}
+        <div className="py-2.5 px-4 bg-white border-t border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0">
+          <div className="flex items-center gap-2.5 font-medium flex-wrap">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              <span>Workers: <strong>{workerCount}</strong></span>
+            </span>
+            <span className="text-slate-300">|</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-purple-500" />
+              <span>Agency: <strong>{agencyCount}</strong></span>
+            </span>
+            <span className="text-slate-300">|</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Admins: <strong>{adminCount}</strong></span>
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {activeTab !== 'hub' && (
+              <button
+                type="button"
+                onClick={() => navigateToOption('hub')}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl transition-colors cursor-pointer text-xs"
+              >
+                ← All Options
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-colors cursor-pointer text-xs"
+            >
+              Close
+            </button>
+          </div>
         </div>
 
         {/* ========================================================================= */}
@@ -1295,7 +1731,6 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-150"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header */}
               <div className={`px-5 py-4 flex items-center justify-between text-white ${
                 isAdminAccount(userToDelete) ? 'bg-gradient-to-r from-red-600 to-rose-700' : 'bg-gradient-to-r from-slate-800 to-slate-900'
               }`}>
@@ -1306,8 +1741,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   <div>
                     <h3 className="font-black text-sm tracking-wide">
                       {isAdminAccount(userToDelete)
-                        ? 'এডমিন একাউন্ট ডিলিট নিশ্চিতকরণ'
-                        : 'ইউজার একাউন্ট ডিলিট নিশ্চিতকরণ'}
+                        ? 'Confirm Admin Account Deletion'
+                        : 'Confirm User Account Deletion'}
                     </h3>
                     <p className="text-[11px] text-white/80 font-mono">
                       ID: {userToDelete.idNo} • {userToDelete.role.toUpperCase()}
@@ -1326,39 +1761,37 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </button>
               </div>
 
-              {/* Body */}
               <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
                 {isAdminAccount(userToDelete) ? (
                   <div className="p-3.5 bg-red-50 border-l-4 border-red-600 rounded-r-xl space-y-1">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-red-900">
                       <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                      <span>প্রশাসনিক নিরাপত্তা নীতিমালা সক্রিয়</span>
+                      <span>Administrative Security Policy Active</span>
                     </div>
                     <p className="text-xs text-red-700 leading-relaxed">
-                      এডমিন একাউন্ট ডিলিট করার ফলে এই ইউজারের প্রশাসনিক অনুমতি সম্পূর্ণ বাতিল হয়ে যাবে। অসাবধানতাবশত ডিলিট রোধে কারণ এবং আইডি নিশ্চিতকরণ বাধ্যতামূলক।
+                      Deleting an Admin account permanently revokes all administrative privileges. ID confirmation and reason are required.
                     </p>
                   </div>
                 ) : (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <span>
-                      এই ইউজার আইডি মুছে ফেললে লাইনম্যান আর কখনো এই আইডি দিয়ে লগইন করতে পারবে না।
+                      Deleting this User ID will permanently prevent this user from signing in with these credentials.
                     </span>
                   </div>
                 )}
 
-                {/* User Summary Box */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs space-y-1.5">
                   <div className="flex justify-between items-center pb-1.5 border-b border-slate-200">
-                    <span className="text-slate-500 font-medium">ব্যবহারকারীর নাম:</span>
+                    <span className="text-slate-500 font-medium">User Name:</span>
                     <span className="font-bold text-slate-900">{userToDelete.name}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">ইউজার আইডি (ID No):</span>
+                    <span className="text-slate-500">User ID (ID No):</span>
                     <span className="font-mono font-bold text-slate-900">{userToDelete.idNo}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">পদবী (Role):</span>
+                    <span className="text-slate-500">Role / Designation:</span>
                     <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
                       isAdminAccount(userToDelete) ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
                     }`}>
@@ -1367,18 +1800,17 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   </div>
                   {userToDelete.phone && (
                     <div className="flex justify-between items-center">
-                      <span className="text-slate-500">ফোন নম্বর:</span>
+                      <span className="text-slate-500">Phone Number:</span>
                       <span className="font-mono text-slate-800">{userToDelete.phone}</span>
                     </div>
                   )}
                 </div>
 
-                {/* Mandatory Inputs for Admin Role */}
                 {isAdminAccount(userToDelete) ? (
                   <div className="space-y-3 pt-1">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ১. নিশ্চিত করতে টাইপ করুন "{userToDelete.idNo}" অথবা "DELETE":
+                        1. Type "{userToDelete.idNo}" or "DELETE" to confirm:
                         <span className="text-red-500 ml-1">*</span>
                       </label>
                       <input
@@ -1392,14 +1824,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ২. ডিলিট করার প্রশাসনিক কারণ লিখুন:
+                        2. Reason for deletion:
                         <span className="text-red-500 ml-1">*</span>
                       </label>
                       <input
                         type="text"
                         value={userDeleteReason}
                         onChange={(e) => setUserDeleteReason(e.target.value)}
-                        placeholder="যেমন: লাইনম্যান স্থানান্তর / পদত্যাগ"
+                        placeholder="e.g. Role transfer / Resignation"
                         className="w-full px-3 py-2 border border-slate-300 focus:border-red-500 rounded-xl text-xs outline-none bg-white text-slate-800"
                       />
                     </div>
@@ -1412,7 +1844,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                         className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-4 w-4 border-slate-300 cursor-pointer"
                       />
                       <span className="text-xs text-slate-700 font-medium">
-                        আমি নিশ্চিত যে এই এডমিন অ্যাকাউন্টটির সমস্ত অ্যাক্সেস স্থায়ীভাবে বাতিল করতে চাই।
+                        I confirm that I want to permanently revoke all access for this Admin account.
                       </span>
                     </label>
                   </div>
@@ -1426,25 +1858,23 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                         className="mt-0.5 rounded text-slate-900 focus:ring-slate-700 h-4 w-4 border-slate-300 cursor-pointer"
                       />
                       <span className="text-xs text-slate-700 font-medium">
-                        আমি নিশ্চিত যে "{userToDelete.name}" (ID: {userToDelete.idNo}) এর অ্যাকাউন্ট মুছে ফেলতে চাই।
+                        I confirm that I want to delete the account for "{userToDelete.name}" (ID: {userToDelete.idNo}).
                       </span>
                     </label>
                   </div>
                 )}
 
-                {/* Server-Side Validation Error Display */}
                 {userDeleteError && (
                   <div className="p-3 bg-red-100 border border-red-300 rounded-xl flex items-start gap-2 text-xs text-red-900 font-medium animate-in shake-1 duration-150">
                     <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                     <div>
-                      <span className="font-bold">সার্ভার ভ্যালিডেশন ত্রুটি: </span>
+                      <span className="font-bold">Validation Error: </span>
                       <span>{userDeleteError}</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Actions */}
               <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2.5">
                 <button
                   type="button"
@@ -1452,7 +1882,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   disabled={isDeletingUser}
                   className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  বাতিল
+                  Cancel
                 </button>
 
                 <button
@@ -1476,12 +1906,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                   {isDeletingUser ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>মুছে ফেলা হচ্ছে...</span>
+                      <span>Deleting...</span>
                     </>
                   ) : (
                     <>
                       <Trash2 className="w-3.5 h-3.5" />
-                      <span>ডিলিট নিশ্চিত করুন</span>
+                      <span>Confirm Delete</span>
                     </>
                   )}
                 </button>
