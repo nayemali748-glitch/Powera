@@ -555,7 +555,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Last Updated': nowIso
       })
         .then(res => {
-          if (res && res.imageUrl && res.imageUrl.startsWith('http')) {
+          if (res && res.imageUrl && res.imageUrl.startsWith('http') && !res.imageUrl.includes('/api/stored-images/')) {
             onUpdateSuccess({
               ...updatedTaskObj,
               photoUrl: res.imageUrl,

@@ -275,14 +275,29 @@ function saveUploadedPhotoLinksToDisk() {
 
 async function convertDataUrlToClickablePhotoLink(val: string, recordKeyHint = ''): Promise<string> {
   if (!val || typeof val !== 'string') return '';
-  const trimmed = val.trim();
+  let trimmed = val.trim();
   if (!trimmed) return '';
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+
+  // If this is a stored-images URL (relative or absolute), resolve the underlying data: URL from largeImagesMap
+  if (trimmed.includes('/api/stored-images/')) {
+    const rawKey = decodeURIComponent(trimmed.split('/api/stored-images/')[1]?.split('?')[0] || '').trim();
+    const hashSuffix = rawKey.includes('_') ? rawKey.split('_').pop() || '' : rawKey;
+    if (hashSuffix) {
+      const existingLink = uploadedPhotoLinksMap.get(hashSuffix);
+      if (existingLink && existingLink.startsWith('https://') && !existingLink.includes('/api/stored-images/')) {
+        return existingLink;
+      }
+    }
+    const storedData = rawKey ? largeImagesMap.get(rawKey) : undefined;
+    if (storedData && storedData.startsWith('data:')) {
+      trimmed = storedData;
+    } else {
+      return `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(rawKey)}`;
+    }
+  } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
-  if (trimmed.startsWith('/api/stored-images/')) {
-    return `${PUBLIC_APP_BASE_URL}${trimmed}`;
-  }
+
   if (!trimmed.startsWith('data:')) {
     return trimmed;
   }
@@ -295,19 +310,21 @@ async function convertDataUrlToClickablePhotoLink(val: string, recordKeyHint = '
   saveLargeImagesToDisk();
 
   const cachedPublicUrl = uploadedPhotoLinksMap.get(imgHash);
-  if (cachedPublicUrl && cachedPublicUrl.startsWith('https://')) {
+  if (cachedPublicUrl && cachedPublicUrl.startsWith('https://') && !cachedPublicUrl.includes('/api/stored-images/')) {
     return cachedPublicUrl;
   }
 
-  try {
-    const base64Clean = trimmed.includes(';base64,')
-      ? trimmed.split(';base64,')[1]
-      : trimmed.replace(/^data:[^,]+,/, '');
-    if (base64Clean && base64Clean.length > 20) {
+  const base64Clean = trimmed.includes(';base64,')
+    ? trimmed.split(';base64,')[1]
+    : trimmed.replace(/^data:[^,]+,/, '');
+
+  if (base64Clean && base64Clean.length > 20) {
+    // Primary upload: freeimage.host
+    try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         try { controller.abort(); } catch {}
-      }, 18000);
+      }, 15000);
       const form = new FormData();
       form.append('key', '6d207e02198a847aa98d0a2a901485a5');
       form.append('action', 'upload');
@@ -328,9 +345,41 @@ async function convertDataUrlToClickablePhotoLink(val: string, recordKeyHint = '
           return directUrl;
         }
       }
+    } catch (err) {
+      console.warn('[Photo Link Upload] Primary host notice:', (err as any)?.message || err);
     }
-  } catch (err) {
-    console.warn('[Photo Link Upload] Fallback to server stored-images URL:', (err as any)?.message || err);
+
+    // Secondary fallback upload: catbox.moe
+    try {
+      const controller2 = new AbortController();
+      const timeoutId2 = setTimeout(() => {
+        try { controller2.abort(); } catch {}
+      }, 15000);
+      const mimeMatch = trimmed.match(/^data:([^;]+);base64,/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+      const ext = mimeType.includes('png') ? 'png' : 'jpg';
+      const buffer = Buffer.from(base64Clean, 'base64');
+      const blob = new Blob([buffer], { type: mimeType });
+      const form2 = new FormData();
+      form2.append('reqtype', 'fileupload');
+      form2.append('fileToUpload', blob, `photo_${imgHash}.${ext}`);
+      const res2 = await fetch('https://catbox.moe/user/api.php', {
+        method: 'POST',
+        body: form2,
+        signal: controller2.signal
+      });
+      clearTimeout(timeoutId2);
+      if (res2.ok) {
+        const textUrl = (await res2.text()).trim();
+        if (textUrl && textUrl.startsWith('https://')) {
+          uploadedPhotoLinksMap.set(imgHash, textUrl);
+          saveUploadedPhotoLinksToDisk();
+          return textUrl;
+        }
+      }
+    } catch (err2) {
+      console.warn('[Photo Link Upload] Secondary host notice:', (err2 as any)?.message || err2);
+    }
   }
 
   return `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
@@ -347,10 +396,8 @@ async function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): Promis
   for (const [k, v] of Object.entries(clone)) {
     if (typeof v === 'string') {
       const trimmedV = v.trim();
-      if (trimmedV.startsWith('data:image/') || (trimmedV.startsWith('data:') && trimmedV.length > 200)) {
+      if (trimmedV.startsWith('data:image/') || (trimmedV.startsWith('data:') && trimmedV.length > 200) || trimmedV.includes('/api/stored-images/')) {
         clone[k] = await convertDataUrlToClickablePhotoLink(trimmedV, `${recId}_${k}`);
-      } else if (trimmedV.startsWith('/api/stored-images/')) {
-        clone[k] = `${PUBLIC_APP_BASE_URL}${trimmedV}`;
       } else if (v.length > 45000) {
         clone[k] = v.slice(0, 45000);
       }
@@ -358,6 +405,7 @@ async function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): Promis
       clone[k] = await sanitizeObjectForSheetCells(v, recId);
     }
   }
+  delete clone.photoDataUrl;
 
   // Ensure all Google Sheet photo column aliases receive the clickable https:// photo link
   const mainPhotoLink = String(clone.photoUrl || clone.Image || clone.image || clone['Photo Evidence'] || clone.directImageUrl || '').trim();
@@ -4579,13 +4627,14 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
 
   if (!isValidDisconnectionConsumerRow(mergedSource)) return false;
 
-  const rawImgVal = String(mergedSource.photoUrl || mergedSource['Image'] || mergedSource.image || mergedSource.photoDataUrl || '').trim();
-  if (rawImgVal && (rawImgVal.startsWith('data:') || rawImgVal.startsWith('/api/stored-images/'))) {
+  const rawImgVal = String(mergedSource.photoDataUrl || mergedSource.photoUrl || mergedSource['Image'] || mergedSource.image || '').trim();
+  if (rawImgVal && (rawImgVal.startsWith('data:') || rawImgVal.includes('/api/stored-images/'))) {
     const clickablePhotoUrl = await convertDataUrlToClickablePhotoLink(rawImgVal, rawCId);
     mergedSource.photoUrl = clickablePhotoUrl;
     mergedSource.imageUrl = clickablePhotoUrl;
     mergedSource.image = clickablePhotoUrl;
     mergedSource['Image'] = clickablePhotoUrl;
+    delete mergedSource.photoDataUrl;
     if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
       const idx = cachedDisconnectionState.tasks.findIndex(
         (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
@@ -5432,13 +5481,8 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       : String(existingTask.photoUrl ?? existingTask['Image'] ?? '').trim();
 
   let updatedImage = rawUpdatedImage;
-  if (rawUpdatedImage && rawUpdatedImage.startsWith('data:')) {
-    const imgHash = crypto.createHash('sha1').update(rawUpdatedImage).digest('hex').slice(0, 16);
-    const safeHint = String(cId || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
-    const imgKey = `${safeHint}_${imgHash}`;
-    largeImagesMap.set(imgKey, rawUpdatedImage);
-    saveLargeImagesToDisk();
-    updatedImage = uploadedPhotoLinksMap.get(imgHash) || `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+  if (rawUpdatedImage && (rawUpdatedImage.startsWith('data:') || rawUpdatedImage.includes('/api/stored-images/'))) {
+    updatedImage = await convertDataUrlToClickablePhotoLink(rawUpdatedImage, cId);
   }
 
   const effectiveHistoryDate = (newStatus === 'PAID' && updatedPaidDate) ? updatedPaidDate : (updatedDisconDate || dateStr);
