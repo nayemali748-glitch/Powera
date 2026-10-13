@@ -277,8 +277,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   }, []);
 
   // Fast Non-Blocking Data Fetch & Background Sync (Preserves canonical Consumer ID order & serial numbers across Admin and Worker)
-  const loadData = useCallback(async (showRefreshingSpinner = false) => {
-    if (inFlightRef.current && !showRefreshingSpinner) return;
+  const loadData = useCallback(async (showRefreshingSpinner = false, forceSheetRefresh = false) => {
+    if (inFlightRef.current && !showRefreshingSpinner && !forceSheetRefresh) return;
     inFlightRef.current = true;
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
@@ -290,7 +290,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         role: currentUser?.role,
         workerId: currentUser?.idNo,
         workerName: currentUser?.name,
-        refresh: showRefreshingSpinner
+        refresh: showRefreshingSpinner || forceSheetRefresh
       });
 
       if (discResult && Array.isArray(discResult.tasks)) {
@@ -314,6 +314,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             cleanIncoming.some((item, idx) => {
               const p = prev[idx];
               if (!p) return true;
+              const itemAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim();
+              const prevAgency = String((p as any)['Agency'] || p.Agency || p.agency || p.assignedAgency || '').trim();
               return (
                 item.consumerId !== p.consumerId ||
                 item.serialNumber !== p.serialNumber ||
@@ -324,11 +326,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 item.reissueRequested !== p.reissueRequested ||
                 item.reissueApproved !== p.reissueApproved ||
                 item.reissueRejected !== p.reissueRejected ||
+                itemAgency !== prevAgency ||
                 item.assignedAgency !== p.assignedAgency ||
                 item.assignedWorkerName !== p.assignedWorkerName ||
                 item.outstandingDue !== p.outstandingDue ||
                 item.meterNumber !== p.meterNumber ||
-                item.deviceType !== p.deviceType
+                item.deviceType !== p.deviceType ||
+                item.photoUrl !== p.photoUrl
               );
             });
 
@@ -376,6 +380,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           cleanIncoming.some((item, idx) => {
             const p = prev[idx];
             if (!p) return true;
+            const itemAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim();
+            const prevAgency = String((p as any)['Agency'] || p.Agency || p.agency || p.assignedAgency || '').trim();
             return (
               item.consumerId !== p.consumerId ||
               item.serialNumber !== p.serialNumber ||
@@ -386,11 +392,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               item.reissueRequested !== p.reissueRequested ||
               item.reissueApproved !== p.reissueApproved ||
               item.reissueRejected !== p.reissueRejected ||
+              itemAgency !== prevAgency ||
               item.assignedAgency !== p.assignedAgency ||
               item.assignedWorkerName !== p.assignedWorkerName ||
               item.outstandingDue !== p.outstandingDue ||
               item.meterNumber !== p.meterNumber ||
-              item.deviceType !== p.deviceType
+              item.deviceType !== p.deviceType ||
+              item.photoUrl !== p.photoUrl
             );
           });
         return hasChanged ? cleanIncoming : prev;
@@ -423,10 +431,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
   // Initial load when component mounts + background sync + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
-    loadData(false);
+    loadData(false, true);
     const interval = setInterval(() => {
       if (!document.hidden && !inFlightRef.current) {
-        loadData(true);
+        loadData(true, false);
       }
     }, 8000);
     const onGlobalRefresh = () => {

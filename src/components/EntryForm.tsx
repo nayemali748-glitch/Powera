@@ -32,7 +32,7 @@ import {
   Eye
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { CategoryType, PowerEntry, UserSession, WorkOrderNotice } from '../types';
+import { CategoryType, PowerEntry, UserSession, WorkOrderNotice, DisconnectionTask } from '../types';
 import { createEntry, fetchWorkOrders } from '../services/api';
 import { appendEntryToGoogleSheet } from '../services/googleSheets';
 import { Language, translations } from '../utils/translations';
@@ -52,6 +52,7 @@ interface EntryFormProps {
   currentUser?: UserSession | null;
   initialNotice?: WorkOrderNotice | null;
   availableWorkOrders?: WorkOrderNotice[];
+  disconnectionTasks?: DisconnectionTask[];
 }
 
 export const EntryForm: React.FC<EntryFormProps> = ({
@@ -64,6 +65,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   currentUser,
   initialNotice,
   availableWorkOrders,
+  disconnectionTasks,
 }) => {
   const t = translations[lang] || translations.en;
 
@@ -589,7 +591,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
         currentUser={currentUser}
         lang={lang}
         onBack={onBack}
-        onDataUpdated={onDataUpdated}
+        externalTasks={disconnectionTasks}
       />
     );
   }

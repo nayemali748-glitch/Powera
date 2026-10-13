@@ -1067,9 +1067,24 @@ async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | nul
 }
 
 async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]> {
+  if (forceRefresh) {
+    gasCache.delete('entries:{"category":"Users"}');
+    gasCache.delete('entries_{"category":"Users"}');
+    try {
+      const fresh = await Promise.race([
+        refreshVerifiedUsersFromSheetNow(),
+        new Promise<any[]>(resolve =>
+          setTimeout(() => resolve(cachedUsersState?.users || []), 6000)
+        )
+      ]);
+      if (Array.isArray(fresh) && fresh.length > 0) {
+        return fresh;
+      }
+    } catch {}
+  }
   if (cachedUsersState && Array.isArray(cachedUsersState.users) && cachedUsersState.users.length > 0) {
     const isExpired = Date.now() - cachedUsersState.timestamp >= USERS_STATE_TTL_MS;
-    if ((forceRefresh || isExpired) && !isRefreshingUsersInBg) {
+    if (isExpired && !isRefreshingUsersInBg) {
       isRefreshingUsersInBg = true;
       (async () => {
         try {
@@ -1133,9 +1148,9 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
       );
       const isRecentLocal = Boolean(localU._localSavedAt) && (Date.now() - Number(localU._localSavedAt) < 600000);
 
-      if (!existingByRowId && !existingByIdNo) {
+      if (!existingByRowId && !existingByIdNo && isRecentLocal) {
         userMap.set(lId || `usr_${localU.idNo}`, localU);
-      } else if (isRecentLocal) {
+      } else if (isRecentLocal && (existingByRowId || existingByIdNo)) {
         const keyToUpdate = existingByRowId ? lId : String(existingByIdNo.id || lId);
         userMap.set(keyToUpdate, { ...(existingByRowId || existingByIdNo), ...localU });
       }
@@ -4282,7 +4297,13 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
     cccFeeder: mru,
     disconnectionReason: `Outstanding Bill (D2 Net O/S: ${outstandingDue})`,
     assignedWorkerId: String(entry.workerId || entry.assignedWorkerId || entry['Worker ID'] || '').trim(),
-    assignedWorkerName: String(entry.workerName || entry.assignedWorkerName || entry['Worker Name'] || '').trim(),
+    assignedWorkerName: String(
+      (entry.assignedWorkerName && entry.assignedWorkerName !== 'Worker' ? entry.assignedWorkerName : '') ||
+      (entry.workerName && entry.workerName !== 'Worker' ? entry.workerName : '') ||
+      (entry['Worker Name'] && entry['Worker Name'] !== 'Worker' ? entry['Worker Name'] : '') ||
+      agency ||
+      ''
+    ).trim(),
     assignedAgency: agency,
     agency,
     status,
@@ -4569,7 +4590,7 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
         reissueRejected = false;
         rawNotes = cleanBaseNotes;
       }
-    } else if (isInitialPending && rawSt !== 'REISSUE') {
+    } else if (isInitialPending) {
       // Consumer is back to initial Connected/Pending state -> clear any stale reissue flags
       reissueRequested = false;
       reissueApproved = false;
@@ -4784,18 +4805,6 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
       const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
       const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
 
-      // Repair any sheet rows where Discon Status is PAID but Payment Status was left as PENDING (or vice-versa)
-      validRawTasks.forEach((rawT, idx) => {
-        const conv = convertedList[idx];
-        const rawPaySt = String(rawT['Payment Status'] ?? rawT.paymentStatus ?? '').trim().toUpperCase();
-        const expectedPaySt = conv.status === 'PAID' ? 'PAID' : 'PENDING';
-        if (conv.status === 'PAID' && rawPaySt !== 'PAID') {
-          enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(conv)).catch(() => {});
-        } else if (conv.status !== 'PAID' && rawPaySt === 'PAID') {
-          enqueueGasWrite(() => syncSingleDisconnectionRowToSheet(conv)).catch(() => {});
-        }
-      });
-
       const merged = mergeSheetDisconnectionTasksWithOverlay(convertedList);
       cachedDisconnectionState = {
         tasks: merged,
@@ -4967,9 +4976,18 @@ function buildComplete33ColumnPayload(t: any): Record<string, any> {
   const reading = String(t['Reading'] ?? t.reading ?? t.meterReading ?? '').trim();
   const image = String(t['Image'] ?? t.image ?? t.photoUrl ?? '').trim();
   const paymentStatus = status === 'PAID' ? 'PAID' : 'PENDING';
-  const gisPole = String(t['Gis Pole'] ?? t.gisPole ?? t.poleNo ?? '').trim();
-  const agency = String(t['Agency'] ?? t.agency ?? t.assignedAgency ?? '').trim();
-  const natureOfConn = String(t['Nature of Conn'] ?? t.natureOfConn ?? '').trim();
+  const gisPole = String(t['Gis Pole'] || t.gisPole || t.poleNo || '').trim();
+  const agency = String(
+    t['Agency'] ||
+    t.Agency ||
+    t.agency ||
+    t.assignedAgency ||
+    t['Agency Name'] ||
+    (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') ||
+    (t.workerName && t.workerName !== 'Worker' ? t.workerName : '') ||
+    ''
+  ).trim();
+  const natureOfConn = String(t['Nature of Conn'] || t.natureOfConn || '').trim();
   const govNonGov = String(t['Gov/Non-Gov'] ?? t.govNonGov ?? '').trim();
   const lastUpdated = String(t['Last Updated'] ?? t.lastUpdated ?? t.updatedAt ?? '').trim();
   const priority = String(t['Priority'] ?? t.priority ?? '').trim();
@@ -5695,24 +5713,45 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
 app.post('/api/disconnection-tasks/assign', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const cId = String(req.body?.consumerId || req.body?.['Consumer Id'] || req.body?.taskId || '').replace(/^TASK-DISC-/i, '').trim();
-    const agency = String(req.body?.assignedAgency || req.body?.agency || req.body?.workerName || '').trim();
-    const cIdKey = cId.toLowerCase();
-    if (cIdKey) {
-      const existing = cachedDisconnectionState?.tasks?.find((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey) || localDisconnectionOverlayMap.get(cIdKey);
+    const rawIds: string[] = Array.isArray(req.body?.consumerIds)
+      ? req.body.consumerIds
+      : [req.body?.consumerId || req.body?.['Consumer Id'] || req.body?.taskId || ''];
+    const cleanIds = rawIds
+      .map(v => String(v || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim())
+      .filter(Boolean);
+    const agency = String(req.body?.assignedAgency ?? req.body?.agency ?? req.body?.workerName ?? '').trim();
+    const workerId = String(req.body?.workerId || '').trim();
+    const nowIso = new Date().toISOString();
+
+    for (const cId of cleanIds) {
+      const cIdKey = cId.toLowerCase();
+      if (!cIdKey) continue;
+      const existing =
+        cachedDisconnectionState?.tasks?.find(
+          (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+        ) || localDisconnectionOverlayMap.get(cIdKey);
       if (existing) {
         const updated = {
           ...existing,
           assignedAgency: agency,
           agency: agency,
           'Agency': agency,
-          assignedWorkerId: String(req.body?.workerId || existing.assignedWorkerId || ''),
-          assignedWorkerName: String(req.body?.workerName || agency || existing.assignedWorkerName || ''),
+          assignedWorkerId: workerId || existing.assignedWorkerId || '',
+          assignedWorkerName: agency || existing.assignedWorkerName || '',
+          lastUpdated: nowIso,
+          'Last Updated': nowIso,
           _localUpdatedAt: Date.now(),
           _syncedToSheet: false
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
-        saveDiscOverlayToDisk();
+        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+          const idx = cachedDisconnectionState.tasks.findIndex(
+            (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+          );
+          if (idx !== -1) {
+            cachedDisconnectionState.tasks[idx] = updated;
+          }
+        }
         enqueueGasWrite(async () => {
           const synced = await syncSingleDisconnectionRowToSheet(updated);
           if (synced) {
@@ -5724,8 +5763,20 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
         }).catch(() => {});
       }
     }
+
+    saveDiscOverlayToDisk();
+    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+      try {
+        fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8');
+      } catch {}
+    }
     gasCache.clear();
-    return res.json({ success: true });
+    const mergedList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+    return res.json({
+      success: true,
+      assignedCount: cleanIds.length,
+      tasks: mergedList
+    });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to assign task' });
   }

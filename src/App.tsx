@@ -81,7 +81,8 @@ function computeJsonChangeHash(data: unknown): string {
   for (let i = 0; i < data.length; i++) {
     const item = data[i];
     if (item) {
-      sig += `|${item.id || item.consumerId || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${item.assignedAgency || ''}:${item.reissueRequested ? '1' : '0'}:${item.reissueApproved ? '1' : '0'}:${item.reissueRejected ? '1' : '0'}:${item.updatedAt || item.date || ''}`;
+      const agencyVal = item['Agency'] || item.Agency || item.agency || item.assignedAgency || item.agencyName || '';
+      sig += `|${item.id || item.consumerId || item['Consumer Id'] || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${agencyVal}:${item.assignedWorkerName || ''}:${item.photoUrl || item['Image'] || ''}:${item.reissueRequested ? '1' : '0'}:${item.reissueApproved ? '1' : '0'}:${item.reissueRejected ? '1' : '0'}:${item.updatedAt || item.date || ''}`;
     }
   }
   return sig;
@@ -273,7 +274,8 @@ export default function App() {
       localStorage.setItem('power_sync_mode', 'auto');
     } catch {}
 
-    loadData(false);
+    lastDataHashRef.current = '';
+    loadData(false, true);
 
     // Single active 10-second background timer per authenticated app session (POWER APP & SHEETS REFRESH)
     const interval = setInterval(() => {
@@ -297,7 +299,7 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [currentUser?.idNo]);
+  }, [currentUser?.idNo, currentUser?.name, currentUser?.role]);
 
   const handleToggleSyncMode = (_mode: SyncMode) => {
     setSyncMode('auto');
@@ -328,7 +330,10 @@ export default function App() {
       // 1. Safely invalidate stale app-side cached data while preserving login/session
       try {
         localStorage.removeItem('power_entries_local_cache_v1');
+        localStorage.removeItem('power_app_entries_cache');
+        localStorage.removeItem('power_disconnection_tasks_cache');
         localStorage.removeItem('power_disconnection_tasks_cache_v2');
+        localStorage.removeItem('power_disconnection_client_overlay_v1');
         localStorage.removeItem('power_work_orders_local_v1');
       } catch {}
       lastDataHashRef.current = '';
@@ -951,7 +956,7 @@ export default function App() {
                               <div className="hidden sm:flex items-center gap-2 text-xs">
                                 <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-slate-200 text-center">
                                   <span className="text-[10px] text-slate-400 block leading-tight">Total</span>
-                                  <strong className="text-white font-bold">{entries.length}</strong>
+                                  <strong className="text-white font-bold">{entries.length + userVisibleDisconnectionTasks.length}</strong>
                                 </div>
                                 <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-emerald-300 text-center">
                                   <span className="text-[10px] text-slate-400 block leading-tight">Status</span>
@@ -1136,6 +1141,7 @@ export default function App() {
                         currentUser={currentUser}
                         initialNotice={selectedWorkOrderForEntry}
                         availableWorkOrders={workOrders}
+                        disconnectionTasks={disconnectionTasks}
                         onSuccess={(newEntry) => {
                           handleEntrySuccess(newEntry);
                           setSelectedWorkOrderForEntry(null);
@@ -1144,7 +1150,7 @@ export default function App() {
                           setActiveFormCategory(null);
                           setSelectedWorkOrderForEntry(null);
                         }}
-                        onDataUpdated={() => loadData(false)}
+                        onDataUpdated={() => loadData(false, true)}
                         lang={currentLanguage}
                       />
 

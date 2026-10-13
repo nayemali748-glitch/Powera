@@ -1998,11 +1998,19 @@ export function mergeClientDisconnectionOverlay(tasks: DisconnectionTask[]): Dis
       if (!cId) return t;
       const ov = overlayMap[cId];
       if (!ov) return t;
-      return cleanDisconnectionTask({
+      const sheetAgency = String((t as any)['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim();
+      const merged: any = {
         ...t,
         ...ov,
         serialNumber: t.serialNumber || ov.serialNumber
-      });
+      };
+      if (sheetAgency && !ov._agencyExplicitlyUpdated) {
+        merged['Agency'] = sheetAgency;
+        merged.Agency = sheetAgency;
+        merged.agency = sheetAgency;
+        merged.assignedAgency = sheetAgency;
+      }
+      return cleanDisconnectionTask(merged);
     });
   } catch {
     return tasks;
@@ -2188,12 +2196,79 @@ export function cleanDisconnectionTask(t: any): DisconnectionTask {
 
   const effectiveStatus = reissueApproved ? 'REISSUE' : normalizedStatus;
 
+  const cId = String(
+    t.consumerId || t['Consumer Id'] || t['Consumer ID'] || t.accountNumber || t['Consumer No'] || ''
+  )
+    .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
+    .trim();
+  const cName = String(
+    t.consumerName || t['Name'] || t['Consumer Name'] || t.Name || t.name || t['Customer Name'] || ''
+  ).trim();
+  const cAddress = String(t.consumerAddress || t['Address'] || t.Address || t.address || '').trim();
+  const offCode = String(t.offCode ?? t['off_code'] ?? t.area ?? '').trim();
+  const mru = String(t.mru ?? t['MRU'] ?? t.mruSection ?? '').trim();
+  const baseClass = String(t.baseClass ?? t['Base Class'] ?? '').trim();
+  const classType = String(t.classType ?? t['Class'] ?? '').trim();
+  const device = String(t.device ?? t.deviceType ?? t['Device'] ?? t['BClass/Phase'] ?? '').trim();
+  const meterNum = String(
+    t.meterNumber || t['Number'] || t['Meter'] || t.meterNo || (device && device !== 'I' && device !== 'III' ? device : '') || ''
+  ).trim();
+  const dueDateRange = String(t.dueDateRange || t['O/S Duedate Range'] || t['O/S Due date Range'] || '').trim();
+  const outstandingDue = String(t.outstandingDue ?? t['D2 Net O/S'] ?? t.arrearAmount ?? '').trim();
+  const rawAgency = String(
+    t['Agency'] ||
+    t.Agency ||
+    t.agency ||
+    t.assignedAgency ||
+    t['Agency Name'] ||
+    (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') ||
+    (t.workerName && t.workerName !== 'Worker' ? t.workerName : '') ||
+    ''
+  ).trim();
+  const cleanWorkerName = String(
+    (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') ||
+    (t.workerName && t.workerName !== 'Worker' ? t.workerName : '') ||
+    rawAgency ||
+    ''
+  ).trim();
+
   return {
     ...t,
+    taskId: t.taskId || (cId ? `TASK-DISC-${cId}` : ''),
+    consumerId: cId || t.consumerId || '',
+    'Consumer Id': cId || t['Consumer Id'] || '',
+    consumerName: cName || t.consumerName || '',
+    Name: cName || t.Name || '',
+    consumerAddress: cAddress,
+    Address: cAddress,
+    offCode,
+    'off_code': offCode,
+    mru,
+    mruSection: mru,
+    'MRU': mru,
+    baseClass,
+    'Base Class': baseClass,
+    classType,
+    'Class': classType,
+    deviceType: device,
+    device,
+    'Device': device,
+    meterNumber: meterNum,
+    'Number': meterNum,
+    dueDateRange,
+    'O/S Duedate Range': dueDateRange,
+    outstandingDue,
+    'D2 Net O/S': outstandingDue,
+    Agency: rawAgency,
+    agency: rawAgency,
+    assignedAgency: rawAgency,
+    assignedWorkerName: cleanWorkerName,
+    workerName: cleanWorkerName,
     taskStatus: effectiveStatus as DisconnectionTaskStatus,
     disconStatus: effectiveStatus,
     'Discon Status': effectiveStatus,
     phoneNumber: phone || t.phoneNumber || '',
+    mobileNumber: phone || t.mobileNumber || '',
     workerRemarks: cleanRemarks,
     workerReport: cleanRemarks,
     notes: cleanRemarks,
@@ -2231,7 +2306,8 @@ export async function fetchDisconnectionTasks(params: {
     const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, {
       headers: { 'Accept': 'application/json' }
     });
-    if (res.ok) {
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.tasks)) {
         const validTasks = data.tasks.filter(isValidDisconnectionTaskOrRow);
@@ -2247,8 +2323,42 @@ export async function fetchDisconnectionTasks(params: {
       }
     }
   } catch (apiErr) {
-    console.warn('Disconnection tasks fetch fallback to cache:', apiErr);
+    console.warn('Disconnection tasks fetch fallback to direct Google Sheet:', apiErr);
   }
+
+  // Step 2: Direct Google Apps Script Web App fallback (works on static/serverless hosting)
+  try {
+    const gasRes = await callGasApi<any>('entries', { category: 'Disconnection' }, 'GET', 25000);
+    const rawArr = Array.isArray(gasRes?.entries)
+      ? gasRes.entries
+      : Array.isArray(gasRes?.data?.entries)
+      ? gasRes.data.entries
+      : Array.isArray(gasRes?.data)
+      ? gasRes.data
+      : Array.isArray(gasRes)
+      ? gasRes
+      : [];
+    if (rawArr.length > 0) {
+      const validTasks = rawArr.filter(isValidDisconnectionTaskOrRow);
+      const sorted = validTasks.slice().sort((a: any, b: any) => {
+        const idA = String(a['Consumer Id'] || a.consumerId || '').trim();
+        const idB = String(b['Consumer Id'] || b.consumerId || '').trim();
+        return idA.localeCompare(idB, undefined, { numeric: true });
+      });
+      const mappedList = sorted.map((t: any, idx: number) => ({
+        ...cleanDisconnectionTask(t),
+        serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+      }));
+      const cleaned = mergeClientDisconnectionOverlay(mappedList);
+      if (!params.search && (!params.status || params.status === 'ALL')) {
+        setCachedDisconnectionTasksSync(cleaned);
+      }
+      return { tasks: cleaned, stats: computeStats(cleaned) };
+    }
+  } catch (gasErr) {
+    console.warn('Direct GAS Disconnection fetch notice:', gasErr);
+  }
+
   const fallback = getCachedDisconnectionTasksSync();
   return {
     tasks: fallback,
@@ -2731,6 +2841,7 @@ export async function assignDisconnectionTasksBatch(
         assignedWorkerId: cleanWId,
         'Worker ID': cleanWId,
         'Worker Name': cleanWName,
+        _agencyExplicitlyUpdated: true,
         updatedAt: nowIso,
         lastUpdated: nowIso,
         'Last Updated': nowIso
@@ -2768,9 +2879,12 @@ export async function assignDisconnectionTasksBatch(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         consumerIds: cleanIds,
+        consumerId: cleanIds[0] || '',
         taskIds: cleanIds.map(id => `TASK-DISC-${id}`),
         workerId: cleanWId,
-        workerName: cleanWName
+        workerName: cleanWName,
+        agency: cleanWName,
+        assignedAgency: cleanWName
       })
     });
     if (res.ok) {
@@ -2785,13 +2899,30 @@ export async function assignDisconnectionTasksBatch(
   } catch {}
 
   try {
-    await callGasApi('assignDisconnectionTask', {
-      consumerIds: cleanIds,
-      taskId: cleanIds[0] ? `TASK-DISC-${cleanIds[0]}` : '',
-      workerId: cleanWId,
-      workerName: cleanWName,
-      requestId: 'REQ-ASG-' + Date.now()
-    }, 'POST');
+    for (const cId of cleanIds) {
+      const discId = `PWR-DIS-${cId}`;
+      await callGasApi('updateEntry', {
+        id: discId,
+        submissionId: discId,
+        consumerId: cId,
+        'Consumer Id': cId,
+        category: 'Disconnection',
+        Agency: cleanWName || ' ',
+        agency: cleanWName || ' ',
+        assignedAgency: cleanWName || ' ',
+        workerName: cleanWName || ' ',
+        'Last Updated': nowIso,
+        data: {
+          consumerId: cId,
+          'Consumer Id': cId,
+          Agency: cleanWName || ' ',
+          agency: cleanWName || ' ',
+          assignedAgency: cleanWName || ' ',
+          workerName: cleanWName || ' ',
+          'Last Updated': nowIso
+        }
+      }, 'POST').catch(() => {});
+    }
   } catch {}
 
   return {

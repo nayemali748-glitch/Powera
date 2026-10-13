@@ -395,52 +395,95 @@ export function getReissueLockState(task: DisconnectionTask): {
  */
 export function doesTaskBelongToAgencyUser(
   task: DisconnectionTask,
-  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null
+  user?: { idNo?: string; name?: string; username?: string; agencyName?: string; role?: string; designation?: string } | null
 ): boolean {
   if (!task || !user) return false;
 
-  const rawTaskAgency = String(
-    (task as any)['Agency'] ??
-    task.Agency ??
-    task.agency ??
-    task.assignedAgency ??
-    ''
-  ).trim();
-
-  if (!rawTaskAgency) return false;
-
-  const normTaskAgency = cleanWorkerOrAgencyName(rawTaskAgency)
-    .toLowerCase()
-    .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
-    .trim();
-  const compactTaskAgency = normTaskAgency.replace(/\s+/g, '');
-  if (!compactTaskAgency) return false;
-
-  const rawUserName = String(user.name || user.username || '').trim();
-  const normUserName = cleanWorkerOrAgencyName(rawUserName)
-    .toLowerCase()
-    .replace(/^agency\s+/i, '')
-    .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
-    .trim();
-  const compactUserName = normUserName.replace(/\s+/g, '');
-
-  const rawUserId = String(user.idNo || '').trim().toLowerCase();
+  const rawUserId = String(user.idNo || (user as any).loginId || (user as any).userId || '').trim().toLowerCase();
   const compactUserId = rawUserId.replace(/[^a-z0-9\u0980-\u09ff]+/g, '');
+  const taskWorkerId = String(task.assignedWorkerId || (task as any)['Worker ID'] || (task as any).workerId || '').trim().toLowerCase();
+  if (rawUserId && taskWorkerId && rawUserId === taskWorkerId) {
+    return true;
+  }
 
-  if (compactUserName.length >= 2 && compactTaskAgency === compactUserName) {
-    return true;
-  }
-  if (compactUserId.length >= 2 && (compactTaskAgency === compactUserId || rawTaskAgency.toLowerCase() === rawUserId)) {
-    return true;
-  }
-  if (
-    normUserName.length >= 3 &&
-    normTaskAgency.length >= 3 &&
-    (normTaskAgency === normUserName ||
-      normTaskAgency.includes(normUserName) ||
-      normUserName.includes(normTaskAgency))
-  ) {
-    return true;
+  const taskAgencyCandidates = [
+    (task as any)['Agency'],
+    task.Agency,
+    task.agency,
+    task.assignedAgency,
+    (task as any)['Agency Name'],
+    (task as any)['Assigned Agency'],
+    (task as any).agencyName,
+    task.assignedWorkerName && task.assignedWorkerName !== 'Worker' ? task.assignedWorkerName : '',
+    (task as any).workerName && (task as any).workerName !== 'Worker' ? (task as any).workerName : ''
+  ]
+    .map(v => String(v || '').trim())
+    .filter(Boolean);
+
+  if (taskAgencyCandidates.length === 0) return false;
+
+  const userNameCandidates = [
+    (user as any).agencyName,
+    (user as any)['Agency Name'],
+    user.name,
+    user.username
+  ]
+    .map(v => String(v || '').trim())
+    .filter(Boolean);
+
+  const stripGenericSuffixes = (s: string) =>
+    s
+      .replace(/\b(enterprise|enterprises|agency|associates|traders|construction|electric|electrical|electricals|electro|india|pvt|ltd|private|limited|co|company|wbsedcl|partner)\b/gi, ' ')
+      .replace(/\s+/g, '')
+      .trim();
+
+  for (const rawTaskAgency of taskAgencyCandidates) {
+    const normTaskAgency = cleanWorkerOrAgencyName(rawTaskAgency)
+      .toLowerCase()
+      .replace(/^agency\s+/i, '')
+      .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+      .trim();
+    const compactTaskAgency = normTaskAgency.replace(/\s+/g, '');
+    if (!compactTaskAgency) continue;
+
+    if (compactUserId.length >= 2 && (compactTaskAgency === compactUserId || rawTaskAgency.toLowerCase() === rawUserId)) {
+      return true;
+    }
+
+    const coreTaskBrand = stripGenericSuffixes(normTaskAgency);
+
+    for (const rawUserName of userNameCandidates) {
+      const normUserName = cleanWorkerOrAgencyName(rawUserName)
+        .toLowerCase()
+        .replace(/^agency\s+/i, '')
+        .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+        .trim();
+      const compactUserName = normUserName.replace(/\s+/g, '');
+
+      if (compactUserName.length >= 2 && compactTaskAgency === compactUserName) {
+        return true;
+      }
+      if (
+        normUserName.length >= 3 &&
+        normTaskAgency.length >= 3 &&
+        (normTaskAgency === normUserName ||
+          normTaskAgency.includes(normUserName) ||
+          normUserName.includes(normTaskAgency))
+      ) {
+        return true;
+      }
+
+      const coreUserBrand = stripGenericSuffixes(normUserName);
+      if (
+        coreTaskBrand.length >= 4 &&
+        coreUserBrand.length >= 4 &&
+        (coreTaskBrand === coreUserBrand ||
+          coreTaskBrand.includes(coreUserBrand) ||
+          coreUserBrand.includes(coreTaskBrand))
+      ) {
+        return true;
+      }
+    }
   }
 
   return false;
