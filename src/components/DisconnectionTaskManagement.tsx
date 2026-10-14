@@ -67,6 +67,7 @@ import {
 } from '../utils/disconnectionClassifier';
 import { getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 import { DisconnectionDashboard } from './disconnection/DisconnectionDashboard';
+import { AgencyDisconnectionDashboard } from './disconnection/AgencyDisconnectionDashboard';
 import { DisconnectionUpload } from './disconnection/DisconnectionUpload';
 import { DisconnectionReport } from './disconnection/DisconnectionReport';
 import { DisconnectionConsumerCard } from './disconnection/DisconnectionConsumerCard';
@@ -102,10 +103,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   externalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
+  const isAgency = currentUser?.role === 'agency';
 
   // Navigation tab state (Workers always view the Consumer List directly)
-  const [activeTab, setActiveTabState] = useState<DisconnectionTab>(isAdmin ? initialTab : 'VIEW_LIST');
-  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>(isAdmin && initialTab === 'DASHBOARD');
+  const [activeTab, setActiveTabState] = useState<DisconnectionTab>((isAdmin || isAgency) ? initialTab : 'VIEW_LIST');
+  const [isDashboardExpanded, setIsDashboardExpanded] = useState<boolean>((isAdmin || isAgency) && initialTab === 'DASHBOARD');
 
   const setActiveTab = useCallback((nextTab: DisconnectionTab) => {
     setActiveTabState(nextTab);
@@ -1456,6 +1458,94 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       </div>
       )}
 
+      {/* Compact Option Cards (Agency Login: Performance Dashboard & Consumer List) */}
+      {isAgency && (
+        <div
+          className="grid grid-cols-2 gap-2"
+          id="disconnection-agency-compact-options"
+        >
+          {/* 1. PERFORMANCE DASHBOARD */}
+          <button
+            id="tab-agency-dashboard"
+            onClick={() => {
+              if (activeTab === 'VIEW_LIST') {
+                setIsDashboardExpanded(prev => !prev);
+              } else {
+                setActiveTab('VIEW_LIST');
+                setIsDashboardExpanded(true);
+              }
+            }}
+            className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+                ? 'bg-amber-600 text-white border-amber-600 shadow-md ring-2 ring-amber-200'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50/60 hover:border-amber-300'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+                  ? 'bg-white/20 text-white'
+                  : 'bg-amber-100 text-amber-700'
+              }`}>
+                <LayoutDashboard className="w-3.5 h-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                  {lang === 'bn' ? '১. পারফরম্যান্স ড্যাশবোর্ড' : '1. PERFORMANCE DASHBOARD'}
+                </div>
+                <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                  (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'text-amber-100' : 'text-slate-400'
+                }`}>
+                  {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'PAID')).length} Paid • {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'DISCONNECT')).length} Discon
+                </div>
+              </div>
+            </div>
+            <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'rotate-180 text-white' : 'text-slate-400'
+            }`} />
+          </button>
+
+          {/* 2. VIEW LIST */}
+          <button
+            id="tab-agency-view-list"
+            onClick={() => {
+              setActiveTab('VIEW_LIST');
+              setIsDashboardExpanded(false);
+            }}
+            className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+              activeTab === 'VIEW_LIST' && !isDashboardExpanded
+                ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-300'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+              }`}>
+                <Users className="w-3.5 h-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                  {lang === 'bn' ? '২. উপভোক্তা তালিকা' : '2. VIEW LIST'}
+                </div>
+                <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
+                  activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'text-slate-300' : 'text-slate-400'
+                }`}>
+                  All Consumers
+                </div>
+              </div>
+            </div>
+            <span
+              className={`ml-1 px-2 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
+                activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              {userScopedTasks.length}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* ADMIN SMS-STYLE RE-ISSUE REQUEST NOTIFICATION BANNER */}
       {isAdmin && pendingReissueTasks.length > 0 && (
         <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-purple-950 border-2 border-purple-400/70 rounded-2xl p-4 shadow-lg text-white space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -1578,22 +1668,42 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 </button>
               </div>
 
-              <DisconnectionDashboard
-                tasks={tasks}
-                stats={stats}
-                onRefresh={() => loadData(true)}
-                isRefreshing={isRefreshing}
-                onSelectStatusFilter={handleSelectStatusFilterFromDashboard}
-                onSelectWorkerFilter={handleSelectWorkerFilterFromDashboard}
-                onSelectPhaseFilter={ph => setPhaseFilter(ph)}
-                onSelectClassFilter={cls => setClassFilter(cls)}
-                onUpdateStatus={handleOpenUpdateModal}
-                onRequestReissue={handleRequestReissue}
-                onApproveReissue={isAdmin ? handleApproveReissue : undefined}
-                onDeleteTask={isAdmin ? handleDeleteTask : undefined}
-                isAdmin={isAdmin}
-                lang={lang}
-              />
+              {isAgency ? (
+                <AgencyDisconnectionDashboard
+                  tasks={userScopedTasks}
+                  agencyName={currentUser?.name || currentUser?.agencyName || 'Agency'}
+                  onRefresh={() => loadData(true)}
+                  isRefreshing={isRefreshing}
+                  onUpdateStatus={handleOpenUpdateModal}
+                  onRequestReissue={handleRequestReissue}
+                  onSelectStatusFilter={status => {
+                    setStatusFilter(status);
+                    setActiveTab('VIEW_LIST');
+                  }}
+                  onSelectClassFilter={cls => {
+                    setClassFilter(cls);
+                  }}
+                  lang={lang}
+                  onClose={() => setActiveTab('VIEW_LIST')}
+                />
+              ) : (
+                <DisconnectionDashboard
+                  tasks={tasks}
+                  stats={stats}
+                  onRefresh={() => loadData(true)}
+                  isRefreshing={isRefreshing}
+                  onSelectStatusFilter={handleSelectStatusFilterFromDashboard}
+                  onSelectWorkerFilter={handleSelectWorkerFilterFromDashboard}
+                  onSelectPhaseFilter={ph => setPhaseFilter(ph)}
+                  onSelectClassFilter={cls => setClassFilter(cls)}
+                  onUpdateStatus={handleOpenUpdateModal}
+                  onRequestReissue={handleRequestReissue}
+                  onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                  onDeleteTask={isAdmin ? handleDeleteTask : undefined}
+                  isAdmin={isAdmin}
+                  lang={lang}
+                />
+              )}
             </div>
           )}
 
@@ -1623,10 +1733,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           )}
 
           {/* SECTION 4: VIEW LIST */}
-          {(activeTab === 'VIEW_LIST' || !isAdmin) && (
+          {(activeTab === 'VIEW_LIST' || (!isAdmin && !isAgency)) && (
             <div className="space-y-4" id="disconnection-view-list-container">
-              {/* INTERACTIVE COLLAPSIBLE PERFORMANCE DASHBOARD OPTION (ADMIN ONLY) */}
-              {isAdmin && (
+              {/* INTERACTIVE COLLAPSIBLE PERFORMANCE DASHBOARD OPTION (ADMIN & AGENCY) */}
+              {(isAdmin || isAgency) && (
               <div className="space-y-3">
                 <div
                   onClick={() => setIsDashboardExpanded(!isDashboardExpanded)}
@@ -1673,13 +1783,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       {/* Micro stats counter */}
                       <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-bold">
                         <span className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
-                          {lang === 'bn' ? 'মোট:' : 'Total:'} <strong className="text-white font-extrabold">{tasks.length}</strong>
+                          {lang === 'bn' ? 'মোট:' : 'Total:'} <strong className="text-white font-extrabold">{isAgency ? userScopedTasks.length : tasks.length}</strong>
                         </span>
                         <span className="px-2.5 py-1.5 rounded-lg bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
-                          {lang === 'bn' ? 'সম্পন্ন:' : 'Done:'} <strong className="text-emerald-400 font-extrabold">{stats.completedTasks || tasks.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT').length}</strong>
+                          {lang === 'bn' ? 'সম্পন্ন:' : 'Done:'} <strong className="text-emerald-400 font-extrabold">{isAgency ? userScopedTasks.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT' || matchesDisconnectionStatusFilter(t, 'PAID')).length : (stats.completedTasks || tasks.filter(t => t.taskStatus === 'COMPLETED' || t.taskStatus === 'DISCONNECT').length)}</strong>
                         </span>
                         <span className="px-2.5 py-1.5 rounded-lg bg-amber-950/80 text-amber-300 border border-amber-800/80">
-                          {lang === 'bn' ? 'পেন্ডিং:' : 'Pending:'} <strong className="text-amber-400 font-extrabold">{stats.pendingTasks || tasks.filter(t => t.taskStatus === 'PENDING' || t.taskStatus === 'IN PROGRESS').length}</strong>
+                          {lang === 'bn' ? 'পেন্ডিং:' : 'Pending:'} <strong className="text-amber-400 font-extrabold">{isAgency ? userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'PENDING')).length : (stats.pendingTasks || tasks.filter(t => t.taskStatus === 'PENDING' || t.taskStatus === 'IN PROGRESS').length)}</strong>
                         </span>
                       </div>
 
@@ -1722,28 +1832,48 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         </button>
                       </div>
 
-                      <DisconnectionDashboard
-                        tasks={tasks}
-                        stats={stats}
-                        onRefresh={() => loadData(true)}
-                        isRefreshing={isRefreshing}
-                        onSelectStatusFilter={status => {
-                          setStatusFilter(status);
-                          setIsDashboardExpanded(false);
-                        }}
-                        onSelectWorkerFilter={worker => {
-                          setAgencyFilter(worker);
-                          setIsDashboardExpanded(false);
-                        }}
-                        onSelectPhaseFilter={ph => setPhaseFilter(ph)}
-                        onSelectClassFilter={cls => setClassFilter(cls)}
-                        onUpdateStatus={handleOpenUpdateModal}
-                        onRequestReissue={handleRequestReissue}
-                        onApproveReissue={isAdmin ? handleApproveReissue : undefined}
-                        onDeleteTask={isAdmin ? handleDeleteTask : undefined}
-                        isAdmin={isAdmin}
-                        lang={lang}
-                      />
+                      {isAgency ? (
+                        <AgencyDisconnectionDashboard
+                          tasks={userScopedTasks}
+                          agencyName={currentUser?.name || currentUser?.agencyName || 'Agency'}
+                          onRefresh={() => loadData(true)}
+                          isRefreshing={isRefreshing}
+                          onUpdateStatus={handleOpenUpdateModal}
+                          onRequestReissue={handleRequestReissue}
+                          onSelectStatusFilter={status => {
+                            setStatusFilter(status);
+                            setIsDashboardExpanded(false);
+                          }}
+                          onSelectClassFilter={cls => {
+                            setClassFilter(cls);
+                          }}
+                          lang={lang}
+                          onClose={() => setIsDashboardExpanded(false)}
+                        />
+                      ) : (
+                        <DisconnectionDashboard
+                          tasks={tasks}
+                          stats={stats}
+                          onRefresh={() => loadData(true)}
+                          isRefreshing={isRefreshing}
+                          onSelectStatusFilter={status => {
+                            setStatusFilter(status);
+                            setIsDashboardExpanded(false);
+                          }}
+                          onSelectWorkerFilter={worker => {
+                            setAgencyFilter(worker);
+                            setIsDashboardExpanded(false);
+                          }}
+                          onSelectPhaseFilter={ph => setPhaseFilter(ph)}
+                          onSelectClassFilter={cls => setClassFilter(cls)}
+                          onUpdateStatus={handleOpenUpdateModal}
+                          onRequestReissue={handleRequestReissue}
+                          onApproveReissue={isAdmin ? handleApproveReissue : undefined}
+                          onDeleteTask={isAdmin ? handleDeleteTask : undefined}
+                          isAdmin={isAdmin}
+                          lang={lang}
+                        />
+                      )}
                     </div>
                   </div>
                 )}

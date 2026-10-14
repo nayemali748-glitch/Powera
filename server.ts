@@ -3075,14 +3075,6 @@ app.post('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const payload = req.body.data || req.body;
-    const userRole = String(payload.role || '').toLowerCase();
-    const category = String(payload.category || '').toUpperCase();
-    if (userRole === 'agency' && category !== 'DISCONNECTION') {
-      return res.status(403).json({
-        success: false,
-        error: 'Agency accounts are only permitted to submit entries in the Disconnection module.'
-      });
-    }
     const saved = await handleFastCreateEntry(payload, 'createEntry');
     return res.status(201).json({ success: true, entry: saved, data: saved });
   } catch (err: any) {

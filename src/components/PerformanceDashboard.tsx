@@ -21,10 +21,14 @@ import {
   Phone,
   MapPin,
   ExternalLink,
-  MoreVertical
+  MoreVertical,
+  Building2,
+  ChevronsUpDown,
+  Check
 } from 'lucide-react';
-import { CategoryType, PowerEntry, DisconnectionTask } from '../types';
+import { CategoryType, PowerEntry, DisconnectionTask, UserSession } from '../types';
 import { Language, translations } from '../utils/translations';
+import { cleanNameOnly } from '../utils/entryNormalizer';
 import {
   getTaskPhase,
   getTaskConnectionClass,
@@ -40,6 +44,8 @@ interface PerformanceDashboardProps {
   onSelectCategory: (category: CategoryType) => void;
   currentLanguage?: Language;
   disconnectionTasks?: DisconnectionTask[];
+  currentUser?: UserSession | null;
+  onNavigateToDisconnection?: () => void;
 }
 
 export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
@@ -48,6 +54,8 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
   onSelectCategory,
   currentLanguage = 'en',
   disconnectionTasks = [],
+  currentUser,
+  onNavigateToDisconnection,
 }) => {
   const t = translations[currentLanguage] || translations.en;
 
@@ -214,6 +222,798 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
   const handleToggleDiscDeck = (status: StatusFilterType) => {
     setSelectedDiscStatus((prev) => (prev === status ? null : status));
   };
+
+  const isAgency = currentUser?.role === 'agency';
+
+  // Agency Specific Filter States (Exact match for IMG_6108.jpeg)
+  const [agencySelectedAgency, setAgencySelectedAgency] = useState<string>('All');
+  const [agencySelectedClass, setAgencySelectedClass] = useState<string>('All');
+  const [agencyActiveStatusCard, setAgencyActiveStatusCard] = useState<string | null>(null);
+  const [agencyConsumerSearch, setAgencyConsumerSearch] = useState<string>('');
+
+  const parseAmount = (val: any): number => {
+    if (val === undefined || val === null || val === '') return 0;
+    const clean = String(val).replace(/[^0-9.-]/g, '');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const formatCurrency = (val: number): string => {
+    return '₹' + Math.round(val || 0).toLocaleString('en-IN');
+  };
+
+  // Helper classification for Class in WBSEDCL (Domestic, Commercial, Industrial, STW, Other)
+  const getTaskCategoryClass = (task: DisconnectionTask): 'DOMESTIC' | 'COMMERCIAL' | 'INDUSTRIAL' | 'STW' | 'OTHER' => {
+    const base = String(task.baseClass || (task as any)['Base Class'] || '').trim().toLowerCase();
+    const cls = String((task as any)['Class'] || task.classType || '').trim().toLowerCase();
+    
+    if (cls.includes('commercial') || /^c\s*-/.test(base)) {
+      return 'COMMERCIAL';
+    }
+    if (cls.includes('industrial') || /^i\s*-/.test(base)) {
+      return 'INDUSTRIAL';
+    }
+    if (cls.includes('domestic') || /^a\s*-|^d\s*-/.test(base)) {
+      return 'DOMESTIC';
+    }
+    if (cls.includes('agriculture') || cls.includes('stw') || cls.includes('agri')) {
+      return 'STW';
+    }
+    const fallback = getTaskConnectionClass(task);
+    if (fallback) return fallback;
+    return 'OTHER';
+  };
+
+  // Unique Agencies for Agency Dropdown
+  const agencyListOptions = useMemo(() => {
+    const set = new Set<string>();
+    effectiveDiscTasks.forEach(t => {
+      const ag = cleanNameOnly(t.assignedAgency || (t as any).Agency || t.assignedWorkerName || '');
+      if (ag && ag !== 'Worker' && ag !== 'Admin') set.add(ag);
+    });
+    const currentName = cleanNameOnly(currentUser?.name || currentUser?.agencyName || '');
+    if (currentName) set.add(currentName);
+    return Array.from(set).sort();
+  }, [effectiveDiscTasks, currentUser]);
+
+  // Filter tasks based on Agency dropdown and Class dropdown
+  const agencyFilteredTasks = useMemo(() => {
+    return effectiveDiscTasks.filter(t => {
+      if (agencySelectedAgency !== 'All') {
+        const ag = cleanNameOnly(t.assignedAgency || (t as any).Agency || t.assignedWorkerName || '').toLowerCase();
+        const sel = agencySelectedAgency.toLowerCase();
+        if (!ag.includes(sel) && !sel.includes(ag)) return false;
+      }
+      if (agencySelectedClass !== 'All') {
+        const c = getTaskCategoryClass(t);
+        if (agencySelectedClass.toUpperCase() === 'DOMESTIC' && c !== 'DOMESTIC') return false;
+        if (agencySelectedClass.toUpperCase() === 'COMMERCIAL' && c !== 'COMMERCIAL') return false;
+        if (agencySelectedClass.toUpperCase() === 'INDUSTRIAL' && c !== 'INDUSTRIAL') return false;
+        if (agencySelectedClass.toUpperCase() === 'STW' && c !== 'STW') return false;
+        if (agencySelectedClass.toUpperCase() === 'OTHER' && c !== 'OTHER') return false;
+      }
+      return true;
+    });
+  }, [effectiveDiscTasks, agencySelectedAgency, agencySelectedClass]);
+
+  // Metrics for the 8 Cards exactly matching IMG_6108.jpeg
+  const agencyMetrics = useMemo(() => {
+    let totalCount = 0;
+    let totalAmount = 0;
+    let connectedCount = 0;
+    let connectedAmount = 0;
+    let disconnectedCount = 0;
+    let disconnectedAmount = 0;
+    let paidCount = 0;
+    let paidAmount = 0;
+    let officeTeamCount = 0;
+    let officeTeamAmount = 0;
+    let billDisputeCount = 0;
+    let billDisputeAmount = 0;
+    let notFoundCount = 0;
+    let notFoundAmount = 0;
+
+    agencyFilteredTasks.forEach(t => {
+      const due = parseAmount(t.outstandingDue || (t as any)['D2 Net O/S'] || t.arrearAmount);
+      const paid = parseAmount(t.paidAmount || (t as any)['Paid Amount']);
+
+      totalCount++;
+      totalAmount += due;
+
+      if (matchesDisconnectionStatus(t, 'PAID')) {
+        paidCount++;
+        paidAmount += (paid > 0 ? paid : due);
+      } else if (matchesDisconnectionStatus(t, 'DISCONNECT')) {
+        disconnectedCount++;
+        disconnectedAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'OFFICE TEAM')) {
+        officeTeamCount++;
+        officeTeamAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'DISPUTE')) {
+        billDisputeCount++;
+        billDisputeAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'NOT FOUND')) {
+        notFoundCount++;
+        notFoundAmount += due;
+      } else {
+        connectedCount++;
+        connectedAmount += due;
+      }
+    });
+
+    return {
+      total: { count: totalCount, amount: totalAmount },
+      connected: { count: connectedCount, amount: connectedAmount },
+      disconnected: { count: disconnectedCount, amount: disconnectedAmount },
+      paid: { count: paidCount, amount: paidAmount },
+      officeTeam: { count: officeTeamCount, amount: officeTeamAmount },
+      billDispute: { count: billDisputeCount, amount: billDisputeAmount },
+      notFound: { count: notFoundCount, amount: notFoundAmount },
+      totalOutstanding: totalAmount
+    };
+  }, [agencyFilteredTasks]);
+
+  // Table rows for Agency Breakdown
+  const agencyTableRows = useMemo(() => {
+    const map = new Map<string, {
+      agency: string;
+      totalCount: number;
+      totalAmount: number;
+      discCount: number;
+      discAmount: number;
+      paidCount: number;
+      paidAmount: number;
+      officeCount: number;
+      officeAmount: number;
+      disputeCount: number;
+      disputeAmount: number;
+      notFoundCount: number;
+      notFoundAmount: number;
+    }>();
+
+    const targetAgencies = agencySelectedAgency === 'All'
+      ? (agencyListOptions.length > 0 ? agencyListOptions : [cleanNameOnly(currentUser?.name || currentUser?.agencyName || 'Agency')])
+      : [agencySelectedAgency];
+
+    targetAgencies.forEach(ag => {
+      map.set(ag, {
+        agency: ag,
+        totalCount: 0,
+        totalAmount: 0,
+        discCount: 0,
+        discAmount: 0,
+        paidCount: 0,
+        paidAmount: 0,
+        officeCount: 0,
+        officeAmount: 0,
+        disputeCount: 0,
+        disputeAmount: 0,
+        notFoundCount: 0,
+        notFoundAmount: 0
+      });
+    });
+
+    agencyFilteredTasks.forEach(t => {
+      const rawAg = cleanNameOnly(t.assignedAgency || (t as any).Agency || t.assignedWorkerName || '');
+      const matchedAgency = targetAgencies.find(a => rawAg.toLowerCase().includes(a.toLowerCase())) || targetAgencies[0];
+      const row = map.get(matchedAgency);
+      if (!row) return;
+
+      const due = parseAmount(t.outstandingDue || (t as any)['D2 Net O/S'] || t.arrearAmount);
+      const paid = parseAmount(t.paidAmount || (t as any)['Paid Amount']);
+
+      row.totalCount++;
+      row.totalAmount += due;
+
+      if (matchesDisconnectionStatus(t, 'PAID')) {
+        row.paidCount++;
+        row.paidAmount += (paid > 0 ? paid : due);
+      } else if (matchesDisconnectionStatus(t, 'DISCONNECT')) {
+        row.discCount++;
+        row.discAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'OFFICE TEAM')) {
+        row.officeCount++;
+        row.officeAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'DISPUTE')) {
+        row.disputeCount++;
+        row.disputeAmount += due;
+      } else if (matchesDisconnectionStatus(t, 'NOT FOUND')) {
+        row.notFoundCount++;
+        row.notFoundAmount += due;
+      }
+    });
+
+    return Array.from(map.values());
+  }, [agencyFilteredTasks, agencySelectedAgency, agencyListOptions, currentUser]);
+
+  // Consumers matching active clicked card (optional drill-down)
+  const agencyActiveCardConsumers = useMemo(() => {
+    if (!agencyActiveStatusCard) return [];
+    return agencyFilteredTasks.filter(t => {
+      let matches = false;
+      if (agencyActiveStatusCard === 'ALL') {
+        matches = true;
+      } else if (agencyActiveStatusCard === 'CONNECTED') {
+        matches = !matchesDisconnectionStatus(t, 'PAID') &&
+                  !matchesDisconnectionStatus(t, 'DISCONNECT') &&
+                  !matchesDisconnectionStatus(t, 'OFFICE TEAM') &&
+                  !matchesDisconnectionStatus(t, 'DISPUTE') &&
+                  !matchesDisconnectionStatus(t, 'NOT FOUND');
+      } else {
+        matches = matchesDisconnectionStatus(t, agencyActiveStatusCard as any);
+      }
+
+      if (!matches) return false;
+
+      if (agencyConsumerSearch.trim()) {
+        const q = agencyConsumerSearch.toLowerCase().trim();
+        const cId = String(t.consumerId || (t as any)['Consumer Id'] || '').toLowerCase();
+        const cNm = String(t.consumerName || (t as any)['Name'] || '').toLowerCase();
+        const ph = String(t.phoneNumber || (t as any)['Mobile'] || '').toLowerCase();
+        const meter = String((t as any).meterNo || t.meterNumber || (t as any)['Meter No'] || '').toLowerCase();
+        const pole = String((t as any).poleNo || (t as any).gisPole || (t as any)['Gis Pole'] || (t as any)['Pole No'] || '').toLowerCase();
+        const addr = String(t.consumerAddress || (t as any).address || t.Address || '').toLowerCase();
+        return cId.includes(q) || cNm.includes(q) || ph.includes(q) || meter.includes(q) || pole.includes(q) || addr.includes(q);
+      }
+      return true;
+    });
+  }, [agencyFilteredTasks, agencyActiveStatusCard, agencyConsumerSearch]);
+
+  const getCardStatusLabel = (status: string | null) => {
+    switch (status) {
+      case 'CONNECTED': return 'Connected';
+      case 'DISCONNECT': return 'Disconnected';
+      case 'PAID': return 'Paid';
+      case 'OFFICE TEAM': return 'Office Team';
+      case 'DISPUTE': return 'Bill Dispute';
+      case 'NOT FOUND': return 'Not Found';
+      default: return 'Total';
+    }
+  };
+
+  // IF AGENCY LOGIN: Render ONLY the Agency Disconnection Performance Dashboard format!
+  // IF AGENCY LOGIN: Render EXACT Same-to-Same format as in IMG_6108.jpeg!
+  if (isAgency) {
+    return (
+      <div className="space-y-4 mb-6 animate-in fade-in duration-150">
+        {/* Top Dropdowns: Agency (Left) & Class (Right) */}
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+              Agency
+            </label>
+            <div className="relative">
+              <select
+                value={agencySelectedAgency}
+                onChange={(e) => setAgencySelectedAgency(e.target.value)}
+                className="w-full appearance-none bg-white border border-slate-200/90 rounded-xl py-2.5 px-3.5 pr-8 text-sm font-semibold text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+              >
+                <option value="All">All</option>
+                {agencyListOptions.map((ag) => (
+                  <option key={ag} value={ag}>
+                    {ag}
+                  </option>
+                ))}
+              </select>
+              <ChevronsUpDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+              Class
+            </label>
+            <div className="relative">
+              <select
+                value={agencySelectedClass}
+                onChange={(e) => setAgencySelectedClass(e.target.value)}
+                className="w-full appearance-none bg-white border border-slate-200/90 rounded-xl py-2.5 px-3.5 pr-8 text-sm font-semibold text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+              >
+                <option value="All">All</option>
+                <option value="DOMESTIC">Domestic</option>
+                <option value="COMMERCIAL">Commercial</option>
+                <option value="INDUSTRIAL">Industrial</option>
+                <option value="STW">STW</option>
+                <option value="OTHER">Other</option>
+              </select>
+              <ChevronsUpDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+        </div>
+
+        {/* 8 Statistics Cards exactly as in IMG_6108.jpeg */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          {/* 1. Total */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'ALL' ? null : 'ALL')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-blue-500 cursor-pointer ${
+              agencyActiveStatusCard === 'ALL' ? 'border-blue-600 ring-2 ring-blue-500/30 bg-blue-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Total</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {agencyMetrics.total.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Total Amount: {formatCurrency(agencyMetrics.total.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+              <Users className="w-5 h-5" />
+            </div>
+          </button>
+
+          {/* 2. Connected */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'CONNECTED' ? null : 'CONNECTED')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-emerald-500 cursor-pointer ${
+              agencyActiveStatusCard === 'CONNECTED' ? 'border-emerald-600 ring-2 ring-emerald-500/30 bg-emerald-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Connected</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {agencyMetrics.connected.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Connected Amount: {formatCurrency(agencyMetrics.connected.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+              <Check className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 3. Disconnected */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'DISCONNECT' ? null : 'DISCONNECT')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-rose-500 cursor-pointer ${
+              agencyActiveStatusCard === 'DISCONNECT' ? 'border-rose-600 ring-2 ring-rose-500/30 bg-rose-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-rose-600">Disconnected</div>
+              <div className="text-2xl sm:text-3xl font-black text-rose-600 mt-1">
+                {agencyMetrics.disconnected.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Disconnected Amount: {formatCurrency(agencyMetrics.disconnected.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center shrink-0">
+              <Power className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 4. Paid */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'PAID' ? null : 'PAID')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-emerald-500 cursor-pointer ${
+              agencyActiveStatusCard === 'PAID' ? 'border-emerald-600 ring-2 ring-emerald-500/30 bg-emerald-50/30' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-emerald-700">Paid</div>
+              <div className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1">
+                {agencyMetrics.paid.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Paid Amount: {formatCurrency(agencyMetrics.paid.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 5. Office Team */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'OFFICE TEAM' ? null : 'OFFICE TEAM')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-amber-500 cursor-pointer ${
+              agencyActiveStatusCard === 'OFFICE TEAM' ? 'border-amber-600 ring-2 ring-amber-500/30 bg-amber-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Office Team</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {agencyMetrics.officeTeam.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Office Team Amount: {formatCurrency(agencyMetrics.officeTeam.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 6. Bill Dispute */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'DISPUTE' ? null : 'DISPUTE')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-orange-500 cursor-pointer ${
+              agencyActiveStatusCard === 'DISPUTE' ? 'border-orange-600 ring-2 ring-orange-500/30 bg-orange-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Bill Dispute</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {agencyMetrics.billDispute.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Dispute Amount: {formatCurrency(agencyMetrics.billDispute.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center shrink-0">
+              <AlertCircle className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 7. Not Found */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'NOT FOUND' ? null : 'NOT FOUND')}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-indigo-500 cursor-pointer ${
+              agencyActiveStatusCard === 'NOT FOUND' ? 'border-indigo-600 ring-2 ring-indigo-500/30 bg-indigo-50/20' : 'border-slate-200/80'
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Not Found</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {agencyMetrics.notFound.count}
+              </div>
+              <div className="text-xs font-semibold text-slate-500 mt-0.5">
+                Not Found Amount: {formatCurrency(agencyMetrics.notFound.amount)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-500 flex items-center justify-center shrink-0">
+              <HelpCircle className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+
+          {/* 8. Total Outstanding */}
+          <button
+            type="button"
+            onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'ALL' ? null : 'ALL')}
+            className={`text-left bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs flex items-center justify-between transition-all hover:border-purple-400 cursor-pointer ${
+              agencyActiveStatusCard === 'ALL' ? 'border-purple-600 ring-2 ring-purple-500/30 bg-purple-50/20' : ''
+            }`}
+          >
+            <div>
+              <div className="text-xs sm:text-sm font-bold text-slate-600">Total Outstanding</div>
+              <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+                {formatCurrency(agencyMetrics.totalOutstanding)}
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+              <TrendingUp className="w-5 h-5 stroke-[2.5]" />
+            </div>
+          </button>
+        </div>
+
+        {/* Agency Breakdown Table (EXACT Same-to-Same format as in IMG_6108.jpeg) */}
+        <div className="bg-white border border-slate-200/80 rounded-3xl p-3 sm:p-5 shadow-xs overflow-hidden">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-slate-600" />
+              <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wider">
+                Agency Performance Breakdown Table
+              </h3>
+            </div>
+            <span className="text-[11px] font-bold text-slate-500">
+              {agencyTableRows.length} Agencies
+            </span>
+          </div>
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 text-center">
+                  <th rowSpan={2} className="p-3 text-left border-r border-slate-200 min-w-[130px]">
+                    Agency
+                  </th>
+                  <th colSpan={2} className="p-2 border-r border-slate-200">
+                    Total
+                  </th>
+                  <th colSpan={2} className="p-2 border-r border-slate-200 bg-rose-50/50 text-rose-700">
+                    Disconnected
+                  </th>
+                  <th colSpan={2} className="p-2 border-r border-slate-200 bg-emerald-50/50 text-emerald-700">
+                    Paid
+                  </th>
+                  <th colSpan={2} className="p-2 border-r border-slate-200 bg-amber-50/50 text-amber-700">
+                    Office Team
+                  </th>
+                  <th colSpan={2} className="p-2 border-r border-slate-200 bg-orange-50/50 text-orange-700">
+                    Bill Dispute
+                  </th>
+                  <th colSpan={2} className="p-2 bg-indigo-50/50 text-indigo-700">
+                    Not Found
+                  </th>
+                </tr>
+                <tr className="bg-slate-100/70 text-slate-600 font-semibold border-b border-slate-200 text-center text-[11px]">
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[85px]">Amount</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[85px]">Amount</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[85px]">Amount</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[85px]">Amount</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[85px]">Amount</th>
+                  <th className="p-2 border-r border-slate-200 min-w-[60px]">Count</th>
+                  <th className="p-2 min-w-[85px]">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 text-center font-medium">
+                {agencyTableRows.map((row, idx) => (
+                  <tr
+                    key={row.agency + idx}
+                    className="hover:bg-slate-50 transition-colors"
+                  >
+                    <td className="p-2.5 text-left font-bold text-slate-900 border-r border-slate-200">
+                      {row.agency}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'ALL' ? null : 'ALL')}
+                      className="p-2 font-bold text-slate-800 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.totalCount}
+                    </td>
+                    <td className="p-2 text-slate-600 border-r border-slate-200">
+                      {formatCurrency(row.totalAmount)}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'DISCONNECT' ? null : 'DISCONNECT')}
+                      className="p-2 font-bold text-rose-600 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.discCount}
+                    </td>
+                    <td className="p-2 text-slate-600 border-r border-slate-200">
+                      {formatCurrency(row.discAmount)}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'PAID' ? null : 'PAID')}
+                      className="p-2 font-bold text-emerald-600 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.paidCount}
+                    </td>
+                    <td className="p-2 text-slate-600 border-r border-slate-200">
+                      {formatCurrency(row.paidAmount)}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'OFFICE TEAM' ? null : 'OFFICE TEAM')}
+                      className="p-2 font-bold text-amber-600 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.officeCount}
+                    </td>
+                    <td className="p-2 text-slate-600 border-r border-slate-200">
+                      {formatCurrency(row.officeAmount)}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'DISPUTE' ? null : 'DISPUTE')}
+                      className="p-2 font-bold text-orange-600 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.disputeCount}
+                    </td>
+                    <td className="p-2 text-slate-600 border-r border-slate-200">
+                      {formatCurrency(row.disputeAmount)}
+                    </td>
+                    <td
+                      onClick={() => setAgencyActiveStatusCard(agencyActiveStatusCard === 'NOT FOUND' ? null : 'NOT FOUND')}
+                      className="p-2 font-bold text-indigo-600 border-r border-slate-200 cursor-pointer hover:underline"
+                    >
+                      {row.notFoundCount}
+                    </td>
+                    <td className="p-2 text-slate-600">
+                      {formatCurrency(row.notFoundAmount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-center">
+                  <td className="p-3 text-left font-black border-r border-slate-300">
+                    Total
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {agencyMetrics.total.count}
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {formatCurrency(agencyMetrics.total.amount)}
+                  </td>
+                  <td className="p-2 text-rose-600 border-r border-slate-300">
+                    {agencyMetrics.disconnected.count}
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {formatCurrency(agencyMetrics.disconnected.amount)}
+                  </td>
+                  <td className="p-2 text-emerald-600 border-r border-slate-300">
+                    {agencyMetrics.paid.count}
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {formatCurrency(agencyMetrics.paid.amount)}
+                  </td>
+                  <td className="p-2 text-amber-600 border-r border-slate-300">
+                    {agencyMetrics.officeTeam.count}
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {formatCurrency(agencyMetrics.officeTeam.amount)}
+                  </td>
+                  <td className="p-2 text-orange-600 border-r border-slate-300">
+                    {agencyMetrics.billDispute.count}
+                  </td>
+                  <td className="p-2 border-r border-slate-300">
+                    {formatCurrency(agencyMetrics.billDispute.amount)}
+                  </td>
+                  <td className="p-2 text-indigo-600 border-r border-slate-300">
+                    {agencyMetrics.notFound.count}
+                  </td>
+                  <td className="p-2">
+                    {formatCurrency(agencyMetrics.notFound.amount)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        {/* ACTIVE CONSUMER DATA PANEL (When any card or table count is clicked) */}
+        {agencyActiveStatusCard && (
+          <div className="bg-white border-2 border-slate-900 rounded-3xl p-4 sm:p-5 shadow-md space-y-4 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span className="px-3 py-1 rounded-full bg-slate-900 text-amber-400 text-xs font-black uppercase">
+                  {getCardStatusLabel(agencyActiveStatusCard)}
+                </span>
+                <span className="text-sm font-black text-slate-900">
+                  ({agencyActiveCardConsumers.length} {currentLanguage === 'bn' ? 'জন উপভোক্তা' : 'Consumers'})
+                </span>
+                {agencySelectedClass !== 'All' && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
+                    {agencySelectedClass}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 sm:flex-none">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={agencyConsumerSearch}
+                    onChange={(e) => setAgencyConsumerSearch(e.target.value)}
+                    placeholder={currentLanguage === 'bn' ? 'উপভোক্তার নাম বা আইডি খুঁজুন...' : 'Search consumer...'}
+                    className="w-full sm:w-56 pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAgencyActiveStatusCard(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {agencyActiveCardConsumers.length === 0 ? (
+              <div className="py-8 text-center text-slate-500 text-xs sm:text-sm font-semibold">
+                {currentLanguage === 'bn'
+                  ? 'এই স্ট্যাটাসে কোনো উপভোক্তার ডেটা নেই।'
+                  : 'No consumers found for this status filter.'}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[600px] overflow-y-auto pr-1">
+                {agencyActiveCardConsumers.slice(0, 90).map((task, idx) => {
+                  const ph = getTaskPhase(task);
+                  const cl = getTaskCategoryClass(task);
+                  const dueAmt = parseAmount(task.outstandingDue || (task as any)['D2 Net O/S'] || task.arrearAmount);
+                  const paidAmt = parseAmount(task.paidAmount || (task as any)['Paid Amount']);
+                  const isPaid = matchesDisconnectionStatus(task, 'PAID');
+                  const isDisc = matchesDisconnectionStatus(task, 'DISCONNECT');
+                  const isOffice = matchesDisconnectionStatus(task, 'OFFICE TEAM');
+                  const isDispute = matchesDisconnectionStatus(task, 'DISPUTE');
+                  const isNotFound = matchesDisconnectionStatus(task, 'NOT FOUND');
+
+                  return (
+                    <div
+                      key={`${task.taskId || task.consumerId || idx}-${idx}`}
+                      className="p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/70 hover:bg-white transition-all space-y-2 shadow-2xs group"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-mono font-black text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                            ID: {task.consumerId || (task as any)['Consumer Id']}
+                          </span>
+                          <h4 className="text-xs font-black text-slate-900 mt-1 line-clamp-1 group-hover:text-blue-700 transition-colors">
+                            {task.consumerName || (task as any)['Name'] || 'Consumer'}
+                          </h4>
+                        </div>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 border ${
+                          isPaid ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
+                          isDisc ? 'bg-rose-100 text-rose-800 border-rose-300' :
+                          isOffice ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                          isDispute ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                          isNotFound ? 'bg-indigo-100 text-indigo-800 border-indigo-300' :
+                          'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
+                          {task.disconStatus || (task as any)['Discon Status'] || (isPaid ? 'PAID' : isDisc ? 'DISCONNECT' : 'CONNECTED')}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
+                        <span className={`px-1.5 py-0.5 rounded border ${
+                          cl === 'DOMESTIC' ? 'bg-blue-50 text-blue-800 border-blue-200' :
+                          cl === 'COMMERCIAL' ? 'bg-purple-50 text-purple-800 border-purple-200' :
+                          cl === 'INDUSTRIAL' ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                          'bg-slate-100 text-slate-800 border-slate-200'
+                        }`}>
+                          {cl}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200">
+                          {ph === '1PH' ? '1-Phase' : '3-Phase'}
+                        </span>
+                        {dueAmt > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 font-mono border border-rose-200">
+                            Due: {formatCurrency(dueAmt)}
+                          </span>
+                        )}
+                        {paidAmt > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 font-mono border border-emerald-200">
+                            Paid: {formatCurrency(paidAmt)}
+                          </span>
+                        )}
+                      </div>
+
+                      {(task.meterNo || (task as any)['Meter No'] || task.consumerAddress || task.address) && (
+                        <p className="text-[11px] text-slate-500 line-clamp-1">
+                          {task.meterNo || (task as any)['Meter No'] ? `Mtr: ${task.meterNo || (task as any)['Meter No']} • ` : ''}
+                          {task.consumerAddress || task.address || (task as any)['Address'] || ''}
+                        </p>
+                      )}
+
+                      {(task.workerRemarks || task.notes || (task as any)['Notes']) && (
+                        <div className="text-[10px] font-semibold text-slate-600 bg-amber-50/70 border border-amber-200/80 rounded-lg p-1.5 line-clamp-2">
+                          <span className="text-amber-800 font-bold">আপডেট: </span>
+                          {task.workerRemarks || task.notes || (task as any)['Notes']}
+                        </div>
+                      )}
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {task.updatedAt || task.lastUpdated ? String(task.updatedAt || task.lastUpdated).slice(0, 16) : ''}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onNavigateToDisconnection) onNavigateToDisconnection();
+                            else onSelectCategory('DISCONNECTION');
+                          }}
+                          className="text-[10px] font-black text-rose-600 hover:text-rose-700 flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>{currentLanguage === 'bn' ? 'মডিউলে দেখুন' : 'View in Module'}</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs mb-6 space-y-5">

@@ -161,20 +161,18 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Dashboard</span>
           </button>
 
-          {currentUser?.role !== 'agency' && (
-            <button
-              id="nav-tab-submissions"
-              onClick={() => setActiveTab('my-submissions')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'my-submissions'
-                  ? 'bg-white text-slate-900 shadow-xs font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5 text-sky-500" />
-              <span>{t.mySubmissions}</span>
-            </button>
-          )}
+          <button
+            id="nav-tab-submissions"
+            onClick={() => setActiveTab('my-submissions')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'my-submissions'
+                ? 'bg-white text-slate-900 shadow-xs font-bold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5 text-sky-500" />
+            <span>{t.mySubmissions}</span>
+          </button>
 
           <button
             id="nav-tab-work-orders"

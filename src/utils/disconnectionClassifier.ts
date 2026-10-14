@@ -93,7 +93,8 @@ function normalizeDisconnectionClassValue(rawVal: unknown): 'DOMESTIC' | 'COMMER
     normalized === 'domestic' ||
     normalized === 'domestic rural' ||
     normalized === 'domestic urban' ||
-    /^d\s*-\s*[13]\s*phase$/.test(normalized)
+    /^d\s*-\s*[13]\s*phase$/.test(normalized) ||
+    /^a\s*-\s*[13]\s*phase$/.test(normalized)
   ) {
     return 'DOMESTIC';
   }
@@ -120,8 +121,7 @@ function normalizeDisconnectionClassValue(rawVal: unknown): 'DOMESTIC' | 'COMMER
     normalized === 'agriculture' ||
     normalized === 'agriculture rural' ||
     normalized === 'agriculture urban' ||
-    normalized === 'stw' ||
-    /^a\s*-\s*[13]\s*phase$/.test(normalized)
+    normalized === 'stw'
   ) {
     return 'STW';
   }
@@ -546,7 +546,9 @@ export function filterDisconnectionTasksForUser(
   if (!user) return tasks;
 
   if (isAgencyUserSession(user, tasks)) {
-    return tasks.filter(t => doesTaskBelongToAgencyUser(t, user));
+    const matched = tasks.filter(t => doesTaskBelongToAgencyUser(t, user));
+    if (matched.length > 0) return matched;
+    return tasks;
   }
 
   return tasks;

@@ -55,7 +55,8 @@ import {
   TrendingUp,
   HelpCircle,
   WifiOff,
-  Settings
+  Settings,
+  Scissors
 } from 'lucide-react';
 
 /**
@@ -1094,32 +1095,30 @@ export default function App() {
                       </div>
 
                       {/* Recent Submissions */}
-                      {currentUser?.role !== 'agency' && (
-                        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-                          <div>
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <Clock className="w-4 h-4 text-slate-600" />
-                                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                                  {t.recordsCount} ({entries.length})
-                                </h4>
-                              </div>
+                      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-slate-600" />
+                              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                                {t.recordsCount} ({entries.length})
+                              </h4>
                             </div>
-                            <WorkerRecentSubmissions
-                              entries={entries.slice(0, 6)}
-                              workerName={workerName}
-                              currentUser={currentUser}
-                              onLogout={handleUserLogout}
-                              onSelectEntry={(entry) => setPreviewEntry(entry)}
-                              onNewEntry={() => {
-                                setSelectedCategory('NSC');
-                                setActiveFormCategory('NSC');
-                              }}
-                              lang={currentLanguage}
-                            />
                           </div>
+                          <WorkerRecentSubmissions
+                            entries={entries.slice(0, 6)}
+                            workerName={workerName}
+                            currentUser={currentUser}
+                            onLogout={handleUserLogout}
+                            onSelectEntry={(entry) => setPreviewEntry(entry)}
+                            onNewEntry={() => {
+                              setSelectedCategory('NSC');
+                              setActiveFormCategory('NSC');
+                            }}
+                            lang={currentLanguage}
+                          />
                         </div>
-                      )}
+                      </div>
                     </div>
                   ) : (
                     /* INSIDE FORM VIEW */
@@ -1204,31 +1203,29 @@ export default function App() {
                           />
 
                           {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
-                          {currentUser?.role !== 'agency' && (
-                            <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                                <div className="flex items-center gap-2">
-                                  <Clock className="w-4 h-4 text-slate-600" />
-                                  <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                                    {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
-                                  </h4>
-                                </div>
-                                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                                  Live {activeFormCategory} Sheet Data
-                                </span>
+                          <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-slate-600" />
+                                <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                                  {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
+                                </h4>
                               </div>
-                              <WorkerRecentSubmissions
-                                entries={entries.filter(e => e.category === activeFormCategory)}
-                                workerName={workerName}
-                                currentUser={currentUser}
-                                onSelectEntry={(entry) => setPreviewEntry(entry)}
-                                onNewEntry={() => {
-                                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                                }}
-                                lang={currentLanguage}
-                              />
+                              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                                Live {activeFormCategory} Sheet Data
+                              </span>
                             </div>
-                          )}
+                            <WorkerRecentSubmissions
+                              entries={entries.filter(e => e.category === activeFormCategory)}
+                              workerName={workerName}
+                              currentUser={currentUser}
+                              onSelectEntry={(entry) => setPreviewEntry(entry)}
+                              onNewEntry={() => {
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                              }}
+                              lang={currentLanguage}
+                            />
+                          </div>
                         </>
                       )}
                     </div>
@@ -1299,33 +1296,31 @@ export default function App() {
                   />
 
                   {/* Recent Activity in Performance view */}
-                  {currentUser?.role !== 'agency' && (
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-600" />
-                          <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                            {t.recordsCount} ({entries.length})
-                          </h3>
-                        </div>
-                        <span className="text-xs text-slate-400">All Field Logs</span>
+                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-slate-600" />
+                        <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                          {t.recordsCount} ({entries.length})
+                        </h3>
                       </div>
-
-                      <WorkerRecentSubmissions
-                        entries={entries}
-                        workerName={workerName}
-                        currentUser={currentUser}
-                        onLogout={handleUserLogout}
-                        onSelectEntry={(entry) => setPreviewEntry(entry)}
-                        onNewEntry={() => {
-                          setSelectedCategory('NSC');
-                          setActiveFormCategory('NSC');
-                          setActiveTab('entry');
-                        }}
-                        lang={currentLanguage}
-                      />
+                      <span className="text-xs text-slate-400">All Field Logs</span>
                     </div>
-                  )}
+
+                    <WorkerRecentSubmissions
+                      entries={entries}
+                      workerName={workerName}
+                      currentUser={currentUser}
+                      onLogout={handleUserLogout}
+                      onSelectEntry={(entry) => setPreviewEntry(entry)}
+                      onNewEntry={() => {
+                        setSelectedCategory('NSC');
+                        setActiveFormCategory('NSC');
+                        setActiveTab('entry');
+                      }}
+                      lang={currentLanguage}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1358,7 +1353,7 @@ export default function App() {
               {activeTab === 'my-submissions' && (
                 <div className="space-y-6">
                   <WorkerRecentSubmissions
-                    entries={currentUser?.role === 'agency' ? [] : entries}
+                    entries={entries}
                     workerName={workerName}
                     currentUser={currentUser}
                     onLogout={handleUserLogout}

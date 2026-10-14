@@ -41,9 +41,8 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
   lang = 'en',
 }) => {
   const t = translations[lang] || translations.en;
-
   const isAgency = currentUser?.role === 'agency';
-  const displayEntries = isAgency ? [] : entries;
+  const displayEntries = entries;
 
   return (
     <div className="space-y-4">
@@ -107,50 +106,32 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
             </p>
           </div>
 
-          {!isAgency && (
-            <button
-              onClick={onNewEntry}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
-            >
-              <Zap className="w-4 h-4 text-amber-400" />
-              <span>{t.dataEntry}</span>
-            </button>
-          )}
+          <button
+            onClick={onNewEntry}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
+          >
+            <Zap className="w-4 h-4 text-amber-400" />
+            <span>{t.dataEntry}</span>
+          </button>
         </div>
 
         {/* Sync Reassurance Banner for Worker */}
-        {!isAgency && (
-          <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
-            <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-            <span>
-              {lang === 'bn' 
-                ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
-                : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
-            </span>
-          </div>
-        )}
+        <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+          <span>
+            {lang === 'bn' 
+              ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
+              : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
+          </span>
+        </div>
 
-      {isAgency ? (
-        <div className="text-center py-10 px-4 text-slate-500 space-y-3 bg-slate-50/70 rounded-xl border border-slate-200">
-          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto border border-amber-200 shadow-2xs">
-            <FileText className="w-6 h-6" />
+        {displayEntries.length === 0 ? (
+          <div className="text-center py-10 text-slate-500 space-y-2">
+            <FileText className="w-8 h-8 mx-auto text-slate-400" />
+            <p className="text-sm font-semibold text-slate-700">{t.noDataFound}</p>
+            <p className="text-xs text-slate-500">{t.clickToOpenForm}</p>
           </div>
-          <p className="text-sm font-bold text-slate-800">
-            {lang === 'bn' ? 'এজেন্সি পার্টনার মোড: কোনো সাবমিশন প্রদর্শিত হবে না' : 'Agency Mode: No Submissions Visible'}
-          </p>
-          <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-            {lang === 'bn'
-              ? 'এজেন্সি লগইনে কোনো অ্যাডমিন বা কর্মীর সাবমিশন দেখা যাবে না। এজেন্সি পার্টনাররা শুধুমাত্র ডিসকানেকশন (Disconnection) মডিউলে কাজ করতে পারবেন।'
-              : 'Agency logins cannot view submissions from admins or field workers. Operations are strictly restricted to the Disconnection module.'}
-          </p>
-        </div>
-      ) : displayEntries.length === 0 ? (
-        <div className="text-center py-10 text-slate-500 space-y-2">
-          <FileText className="w-8 h-8 mx-auto text-slate-400" />
-          <p className="text-sm font-semibold text-slate-700">{t.noDataFound}</p>
-          <p className="text-xs text-slate-500">{t.clickToOpenForm}</p>
-        </div>
-      ) : (
+        ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {displayEntries.map((item, idx) => {
             const isNsc = item.category === 'NSC';
