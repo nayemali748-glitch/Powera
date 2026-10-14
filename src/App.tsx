@@ -236,7 +236,7 @@ export default function App() {
 
       const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
 
-      if (forceRefresh || newHash !== lastDataHashRef.current) {
+      if (forceRefresh || newHash !== lastDataHashRef.current || (disconnectionTasks.length === 0 && validDiscTasks.length > 0)) {
         lastDataHashRef.current = newHash;
         setDisconnectionTasks(validDiscTasks);
         setEntries(rawEntries);
@@ -421,6 +421,11 @@ export default function App() {
     if (isUserAdmin) {
       localStorage.setItem('power_is_admin', 'true');
       setActiveTab('admin');
+    } else if (session.role === 'agency') {
+      localStorage.removeItem('power_is_admin');
+      setActiveTab('disconnection');
+      setActiveFormCategory('DISCONNECTION');
+      setSelectedCategory('DISCONNECTION');
     } else {
       localStorage.removeItem('power_is_admin');
       setActiveTab('entry');
@@ -500,6 +505,13 @@ export default function App() {
   };
 
   const navToCategory = (cat: CategoryType) => {
+    if (cat === 'DISCONNECTION') {
+      setActiveTab('disconnection');
+      setActiveFormCategory('DISCONNECTION');
+      setSelectedCategory('DISCONNECTION');
+      setSidebarOpen(false);
+      return;
+    }
     setSelectedCategory(cat);
     setActiveFormCategory(cat);
     setActiveTab('entry');
@@ -798,9 +810,16 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => navToCategory('DISCONNECTION')}
+            onClick={() => {
+              setActiveTab('disconnection');
+              setActiveFormCategory('DISCONNECTION');
+              setSelectedCategory('DISCONNECTION');
+              setSidebarOpen(false);
+            }}
             className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeFormCategory === 'DISCONNECTION' ? 'bg-rose-500/20 text-rose-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+              activeTab === 'disconnection' || activeFormCategory === 'DISCONNECTION'
+                ? 'bg-rose-500/20 text-rose-300 font-bold ring-1 ring-rose-500/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
             }`}
           >
             <div className="flex items-center gap-2.5">
@@ -1029,6 +1048,12 @@ export default function App() {
                       <CategorySelector
                         selectedCategory={selectedCategory}
                         onSelectCategory={(cat) => {
+                          if (cat === 'DISCONNECTION') {
+                            setActiveTab('disconnection');
+                            setActiveFormCategory('DISCONNECTION');
+                            setSelectedCategory('DISCONNECTION');
+                            return;
+                          }
                           setSelectedCategory(cat);
                           setActiveFormCategory(cat);
                         }}
@@ -1069,30 +1094,32 @@ export default function App() {
                       </div>
 
                       {/* Recent Submissions */}
-                      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <Clock className="w-4 h-4 text-slate-600" />
-                              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                                {t.recordsCount} ({entries.length})
-                              </h4>
+                      {currentUser?.role !== 'agency' && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-slate-600" />
+                                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                                  {t.recordsCount} ({entries.length})
+                                </h4>
+                              </div>
                             </div>
+                            <WorkerRecentSubmissions
+                              entries={entries.slice(0, 6)}
+                              workerName={workerName}
+                              currentUser={currentUser}
+                              onLogout={handleUserLogout}
+                              onSelectEntry={(entry) => setPreviewEntry(entry)}
+                              onNewEntry={() => {
+                                setSelectedCategory('NSC');
+                                setActiveFormCategory('NSC');
+                              }}
+                              lang={currentLanguage}
+                            />
                           </div>
-                          <WorkerRecentSubmissions
-                            entries={entries.slice(0, 6)}
-                            workerName={workerName}
-                            currentUser={currentUser}
-                            onLogout={handleUserLogout}
-                            onSelectEntry={(entry) => setPreviewEntry(entry)}
-                            onNewEntry={() => {
-                              setSelectedCategory('NSC');
-                              setActiveFormCategory('NSC');
-                            }}
-                            lang={currentLanguage}
-                          />
                         </div>
-                      </div>
+                      )}
                     </div>
                   ) : (
                     /* INSIDE FORM VIEW */
@@ -1119,11 +1146,17 @@ export default function App() {
                             <button
                               key={`${cat}-${idx}`}
                               onClick={() => {
+                                if (cat === 'DISCONNECTION') {
+                                  setActiveTab('disconnection');
+                                  setActiveFormCategory('DISCONNECTION');
+                                  setSelectedCategory('DISCONNECTION');
+                                  return;
+                                }
                                 setSelectedCategory(cat);
                                 setActiveFormCategory(cat);
                               }}
                               className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                activeFormCategory === cat
+                                (activeTab === 'disconnection' ? cat === 'DISCONNECTION' : activeFormCategory === cat)
                                   ? 'bg-slate-900 text-white shadow-xs'
                                   : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
                               }`}
@@ -1134,51 +1167,69 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Dynamic Form customized for the selected category */}
-                      <EntryForm
-                        category={activeFormCategory}
-                        workerName={workerName}
-                        currentUser={currentUser}
-                        initialNotice={selectedWorkOrderForEntry}
-                        availableWorkOrders={workOrders}
-                        disconnectionTasks={disconnectionTasks}
-                        onSuccess={(newEntry) => {
-                          handleEntrySuccess(newEntry);
-                          setSelectedWorkOrderForEntry(null);
-                        }}
-                        onBack={() => {
-                          setActiveFormCategory(null);
-                          setSelectedWorkOrderForEntry(null);
-                        }}
-                        onDataUpdated={() => loadData(false, true)}
-                        lang={currentLanguage}
-                      />
-
-                      {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
-                      {activeFormCategory !== 'DISCONNECTION' && (
-                        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <div className="flex items-center gap-2">
-                              <Clock className="w-4 h-4 text-slate-600" />
-                              <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                                {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
-                              </h4>
-                            </div>
-                            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                              Live {activeFormCategory} Sheet Data
-                            </span>
-                          </div>
-                          <WorkerRecentSubmissions
-                            entries={entries.filter(e => e.category === activeFormCategory)}
-                            workerName={workerName}
+                      {/* If category is DISCONNECTION, embed the full Disconnection module connected to backend */}
+                      {activeFormCategory === 'DISCONNECTION' ? (
+                        <div className="space-y-4 animate-in fade-in duration-150">
+                          <DisconnectionTaskManagement
                             currentUser={currentUser}
-                            onSelectEntry={(entry) => setPreviewEntry(entry)}
-                            onNewEntry={() => {
-                              window.scrollTo({ top: 0, behavior: 'smooth' });
-                            }}
                             lang={currentLanguage}
+                            initialTab="VIEW_LIST"
+                            onBack={() => {
+                              setActiveFormCategory(null);
+                              setActiveTab('entry');
+                            }}
+                            onTasksChange={() => loadData(true)}
+                            externalTasks={disconnectionTasks}
                           />
                         </div>
+                      ) : (
+                        <>
+                          <EntryForm
+                            category={activeFormCategory}
+                            workerName={workerName}
+                            currentUser={currentUser}
+                            initialNotice={selectedWorkOrderForEntry}
+                            availableWorkOrders={workOrders}
+                            disconnectionTasks={disconnectionTasks}
+                            onSuccess={(newEntry) => {
+                              handleEntrySuccess(newEntry);
+                              setSelectedWorkOrderForEntry(null);
+                            }}
+                            onBack={() => {
+                              setActiveFormCategory(null);
+                              setSelectedWorkOrderForEntry(null);
+                            }}
+                            onDataUpdated={() => loadData(false, true)}
+                            lang={currentLanguage}
+                          />
+
+                          {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
+                          {currentUser?.role !== 'agency' && (
+                            <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                <div className="flex items-center gap-2">
+                                  <Clock className="w-4 h-4 text-slate-600" />
+                                  <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                                    {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
+                                  </h4>
+                                </div>
+                                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                                  Live {activeFormCategory} Sheet Data
+                                </span>
+                              </div>
+                              <WorkerRecentSubmissions
+                                entries={entries.filter(e => e.category === activeFormCategory)}
+                                workerName={workerName}
+                                currentUser={currentUser}
+                                onSelectEntry={(entry) => setPreviewEntry(entry)}
+                                onNewEntry={() => {
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                lang={currentLanguage}
+                              />
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -1248,31 +1299,33 @@ export default function App() {
                   />
 
                   {/* Recent Activity in Performance view */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-slate-600" />
-                        <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                          {t.recordsCount} ({entries.length})
-                        </h3>
+                  {currentUser?.role !== 'agency' && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-600" />
+                          <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                            {t.recordsCount} ({entries.length})
+                          </h3>
+                        </div>
+                        <span className="text-xs text-slate-400">All Field Logs</span>
                       </div>
-                      <span className="text-xs text-slate-400">All Field Logs</span>
-                    </div>
 
-                    <WorkerRecentSubmissions
-                      entries={entries}
-                      workerName={workerName}
-                      currentUser={currentUser}
-                      onLogout={handleUserLogout}
-                      onSelectEntry={(entry) => setPreviewEntry(entry)}
-                      onNewEntry={() => {
-                        setSelectedCategory('NSC');
-                        setActiveFormCategory('NSC');
-                        setActiveTab('entry');
-                      }}
-                      lang={currentLanguage}
-                    />
-                  </div>
+                      <WorkerRecentSubmissions
+                        entries={entries}
+                        workerName={workerName}
+                        currentUser={currentUser}
+                        onLogout={handleUserLogout}
+                        onSelectEntry={(entry) => setPreviewEntry(entry)}
+                        onNewEntry={() => {
+                          setSelectedCategory('NSC');
+                          setActiveFormCategory('NSC');
+                          setActiveTab('entry');
+                        }}
+                        lang={currentLanguage}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1305,7 +1358,7 @@ export default function App() {
               {activeTab === 'my-submissions' && (
                 <div className="space-y-6">
                   <WorkerRecentSubmissions
-                    entries={entries}
+                    entries={currentUser?.role === 'agency' ? [] : entries}
                     workerName={workerName}
                     currentUser={currentUser}
                     onLogout={handleUserLogout}

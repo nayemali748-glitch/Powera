@@ -42,7 +42,8 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
 }) => {
   const t = translations[lang] || translations.en;
 
-  const displayEntries = entries;
+  const isAgency = currentUser?.role === 'agency';
+  const displayEntries = isAgency ? [] : entries;
 
   return (
     <div className="space-y-4">
@@ -53,7 +54,9 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
             <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-sm font-bold shadow-xs ${
               currentUser.role === 'admin' 
                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                : 'bg-blue-50 text-blue-700 border border-blue-200'
+                : isAgency
+                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                  : 'bg-blue-50 text-blue-700 border border-blue-200'
             }`}>
               {currentUser.role === 'admin' ? <ShieldCheck className="w-6 h-6" /> : <UserCheck className="w-6 h-6" />}
             </div>
@@ -65,13 +68,15 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                   currentUser.role === 'admin' 
                     ? 'bg-emerald-100 text-emerald-800' 
-                    : 'bg-blue-100 text-blue-800'
+                    : isAgency
+                      ? 'bg-purple-100 text-purple-800'
+                      : 'bg-blue-100 text-blue-800'
                 }`}>
-                  {currentUser.role === 'admin' ? 'Admin' : 'Staff / Lineman'}
+                  {currentUser.role === 'admin' ? 'Admin' : isAgency ? 'Agency Partner' : 'Staff / Lineman'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-                <span>{currentUser.designation || 'WBSEDCL Field Operator'}</span>
+                <span>{currentUser.designation || (isAgency ? 'Agency Operator' : 'WBSEDCL Field Operator')}</span>
               </p>
             </div>
           </div>
@@ -102,26 +107,44 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
             </p>
           </div>
 
-          <button
-            onClick={onNewEntry}
-            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
-          >
-            <Zap className="w-4 h-4 text-amber-400" />
-            <span>{t.dataEntry}</span>
-          </button>
+          {!isAgency && (
+            <button
+              onClick={onNewEntry}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
+            >
+              <Zap className="w-4 h-4 text-amber-400" />
+              <span>{t.dataEntry}</span>
+            </button>
+          )}
         </div>
 
         {/* Sync Reassurance Banner for Worker */}
-        <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
-          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-          <span>
-            {lang === 'bn' 
-              ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
-              : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
-          </span>
-        </div>
+        {!isAgency && (
+          <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              {lang === 'bn' 
+                ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
+                : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
+            </span>
+          </div>
+        )}
 
-      {displayEntries.length === 0 ? (
+      {isAgency ? (
+        <div className="text-center py-10 px-4 text-slate-500 space-y-3 bg-slate-50/70 rounded-xl border border-slate-200">
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto border border-amber-200 shadow-2xs">
+            <FileText className="w-6 h-6" />
+          </div>
+          <p className="text-sm font-bold text-slate-800">
+            {lang === 'bn' ? 'এজেন্সি পার্টনার মোড: কোনো সাবমিশন প্রদর্শিত হবে না' : 'Agency Mode: No Submissions Visible'}
+          </p>
+          <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+            {lang === 'bn'
+              ? 'এজেন্সি লগইনে কোনো অ্যাডমিন বা কর্মীর সাবমিশন দেখা যাবে না। এজেন্সি পার্টনাররা শুধুমাত্র ডিসকানেকশন (Disconnection) মডিউলে কাজ করতে পারবেন।'
+              : 'Agency logins cannot view submissions from admins or field workers. Operations are strictly restricted to the Disconnection module.'}
+          </p>
+        </div>
+      ) : displayEntries.length === 0 ? (
         <div className="text-center py-10 text-slate-500 space-y-2">
           <FileText className="w-8 h-8 mx-auto text-slate-400" />
           <p className="text-sm font-semibold text-slate-700">{t.noDataFound}</p>

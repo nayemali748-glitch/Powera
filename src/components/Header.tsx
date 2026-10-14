@@ -161,18 +161,20 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Dashboard</span>
           </button>
 
-          <button
-            id="nav-tab-submissions"
-            onClick={() => setActiveTab('my-submissions')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'my-submissions'
-                ? 'bg-white text-slate-900 shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5 text-sky-500" />
-            <span>{t.mySubmissions}</span>
-          </button>
+          {currentUser?.role !== 'agency' && (
+            <button
+              id="nav-tab-submissions"
+              onClick={() => setActiveTab('my-submissions')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'my-submissions'
+                  ? 'bg-white text-slate-900 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5 text-sky-500" />
+              <span>{t.mySubmissions}</span>
+            </button>
+          )}
 
           <button
             id="nav-tab-work-orders"
@@ -222,7 +224,11 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Worker / User Badge */}
         <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-xs">
           <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-            currentUser?.role === 'admin' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+            currentUser?.role === 'admin' 
+              ? 'bg-emerald-100 text-emerald-800' 
+              : currentUser?.role === 'agency'
+                ? 'bg-purple-100 text-purple-800'
+                : 'bg-blue-100 text-blue-800'
           }`}>
             {currentUser?.role === 'admin' ? (
               <ShieldCheck className="w-3.5 h-3.5" />
@@ -258,7 +264,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {cleanNameOnly(currentUser?.name || workerName || 'Worker')}
                 </div>
                 <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                  <span>{currentUser?.designation || (isAdmin ? 'Admin' : 'Lineman / Field Operator')}</span>
+                  <span>{currentUser?.designation || (isAdmin ? 'Admin' : currentUser?.role === 'agency' ? 'Agency Partner' : 'Lineman / Field Operator')}</span>
                 </div>
               </div>
             </div>

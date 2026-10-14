@@ -1148,7 +1148,7 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
       );
       const isRecentLocal = Boolean(localU._localSavedAt) && (Date.now() - Number(localU._localSavedAt) < 600000);
 
-      if (!existingByRowId && !existingByIdNo && isRecentLocal) {
+      if (!existingByRowId && !existingByIdNo) {
         userMap.set(lId || `usr_${localU.idNo}`, localU);
       } else if (isRecentLocal && (existingByRowId || existingByIdNo)) {
         const keyToUpdate = existingByRowId ? lId : String(existingByIdNo.id || lId);
@@ -1283,6 +1283,32 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
   }
 
   if (!matchedUser) {
+    // Check if cleanId matches any Agency name in cached disconnection tasks or Google Sheet tasks
+    const discTasks = cachedDisconnectionState?.tasks || [];
+    const matchingDiscTask = discTasks.find((t: any) => {
+      const ag = String(t.Agency || t.agency || t.assignedAgency || t['Agency Name'] || '').trim().toLowerCase();
+      const agAlnum = ag.replace(/[^a-z0-9]/g, '');
+      const cleanAlnum = cleanId.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return (ag && (ag === cleanId.toLowerCase() || (cleanAlnum.length >= 3 && (agAlnum === cleanAlnum || agAlnum.includes(cleanAlnum) || cleanAlnum.includes(agAlnum)))));
+    });
+    if (matchingDiscTask) {
+      const agName = String(matchingDiscTask.Agency || matchingDiscTask.agency || matchingDiscTask.assignedAgency || cleanId).trim();
+      matchedUser = {
+        id: `usr_agency_${cleanId.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+        idNo: cleanId.toUpperCase(),
+        loginId: cleanId,
+        userId: cleanId,
+        name: agName,
+        agencyName: agName,
+        role: 'agency',
+        status: 'active',
+        password: cleanPass,
+        designation: 'Agency Partner (WBSEDCL)'
+      };
+    }
+  }
+
+  if (!matchedUser) {
     return {
       status: 401,
       body: {
@@ -1339,6 +1365,7 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     loginId: idNoStr,
     userId: idNoStr,
     name: String(matchedUser['Full Name'] || matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
+    agencyName: String(matchedUser['Agency Name'] || matchedUser.agencyName || matchedUser['Full Name'] || matchedUser.name || ''),
     phone: String(matchedUser['Phone'] || matchedUser.phone || ''),
     role: resolvedRole,
     status: 'active' as const,
@@ -3048,6 +3075,14 @@ app.post('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const payload = req.body.data || req.body;
+    const userRole = String(payload.role || '').toLowerCase();
+    const category = String(payload.category || '').toUpperCase();
+    if (userRole === 'agency' && category !== 'DISCONNECTION') {
+      return res.status(403).json({
+        success: false,
+        error: 'Agency accounts are only permitted to submit entries in the Disconnection module.'
+      });
+    }
     const saved = await handleFastCreateEntry(payload, 'createEntry');
     return res.status(201).json({ success: true, entry: saved, data: saved });
   } catch (err: any) {

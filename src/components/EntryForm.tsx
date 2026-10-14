@@ -68,6 +68,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   disconnectionTasks,
 }) => {
   const t = translations[lang] || translations.en;
+  const isAgency = currentUser?.role === 'agency';
 
   const [loading, setLoading] = useState(false);
   const isSubmittingRef = useRef<boolean>(false);
@@ -420,7 +421,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmittingRef.current || loading) return;
+    if (isSubmittingRef.current || loading || isAgency) return;
     setHasAttemptedSubmit(true);
 
     const validation = validateForm();
@@ -851,6 +852,26 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
       {/* Main Form Fields */}
       <form onSubmit={handleSubmit} noValidate className="p-5 sm:p-7 space-y-6">
+        {/* Top Agency View-Only Notice Banner */}
+        {isAgency && (
+          <div className="p-4 sm:p-5 bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl flex items-start gap-3.5 text-amber-950 shadow-xs animate-in fade-in">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 font-bold shadow-xs">
+              <Eye className="w-5 h-5" />
+            </div>
+            <div className="text-xs">
+              <h4 className="font-black text-amber-950 text-sm">
+                {lang === 'bn' ? 'ভিউ-অনলি মোড (View-Only Mode — এজেন্সি লগইন)' : 'View-Only Mode (Agency Login)'}
+              </h4>
+              <p className="text-amber-900 text-xs mt-1 font-semibold leading-relaxed">
+                {lang === 'bn'
+                  ? 'এজেন্সি পার্টনার শুধুমাত্র ডিসকানেকশন (Disconnection) মডিউলে কাজ করতে পারবেন। এই ফর্মে শুধুমাত্র দেখা যাবে, ডেটা এন্ট্রি বা সাবমিট করা অনুমোদিত নয়।'
+                  : 'Agency accounts can only perform work in the Disconnection module. Form entry and submission are disabled on this module.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <fieldset disabled={isAgency} className={`space-y-6 border-0 p-0 m-0 min-w-0 ${isAgency ? 'opacity-90 pointer-events-none select-none' : ''}`}>
         {/* Top Validation Error Alert Banner */}
         {hasAttemptedSubmit && Object.keys(validationErrors).length > 0 && (
           <div 
@@ -1972,15 +1993,17 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowGpsCameraModal(true)}
-                  disabled={isCompressing}
-                  className="flex-1 min-w-[120px] px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                  disabled={isCompressing || isAgency}
+                  className="flex-1 min-w-[120px] px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Camera className="w-3.5 h-3.5" />
                   <span>GPS ক্যামেরা (HD)</span>
                 </button>
 
                 {/* File / Gallery Upload */}
-                <label className="flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-300 hover:border-slate-400 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                <label className={`flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors ${
+                  isAgency ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:border-slate-400 cursor-pointer'
+                }`}>
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
                   <span>গ্যালারি / ফাইল</span>
                   <input
@@ -1988,7 +2011,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                     accept="image/*,video/*"
                     onChange={handlePhotoUpload}
                     className="hidden"
-                    disabled={isCompressing}
+                    disabled={isCompressing || isAgency}
                   />
                 </label>
               </div>
@@ -2045,6 +2068,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           </div>
         </div>
 
+        </fieldset>
+
         {/* Action Buttons */}
         <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200">
           {onBack && (
@@ -2057,23 +2082,30 @@ export const EntryForm: React.FC<EntryFormProps> = ({
             </button>
           )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex-1 sm:flex-initial px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 active:scale-98 ml-auto"
-          >
-            {loading ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>{t.submitting}</span>
-              </>
-            ) : (
-              <>
-                <Send className="w-4 h-4" />
-                <span>{t.submit}</span>
-              </>
-            )}
-          </button>
+          {isAgency ? (
+            <div className="flex-1 sm:flex-initial px-6 py-2.5 bg-slate-100 text-slate-500 border border-slate-300 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-not-allowed ml-auto shadow-inner">
+              <Eye className="w-4 h-4 text-amber-600" />
+              <span>{lang === 'bn' ? 'শুধুমাত্র দেখার জন্য (ডেটা এন্ট্রি নিষ্ক্রিয়)' : 'View-Only (Data Entry Disabled)'}</span>
+            </div>
+          ) : (
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 sm:flex-initial px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 active:scale-98 ml-auto"
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>{t.submitting}</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  <span>{t.submit}</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </form>
 

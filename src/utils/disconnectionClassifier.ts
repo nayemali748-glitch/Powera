@@ -426,7 +426,10 @@ export function doesTaskBelongToAgencyUser(
     (user as any).agencyName,
     (user as any)['Agency Name'],
     user.name,
-    user.username
+    user.username,
+    user.idNo,
+    (user as any).loginId,
+    (user as any).userId
   ]
     .map(v => String(v || '').trim())
     .filter(Boolean);
@@ -531,14 +534,15 @@ export function isAgencyUserSession(
 /**
  * Filters Disconnection tasks for the logged-in user:
  * - Admin sees all rows.
- * - Agency account (e.g. BISHAL ENTERPRISE, PUSPO ENTERPRISE) ONLY sees rows where the Google Sheet "Agency" column matches their Agency Name / ID.
- * - General Lineman / Field Worker (not matching an Agency) sees the general list.
+ * - Agency account ONLY sees rows where the Google Sheet "Agency" column matches their specific Agency Name / ID.
+ *   Non-matching rows are strictly hidden.
+ * - General Lineman / Field Worker sees the general list.
  */
 export function filterDisconnectionTasksForUser(
   tasks: DisconnectionTask[],
-  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string; agencyName?: string } | null
 ): DisconnectionTask[] {
-  if (!Array.isArray(tasks)) return [];
+  if (!Array.isArray(tasks) || tasks.length === 0) return [];
   if (!user) return tasks;
 
   if (isAgencyUserSession(user, tasks)) {
