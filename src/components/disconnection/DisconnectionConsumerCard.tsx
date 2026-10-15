@@ -26,6 +26,7 @@ import {
   cleanDisconnectionNotes,
   cleanWorkerOrAgencyName
 } from '../../utils/disconnectionClassifier';
+import { LiveOutstandingModal } from './LiveOutstandingModal';
 
 interface DisconnectionConsumerCardProps {
   task: DisconnectionTask;
@@ -56,6 +57,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   const [optimisticReissueRequested, setOptimisticReissueRequested] = useState(false);
   const [optimisticAdminDecision, setOptimisticAdminDecision] = useState<'APPROVED' | 'REJECTED' | null>(null);
   const [showHdPhotoModal, setShowHdPhotoModal] = useState(false);
+  const [showLiveCheckModal, setShowLiveCheckModal] = useState(false);
 
   const isUrgent = String(task.priority || '').toUpperCase() === 'URGENT';
   const rawStatus = String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
@@ -375,11 +377,19 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
               </span>
             )}
 
-            {/* Live indicator with lightning bolt */}
-            <span className="inline-flex items-center gap-1 text-blue-500 font-semibold text-xs">
+            {/* Live indicator with lightning bolt - clickable for Outstanding & LPSC Check */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowLiveCheckModal(true);
+              }}
+              className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600 font-semibold text-xs cursor-pointer active:scale-95 transition-transform"
+              title="Click to check Live Outstanding & LPSC"
+            >
               <Zap className="w-3.5 h-3.5 fill-blue-500 text-blue-500" />
               <span>Live</span>
-            </span>
+            </button>
           </div>
         </div>
 
@@ -711,6 +721,14 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             />
           </div>
         </div>
+      )}
+      {showLiveCheckModal && (
+        <LiveOutstandingModal
+          task={task}
+          isOpen={showLiveCheckModal}
+          onClose={() => setShowLiveCheckModal(false)}
+          lang={lang}
+        />
       )}
     </div>
   );

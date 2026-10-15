@@ -1141,6 +1141,71 @@ function submitRecord(recordData) {
       updatedAt: now()
     });
 
+    // DISCONNECTION DUPLICATE PREVENTION:
+    // If saving to Disconnection sheet, check if this consumer already exists.
+    // If so, update that existing row in-place — NEVER append a duplicate row at the bottom!
+    if (canonicalCat === 'Disconnection') {
+      const rawCId = String(recordData['Consumer Id'] || recordData.consumerId || recordData['Consumer ID'] || recordData.accountNumber || recordData.id || recordData.submissionId || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
+      let normTargetCId = rawCId.replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+      if (/^\d+$/.test(normTargetCId)) {
+        normTargetCId = normTargetCId.replace(/^0+/, '') || '0';
+      }
+      normTargetCId = normTargetCId.toLowerCase();
+
+      if (normTargetCId && s) {
+        const discData = s.getDataRange().getValues();
+        const discHeaders = discData.length > 0 ? discData[0].map(function(h) { return String(h || '').trim(); }) : [];
+        let existingRowIdx = -1;
+        for (let r = 1; r < discData.length; r++) {
+          for (let c = 0; c < discData[r].length; c++) {
+            let cellVal = String(discData[r][c] || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+            if (/^\d+$/.test(cellVal)) {
+              cellVal = cellVal.replace(/^0+/, '') || '0';
+            }
+            if (cellVal && cellVal.toLowerCase() === normTargetCId) {
+              existingRowIdx = r + 1;
+              break;
+            }
+          }
+          if (existingRowIdx !== -1) break;
+        }
+
+        if (existingRowIdx > 1) {
+          // Update existing row in-place!
+          discHeaders.forEach(function(h, colIdx) {
+            const newVal = extractFieldValue(recordData, h);
+            if (newVal !== undefined && newVal !== null && newVal !== '') {
+              s.getRange(existingRowIdx, colIdx + 1).setValue(newVal);
+            }
+          });
+          try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+          return {
+            duplicate: true,
+            message: 'Consumer ' + rawCId + ' record updated in-place in Disconnection sheet (duplicate suppressed)',
+            sheet: destSheetName,
+            category: canonicalCat,
+            recordId: finalId,
+            submissionId: finalSubmissionId,
+            rowUpdated: existingRowIdx,
+            entry: verifiedRecord
+          };
+        }
+      }
+
+      // If consumer not found and not an explicit new upload/insert, strictly suppress appending new row
+      if (recordData._isNewInsert !== true) {
+        Logger.log('Disconnection record for consumer ' + rawCId + ' not found; suppressed duplicate append.');
+        return {
+          duplicate: false,
+          suppressed: true,
+          message: 'Disconnection list is maintained by Admin. Unlisted consumer insert suppressed.',
+          sheet: destSheetName,
+          category: canonicalCat,
+          entry: verifiedRecord
+        };
+      }
+    }
+
     // Save ONLY to matching Google Sheet!
     appendSheetRecord(destSheetName, verifiedRecord);
 
@@ -1722,6 +1787,9 @@ function doGet(e) {
     if (action === 'cleanupTabs' || action === 'deleteRemovedTabs') {
       return out({ deletedTabs: cleanupRemovedTabs(ss()) }, 'Removed tabs cleaned up');
     }
+    if (action === 'cleanupDisconnectionDuplicates' || action === 'deduplicateDisconnection') {
+      return out(cleanupDisconnectionDuplicates(), 'Disconnection duplicates cleaned up');
+    }
 
     // Fallback: Unknown action
     return errOut('UNKNOWN_GET_ACTION', 'Unrecognized GET action: ' + action);
@@ -1932,6 +2000,9 @@ function doPost(e) {
     }
     if (action === 'setupDisconnectionDatabase' || action === 'setupDisconnection') {
       return out(setupDisconnectionDatabase(), 'Disconnection database verified', reqId);
+    }
+    if (action === 'cleanupDisconnectionDuplicates' || action === 'deduplicateDisconnection') {
+      return out(cleanupDisconnectionDuplicates(), 'Disconnection duplicates cleaned up', reqId);
     }
 
     return errOut('UNKNOWN_POST_ACTION', 'Unrecognized POST action: ' + action, reqId);
@@ -2406,7 +2477,11 @@ function handleSubmitDisconnectionReport(body) {
       return JSON.parse(cached);
     }
 
-    const targetConsumerId = String(body['Consumer Id'] || body.consumerId || body['Consumer ID'] || body.accountNumber || '').trim();
+    const targetConsumerId = String(
+      body['Consumer Id'] || body.consumerId || body['Consumer ID'] || body.accountNumber || 
+      (body.data && (body.data['Consumer Id'] || body.data.consumerId || body.data.accountNumber || body.data.id || body.data.taskId)) || 
+      body.id || body.taskId || ''
+    ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
     const targetMru = String(body['MRU'] || body.mru || body.mruSection || '').trim();
     const targetOffCode = String(body['off_code'] || body.off_code || body.offCode || '').trim();
 
@@ -2488,46 +2563,75 @@ function handleSubmitDisconnectionReport(body) {
 
     let foundRow = -1;
     let prevStatus = 'PENDING';
+    const matchingRows = [];
 
-    // 1. Match using stable unique record key: prefer Consumer Id + MRU + off_code
-    if (targetConsumerId && cIdIdx !== -1) {
-      for (let r = 1; r < data.length; r++) {
-        const rowCId = String(data[r][cIdIdx] || '').trim();
-        const rowMru = mruIdx !== -1 ? String(data[r][mruIdx] || '').trim() : '';
-        const rowOff = offIdx !== -1 ? String(data[r][offIdx] || '').trim() : '';
+    function normalizeCId(val) {
+      if (val === undefined || val === null) return '';
+      let s = String(val).trim();
+      s = s.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').trim();
+      s = s.replace(/\.0+$/, '');
+      s = s.replace(/[, \-_]/g, '');
+      if (/^\d+$/.test(s)) {
+        s = s.replace(/^0+/, '') || '0';
+      }
+      return s.toLowerCase();
+    }
 
-        if (rowCId.toLowerCase() === targetConsumerId.toLowerCase()) {
-          if (targetMru && targetOffCode) {
-            if (rowMru.toLowerCase() === targetMru.toLowerCase() && rowOff.toLowerCase() === targetOffCode.toLowerCase()) {
-              foundRow = r + 1;
-              const stIdx = headers.indexOf('Discon Status');
-              if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
-              break;
-            }
-          } else if (targetMru) {
-            if (rowMru.toLowerCase() === targetMru.toLowerCase()) {
-              foundRow = r + 1;
-              const stIdx = headers.indexOf('Discon Status');
-              if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
-              break;
-            }
-          } else if (foundRow === -1) {
-            foundRow = r + 1;
-            const stIdx = headers.indexOf('Discon Status');
-            if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+    const normTargetCId = normalizeCId(targetConsumerId);
+
+    // 1. Match using stable unique record key: Consumer Id column or all columns
+    if (normTargetCId) {
+      // Find Consumer Id column index if headers didn't match exactly
+      let effectiveCIdCol = cIdIdx;
+      if (effectiveCIdCol === -1) {
+        for (let c = 0; c < headers.length; c++) {
+          const hn = headers[c].toLowerCase().replace(/[\s_\-\.\/]/g, '');
+          if (
+            hn === 'consumerid' || 
+            hn === 'consumer' || 
+            hn === 'cid' || 
+            hn === 'consumerno' || 
+            hn === 'consumernumber' || 
+            hn === 'consid' || 
+            hn === 'cano' || 
+            hn === 'accountno' || 
+            hn === 'accountnumber' || 
+            hn === 'acno'
+          ) {
+            effectiveCIdCol = c;
+            break;
           }
         }
       }
 
-      // If triple match didn't find, fallback to Consumer Id match
-      if (foundRow === -1) {
+      if (effectiveCIdCol !== -1) {
         for (let r = 1; r < data.length; r++) {
-          const rowCId = String(data[r][cIdIdx] || '').trim();
-          if (rowCId.toLowerCase() === targetConsumerId.toLowerCase()) {
-            foundRow = r + 1;
-            const stIdx = headers.indexOf('Discon Status');
-            if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
-            break;
+          const rowCId = String(data[r][effectiveCIdCol] || '').trim();
+          if (normalizeCId(rowCId) === normTargetCId) {
+            matchingRows.push(r + 1);
+            if (foundRow === -1) {
+              foundRow = r + 1;
+              const stIdx = headers.indexOf('Discon Status');
+              if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+            }
+          }
+        }
+      }
+
+      // 2. Fallback: Search all columns of each row if column header was shifted or non-standard
+      if (matchingRows.length === 0) {
+        for (let r = 1; r < data.length; r++) {
+          for (let c = 0; c < data[r].length; c++) {
+            const cellVal = String(data[r][c] || '').trim();
+            if (cellVal && normalizeCId(cellVal) === normTargetCId) {
+              matchingRows.push(r + 1);
+              if (foundRow === -1) {
+                foundRow = r + 1;
+                const stIdx = headers.indexOf('Discon Status');
+                if (stIdx !== -1) prevStatus = String(data[r][stIdx] || 'PENDING').trim();
+              }
+              break;
+            }
           }
         }
       }
@@ -2535,8 +2639,7 @@ function handleSubmitDisconnectionReport(body) {
 
     const nowTimestamp = now();
 
-    // Map of operational columns allowed to be updated by worker (O:AF, and Y)
-    // Worker CANNOT modify A:N source data or AG Upload Date!
+    // Map of operational columns allowed to be updated by worker/agency/admin
     const operationalUpdateMap = {
       'Discon Status': status,
       'Status': status,
@@ -2559,16 +2662,64 @@ function handleSubmitDisconnectionReport(body) {
       'Payment Source': paymentSource
     };
 
-    if (foundRow > 1) {
-      // Update that row only - NEVER create a duplicate row!
+    if (matchingRows.length > 0) {
+      // 1. Update primary matching row in-place with comprehensive case-insensitive and normalized header matching
+      const rowToUpdate = matchingRows[0];
       for (let col = 0; col < headers.length; col++) {
         const colName = headers[col];
-        if (operationalUpdateMap[colName] !== undefined && operationalUpdateMap[colName] !== null && String(operationalUpdateMap[colName]) !== '') {
-          s.getRange(foundRow, col + 1).setValue(operationalUpdateMap[colName]);
+        const nH = normHeader(colName);
+        let valToSet = null;
+
+        if (nH === 'disconstatus' || nH === 'status' || nH === 'taskstatus' || nH === 'disconnectionstatus') {
+          valToSet = status;
+        } else if (nH === 'remarks' || nH === 'remark' || nH === 'workerremarks' || nH === 'workerremark') {
+          valToSet = remarksColVal;
+        } else if (nH === 'notes' || nH === 'comment' || nH === 'comments') {
+          valToSet = notes;
+        } else if (nH === 'discondate' || nH === 'date' || nH === 'disconnectiondate' || nH === 'reportdate') {
+          valToSet = reportDate;
+        } else if (nH === 'reading' || nH === 'meterreading' || nH === 'number') {
+          valToSet = reading;
+        } else if (nH === 'agency' || nH === 'worker' || nH === 'workername' || nH === 'assignedagency' || nH === 'assignedworker') {
+          if (agency) valToSet = agency;
+        } else if (nH === 'paymentstatus') {
+          valToSet = paymentStatus;
+        } else if (nH === 'paidamount') {
+          if (paidAmount) valToSet = paidAmount;
+        } else if (nH === 'paiddate' || nH === 'paymentdate') {
+          if (paidDate) valToSet = paidDate;
+        } else if (nH === 'paidtype' || nH === 'paymentreference') {
+          if (paidType) valToSet = paidType;
+        } else if (nH === 'gispole' || nH === 'poleno' || nH === 'polenumber') {
+          if (gisPole) valToSet = gisPole;
+        } else if (nH === 'image' || nH === 'photo' || nH === 'photourl') {
+          if (finalImageUrl) valToSet = finalImageUrl;
+        } else if (nH === 'lastupdated' || nH === 'updatedat') {
+          valToSet = nowTimestamp;
+        } else if (operationalUpdateMap[colName] !== undefined && operationalUpdateMap[colName] !== null && String(operationalUpdateMap[colName]) !== '') {
+          valToSet = operationalUpdateMap[colName];
+        }
+
+        if (valToSet !== null && valToSet !== undefined && String(valToSet) !== '') {
+          s.getRange(rowToUpdate, col + 1).setValue(valToSet);
         }
       }
-    } else {
-      // If row not found at all, create single complete row
+
+      // 2. DEDUPLICATION: If any duplicate rows already existed for this consumer in the sheet, delete them from bottom to top
+      if (matchingRows.length > 1) {
+        for (let d = matchingRows.length - 1; d >= 1; d--) {
+          try {
+            s.deleteRow(matchingRows[d]);
+            Logger.log('Purged existing duplicate row ' + matchingRows[d] + ' for consumer ' + targetConsumerId);
+          } catch (delErr) {
+            Logger.log('Notice deleting duplicate row ' + matchingRows[d] + ': ' + delErr);
+          }
+        }
+      }
+
+      foundRow = matchingRows[0];
+    } else if (body._isNewInsert === true) {
+      // ONLY create a new row if explicitly designated as a brand new upload / insert!
       const newRecord = {
         'off_code': targetOffCode || '',
         'MRU': targetMru || '',
@@ -2605,6 +2756,9 @@ function handleSubmitDisconnectionReport(body) {
         'Upload Date': nowTimestamp
       };
       appendSheetRecord('Disconnection', newRecord);
+    } else {
+      // STRICTLY SUPPRESS DUPLICATE ROW CREATION!
+      Logger.log('Disconnection record for consumer ' + targetConsumerId + ' was not found to update in-place; duplicate append strictly suppressed.');
     }
 
     const res = {
@@ -2737,4 +2891,109 @@ function getDisconnectionHistory(params) {
     history: []
   };
 }
+
+// ============================================================================
+// DISCONNECTION DUPLICATE CLEANUP (Strict Single Row per Consumer ID)
+// ============================================================================
+
+function cleanupDisconnectionDuplicates() {
+  const lock = LockService.getScriptLock();
+  const hasLock = lock.tryLock(30000);
+  if (!hasLock) throw Error('Server is busy processing another transaction. Please retry in a few seconds.');
+  try {
+    const s = getSheet('Disconnection');
+    if (!s) return { success: false, message: 'Disconnection sheet not found' };
+    const data = s.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, removedCount: 0, message: 'Sheet is empty' };
+    const headers = data[0].map(function(h) { return String(h || '').trim(); });
+    
+    let cIdCol = -1;
+    for (let c = 0; c < headers.length; c++) {
+      const hn = headers[c].toLowerCase().replace(/[\s_\-\.\/]/g, '');
+      if (
+        hn === 'consumerid' || 
+        hn === 'consumer' || 
+        hn === 'cid' || 
+        hn === 'consumerno' || 
+        hn === 'consumernumber' || 
+        hn === 'consid' || 
+        hn === 'cano' || 
+        hn === 'accountno' || 
+        hn === 'accountnumber' || 
+        hn === 'acno'
+      ) {
+        cIdCol = c;
+        break;
+      }
+    }
+    if (cIdCol === -1) cIdCol = 2; // fallback to column C
+
+    const statusColIdx = headers.indexOf('Discon Status') !== -1 ? headers.indexOf('Discon Status') : headers.indexOf('Status');
+    const notesColIdx = headers.indexOf('Notes') !== -1 ? headers.indexOf('Notes') : (headers.indexOf('Remarks') !== -1 ? headers.indexOf('Remarks') : headers.indexOf('Remark'));
+    const readingColIdx = headers.indexOf('Reading') !== -1 ? headers.indexOf('Reading') : headers.indexOf('Meter Reading');
+    const agencyColIdx = headers.indexOf('Agency');
+
+    const seenConsumers = {};
+    const rowsToDelete = [];
+
+    for (let r = 1; r < data.length; r++) {
+      let rawVal = String(data[r][cIdCol] || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/^0+/, '').trim().toLowerCase();
+      if (!rawVal) {
+        // Check first 6 columns
+        for (let c = 0; c < Math.min(data[r].length, 6); c++) {
+          const cv = String(data[r][c] || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/^0+/, '').trim().toLowerCase();
+          if (cv && /^[0-9]{5,}$/.test(cv)) {
+            rawVal = cv;
+            break;
+          }
+        }
+      }
+
+      if (!rawVal) continue;
+
+      if (seenConsumers[rawVal]) {
+        // This is a duplicate row! Merge any updated status, remark, or reading into earlier row
+        const earlierRow = seenConsumers[rawVal];
+        const curStatus = statusColIdx !== -1 ? String(data[r][statusColIdx] || '').trim().toUpperCase() : '';
+        const curNotes = notesColIdx !== -1 ? String(data[r][notesColIdx] || '').trim() : '';
+        const curReading = readingColIdx !== -1 ? String(data[r][readingColIdx] || '').trim() : '';
+        const curAgency = agencyColIdx !== -1 ? String(data[r][agencyColIdx] || '').trim() : '';
+
+        if (curStatus && curStatus !== 'PENDING' && statusColIdx !== -1) {
+          s.getRange(earlierRow, statusColIdx + 1).setValue(curStatus);
+        }
+        if (curNotes && notesColIdx !== -1) {
+          s.getRange(earlierRow, notesColIdx + 1).setValue(curNotes);
+        }
+        if (curReading && readingColIdx !== -1) {
+          s.getRange(earlierRow, readingColIdx + 1).setValue(curReading);
+        }
+        if (curAgency && agencyColIdx !== -1) {
+          s.getRange(earlierRow, agencyColIdx + 1).setValue(curAgency);
+        }
+
+        rowsToDelete.push(r + 1); // 1-indexed sheet row
+      } else {
+        seenConsumers[rawVal] = r + 1;
+      }
+    }
+
+    // Delete duplicate rows from bottom to top so row indices do not shift
+    rowsToDelete.sort(function(a, b) { return b - a; });
+    for (let i = 0; i < rowsToDelete.length; i++) {
+      s.deleteRow(rowsToDelete[i]);
+    }
+
+    try { CacheService.getScriptCache().remove('records_cache'); } catch (e) {}
+
+    return {
+      success: true,
+      removedCount: rowsToDelete.length,
+      message: 'Successfully deduplicated Disconnection sheet: removed ' + rowsToDelete.length + ' duplicate rows.'
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 

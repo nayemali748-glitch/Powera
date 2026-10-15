@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   SlidersHorizontal,
   ChevronDown,
+  ChevronRight,
   Layers,
   Sparkles,
   MoreVertical,
@@ -1468,22 +1469,21 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           <button
             id="tab-agency-dashboard"
             onClick={() => {
-              if (activeTab === 'VIEW_LIST') {
-                setIsDashboardExpanded(prev => !prev);
-              } else {
+              if (activeTab === 'DASHBOARD') {
                 setActiveTab('VIEW_LIST');
-                setIsDashboardExpanded(true);
+              } else {
+                setActiveTab('DASHBOARD');
               }
             }}
             className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
-              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+              activeTab === 'DASHBOARD'
                 ? 'bg-amber-600 text-white border-amber-600 shadow-md ring-2 ring-amber-200'
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50/60 hover:border-amber-300'
             }`}
           >
             <div className="flex items-center gap-2 min-w-0">
               <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded))
+                activeTab === 'DASHBOARD'
                   ? 'bg-white/20 text-white'
                   : 'bg-amber-100 text-amber-700'
               }`}>
@@ -1494,14 +1494,14 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   {lang === 'bn' ? '১. পারফরম্যান্স ড্যাশবোর্ড' : '1. PERFORMANCE DASHBOARD'}
                 </div>
                 <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
-                  (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'text-amber-100' : 'text-slate-400'
+                  activeTab === 'DASHBOARD' ? 'text-amber-100' : 'text-slate-400'
                 }`}>
                   {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'PAID')).length} Paid • {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'DISCONNECT')).length} Discon
                 </div>
               </div>
             </div>
-            <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-              (activeTab === 'DASHBOARD' || (activeTab === 'VIEW_LIST' && isDashboardExpanded)) ? 'rotate-180 text-white' : 'text-slate-400'
+            <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+              activeTab === 'DASHBOARD' ? 'rotate-90 text-white' : 'text-slate-400'
             }`} />
           </button>
 

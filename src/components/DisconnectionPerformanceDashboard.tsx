@@ -51,6 +51,7 @@ interface DisconnectionPerformanceDashboardProps {
   onSelectFilter?: (status: string, agency?: string) => void;
   isAdmin?: boolean;
   onDeleteTask?: (task: DisconnectionTask) => Promise<void> | void;
+  currentUser?: any;
 }
 
 export const parseTaskAmount = (val: any): number => {
@@ -72,8 +73,10 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
   isRefreshing = false,
   onSelectFilter,
   isAdmin = false,
-  onDeleteTask
+  onDeleteTask,
+  currentUser
 }) => {
+  const effectiveUser = currentUser || { role: isAdmin ? 'admin' : 'agency', idNo: '8695716192', name: isAdmin ? 'Admin Controller' : 'Agency' };
   const [isBreakdownOpen, setIsBreakdownOpen] = useState<boolean>(true);
   const [selectedAgency, setSelectedAgency] = useState<string>('All');
   const [selectedPhase, setSelectedPhase] = useState<PhaseFilterType>('ALL');

@@ -2701,7 +2701,10 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
   enqueueGasWrite(async () => {
     try {
       let gasRes: any;
-      if (isUpdatingExisting) {
+      if (canonicalTab === 'Disconnection') {
+        const ok = await syncSingleDisconnectionRowToSheet({ ...sheetPayload, _isNewInsert: false });
+        gasRes = { success: ok };
+      } else if (isUpdatingExisting) {
         gasRes = await callGoogleAppsScript(
           'updateEntry',
           { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
@@ -2759,7 +2762,8 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
 
   const isDisc =
     String(bodyData?.category || existingInDiscCache?.category || existingInCache?.category || '').toUpperCase().includes('DISCONNECT') ||
-    /^PWR-DIS-|^TASK-DISC-/i.test(cleanId);
+    /^PWR-DIS-|^TASK-DISC-/i.test(cleanId) ||
+    Boolean(bareKey && cachedDisconnectionState?.tasks?.some((t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === bareKey));
 
   if (isDisc && bareCId) {
     const exactSheetRow =
@@ -4527,10 +4531,32 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       } else {
         localDisconnectionOverlayMap.delete(key);
         overlayChanged = true;
-        mergedMap.set(key, t);
+        if (mergedMap.has(key)) {
+          const existing = mergedMap.get(key);
+          const tStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
+          const existingStatus = String(existing.taskStatus || existing.disconStatus || existing['Discon Status'] || 'PENDING').trim().toUpperCase();
+          const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
+          const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
+          if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
+            mergedMap.set(key, t);
+          }
+        } else {
+          mergedMap.set(key, t);
+        }
       }
     } else {
-      mergedMap.set(key, t);
+      if (mergedMap.has(key)) {
+        const existing = mergedMap.get(key);
+        const tStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
+        const existingStatus = String(existing.taskStatus || existing.disconStatus || existing['Discon Status'] || 'PENDING').trim().toUpperCase();
+        const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
+        const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
+        if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
+          mergedMap.set(key, t);
+        }
+      } else {
+        mergedMap.set(key, t);
+      }
     }
   }
 
@@ -4748,7 +4774,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     try {
       const crFirst = await callGoogleAppsScript(
         'createEntry',
-        { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
+        { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', _isNewInsert: true, ...gasPayload, data: gasPayload },
         'POST',
         25000
       );
@@ -4758,6 +4784,22 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     } catch {}
   }
 
+  // 1. Primary in-place Disconnection row update (strictly updates matching Consumer Id row in Disconnection sheet)
+  try {
+    const discRes = await callGoogleAppsScript(
+      'submitDisconnectionReport',
+      { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, ...gasPayload, data: gasPayload, _isNewInsert: false },
+      'POST',
+      25000
+    );
+    if (discRes && discRes.success !== false) {
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[Disconnection Sheet Sync] submitDisconnectionReport notice for ${cId}:`, err);
+  }
+
+  // 2. Secondary in-place updateEntry fallback
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
@@ -4772,19 +4814,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     console.warn(`[Disconnection Sheet Sync] updateEntry notice for ${cId}:`, err);
   }
 
-  try {
-    const crRes = await callGoogleAppsScript(
-      'createEntry',
-      { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
-      'POST',
-      25000
-    );
-    if (crRes && crRes.success !== false) {
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] createEntry retry pending for Consumer ${cId}:`, err);
-  }
+  // Strictly do NOT call createEntry for existing tasks — prevents duplicate rows at bottom of sheet!
   return false;
 }
 

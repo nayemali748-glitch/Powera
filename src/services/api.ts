@@ -2784,22 +2784,25 @@ export async function submitDisconnectionTaskReport(report: {
     }
   } catch {}
 
-  // Non-blocking / resilient Google Sheets sync via updateEntry + submitRecord fallback
+  // Non-blocking in-place Google Sheets update fallback (NEVER append/submit duplicate records)
   const syncToGasFallback = async () => {
     try {
-      const upRes = await callGasApi<any>('updateEntry', { ...payload, data: payload }, 'POST');
+      const res = await callGasApi<any>('submitDisconnectionReport', { ...payload, _isNewInsert: false }, 'POST');
+      if (res && res.success !== false) {
+        return res;
+      }
+    } catch {}
+    try {
+      const upRes = await callGasApi<any>('updateEntry', { ...payload, data: payload, category: 'Disconnection', id: cId, _isNewInsert: false }, 'POST');
       if (upRes && upRes.success !== false && upRes.updated !== false) {
         return upRes;
       }
     } catch {}
     try {
-      const crRes = await callGasApi<any>('submitRecord', { ...payload, data: payload }, 'POST');
-      if (crRes && crRes.success !== false) {
-        return crRes;
+      const discRes = await callGasApi<any>('updateDisconnection', { ...payload, _isNewInsert: false }, 'POST');
+      if (discRes && discRes.success !== false) {
+        return discRes;
       }
-    } catch {}
-    try {
-      await callGasApi<any>('updateDisconnection', payload, 'POST');
     } catch {}
     return null;
   };
