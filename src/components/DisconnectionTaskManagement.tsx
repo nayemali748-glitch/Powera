@@ -64,11 +64,13 @@ import {
   getReissueLockState,
   cleanDisconnectionNotes,
   cleanWorkerOrAgencyName,
-  filterDisconnectionTasksForUser
+  filterDisconnectionTasksForUser,
+  isAgencyUserSession
 } from '../utils/disconnectionClassifier';
 import { getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 import { DisconnectionDashboard } from './disconnection/DisconnectionDashboard';
 import { AgencyDisconnectionDashboard } from './disconnection/AgencyDisconnectionDashboard';
+import { DisconnectionPerformanceDashboard } from './DisconnectionPerformanceDashboard';
 import { DisconnectionUpload } from './disconnection/DisconnectionUpload';
 import { DisconnectionReport } from './disconnection/DisconnectionReport';
 import { DisconnectionConsumerCard } from './disconnection/DisconnectionConsumerCard';
@@ -104,7 +106,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   externalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
-  const isAgency = currentUser?.role === 'agency';
+  const isAgency = !isAdmin && isAgencyUserSession(currentUser, externalTasks);
 
   // Navigation tab state (Workers always view the Consumer List directly)
   const [activeTab, setActiveTabState] = useState<DisconnectionTab>((isAdmin || isAgency) ? initialTab : 'VIEW_LIST');
@@ -118,7 +120,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   }, [onTabChange]);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!isAdmin && !isAgency) {
       setActiveTabState('VIEW_LIST');
       setIsDashboardExpanded(false);
       return;
@@ -129,7 +131,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         setIsDashboardExpanded(true);
       }
     }
-  }, [initialTab, isAdmin]);
+  }, [initialTab, isAdmin, isAgency]);
 
   // Core Data States (Initialized synchronously from local cache for 0ms instant rendering)
   const [tasks, setTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
@@ -311,10 +313,23 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
           }));
 
+        // Strict in-memory deduplication by normalized consumer ID
+        const seenIncoming = new Set<string>();
+        const dedupedIncoming: DisconnectionTask[] = [];
+        for (const item of cleanIncoming) {
+          const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
+            .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+          if (k) {
+            if (seenIncoming.has(k)) continue;
+            seenIncoming.add(k);
+          }
+          dedupedIncoming.push(item);
+        }
+
         setTasks(prev => {
           const hasChanged =
-            cleanIncoming.length !== prev.length ||
-            cleanIncoming.some((item, idx) => {
+            dedupedIncoming.length !== prev.length ||
+            dedupedIncoming.some((item, idx) => {
               const p = prev[idx];
               if (!p) return true;
               const itemAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim();
@@ -343,11 +358,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             return prev;
           }
 
-          setCachedDisconnectionTasksSync(cleanIncoming);
-          return cleanIncoming;
+          setCachedDisconnectionTasksSync(dedupedIncoming);
+          return dedupedIncoming;
         });
 
-        if (onTasksChange) onTasksChange(cleanIncoming.length);
+        if (onTasksChange) onTasksChange(dedupedIncoming.length);
         if (discResult.stats) {
           setStats(discResult.stats);
         }
@@ -377,10 +392,24 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           ...item,
           serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
         }));
+
+      // Strict in-memory deduplication
+      const seenExt = new Set<string>();
+      const dedupedIncoming: DisconnectionTask[] = [];
+      for (const item of cleanIncoming) {
+        const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
+          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        if (k) {
+          if (seenExt.has(k)) continue;
+          seenExt.add(k);
+        }
+        dedupedIncoming.push(item);
+      }
+
       setTasks(prev => {
         const hasChanged =
-          cleanIncoming.length !== prev.length ||
-          cleanIncoming.some((item, idx) => {
+          dedupedIncoming.length !== prev.length ||
+          dedupedIncoming.some((item, idx) => {
             const p = prev[idx];
             if (!p) return true;
             const itemAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim();
@@ -404,7 +433,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               item.photoUrl !== p.photoUrl
             );
           });
-        return hasChanged ? cleanIncoming : prev;
+        return hasChanged ? dedupedIncoming : prev;
       });
     }
   }, [externalTasks, applyLocalReissueDecision]);
@@ -483,27 +512,50 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     }
 
     setTasks(prev => {
-      const next = prev.map(t =>
-        (t.taskId === updatedTask.taskId || (t.consumerId && t.consumerId === updatedTask.consumerId))
-          ? {
-              ...t,
-              ...updatedTask,
-              taskStatus: updatedTask.taskStatus,
-              disconStatus: updatedTask.disconStatus,
-              'Discon Status': updatedTask['Discon Status'],
-              workerRemarks: updatedTask.workerRemarks,
-              workerReport: updatedTask.workerReport,
-              Notes: updatedTask.Notes,
-              notes: updatedTask.notes,
-              reissueRequested: Boolean(updatedTask.reissueRequested),
-              reissueApproved: Boolean(updatedTask.reissueApproved),
-              reissueRejected: Boolean(updatedTask.reissueRejected),
-              statusHistory: updatedTask.statusHistory
-            }
-          : t
-      );
-      setCachedDisconnectionTasksSync(next);
-      return next;
+      const normUpdatedKey = String(updatedTask.consumerId || (updatedTask as any)['Consumer Id'] || updatedTask.taskId || '')
+        .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+
+      const next = prev.map(t => {
+        const normTKey = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '')
+          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+
+        const isMatch = (normUpdatedKey && normTKey === normUpdatedKey) ||
+          (t.taskId && updatedTask.taskId && t.taskId === updatedTask.taskId);
+
+        if (isMatch) {
+          return {
+            ...t,
+            ...updatedTask,
+            taskStatus: updatedTask.taskStatus,
+            disconStatus: updatedTask.disconStatus,
+            'Discon Status': updatedTask['Discon Status'],
+            workerRemarks: updatedTask.workerRemarks,
+            workerReport: updatedTask.workerReport,
+            Notes: updatedTask.Notes,
+            notes: updatedTask.notes,
+            reissueRequested: Boolean(updatedTask.reissueRequested),
+            reissueApproved: Boolean(updatedTask.reissueApproved),
+            reissueRejected: Boolean(updatedTask.reissueRejected),
+            statusHistory: updatedTask.statusHistory
+          };
+        }
+        return t;
+      });
+
+      // Strict in-memory deduplication by normalized key
+      const seen = new Set<string>();
+      const deduped: DisconnectionTask[] = [];
+      for (const item of next) {
+        const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
+          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        if (k) {
+          if (seen.has(k)) continue;
+          seen.add(k);
+        }
+        deduped.push(item);
+      }
+      setCachedDisconnectionTasksSync(deduped);
+      return deduped;
     });
   };
 
@@ -1459,85 +1511,80 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       </div>
       )}
 
-      {/* Compact Option Cards (Agency Login: Performance Dashboard & Consumer List) */}
+      {/* Compact Option Cards for Agency (Performance Dashboard & Disconnection List) */}
       {isAgency && (
         <div
           className="grid grid-cols-2 gap-2"
-          id="disconnection-agency-compact-options"
+          id="disconnection-agency-options"
         >
           {/* 1. PERFORMANCE DASHBOARD */}
           <button
             id="tab-agency-dashboard"
             onClick={() => {
-              if (activeTab === 'DASHBOARD') {
-                setActiveTab('VIEW_LIST');
-              } else {
-                setActiveTab('DASHBOARD');
-              }
+              setActiveTab(activeTab === 'DASHBOARD' ? 'VIEW_LIST' : 'DASHBOARD');
             }}
-            className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+            className={`flex items-center justify-between p-2.5 sm:p-3 rounded-xl sm:rounded-2xl border transition-all text-left cursor-pointer ${
               activeTab === 'DASHBOARD'
                 ? 'bg-amber-600 text-white border-amber-600 shadow-md ring-2 ring-amber-200'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50/60 hover:border-amber-300'
+                : 'bg-white text-slate-800 border-slate-200 hover:bg-amber-50 hover:border-amber-300 shadow-xs'
             }`}
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+              <div className={`w-8 h-8 rounded-lg sm:rounded-xl flex items-center justify-center shrink-0 ${
                 activeTab === 'DASHBOARD'
                   ? 'bg-white/20 text-white'
                   : 'bg-amber-100 text-amber-700'
               }`}>
-                <LayoutDashboard className="w-3.5 h-3.5" />
+                <LayoutDashboard className="w-4 h-4" />
               </div>
               <div className="min-w-0">
-                <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
+                <div className="text-[11px] sm:text-xs font-black tracking-tight leading-tight">
                   {lang === 'bn' ? '১. পারফরম্যান্স ড্যাশবোর্ড' : '1. PERFORMANCE DASHBOARD'}
                 </div>
-                <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
-                  activeTab === 'DASHBOARD' ? 'text-amber-100' : 'text-slate-400'
+                <div className={`text-[9px] sm:text-[10px] font-bold leading-tight mt-0.5 ${
+                  activeTab === 'DASHBOARD' ? 'text-amber-100' : 'text-slate-500'
                 }`}>
-                  {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'PAID')).length} Paid • {userScopedTasks.filter(t => matchesDisconnectionStatusFilter(t, 'DISCONNECT')).length} Discon
+                  {counts.paid} Paid • {counts.disconnect} Discon
                 </div>
               </div>
             </div>
-            <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-              activeTab === 'DASHBOARD' ? 'rotate-90 text-white' : 'text-slate-400'
-            }`} />
+            <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+              activeTab === 'DASHBOARD' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'
+            }`}>
+              LIVE
+            </span>
           </button>
 
-          {/* 2. VIEW LIST */}
+          {/* 2. DISCONNECTION LIST */}
           <button
             id="tab-agency-view-list"
-            onClick={() => {
-              setActiveTab('VIEW_LIST');
-              setIsDashboardExpanded(false);
-            }}
-            className={`flex items-center justify-between p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
-              activeTab === 'VIEW_LIST' && !isDashboardExpanded
+            onClick={() => setActiveTab('VIEW_LIST')}
+            className={`flex items-center justify-between p-2.5 sm:p-3 rounded-xl sm:rounded-2xl border transition-all text-left cursor-pointer ${
+              activeTab === 'VIEW_LIST'
                 ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-300'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-50 hover:border-slate-300 shadow-xs'
             }`}
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+              <div className={`w-8 h-8 rounded-lg sm:rounded-xl flex items-center justify-center shrink-0 ${
+                activeTab === 'VIEW_LIST' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
               }`}>
-                <Users className="w-3.5 h-3.5" />
+                <Users className="w-4 h-4" />
               </div>
               <div className="min-w-0">
-                <div className="text-[10px] sm:text-[11px] font-black tracking-tight leading-tight">
-                  {lang === 'bn' ? '২. উপভোক্তা তালিকা' : '2. VIEW LIST'}
+                <div className="text-[11px] sm:text-xs font-black tracking-tight leading-tight">
+                  {lang === 'bn' ? '২. ডিসকানেকশন তালিকা' : '2. DISCONNECTION LIST'}
                 </div>
-                <div className={`text-[9px] font-bold leading-tight mt-0.5 ${
-                  activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'text-slate-300' : 'text-slate-400'
+                <div className={`text-[9px] sm:text-[10px] font-bold leading-tight mt-0.5 ${
+                  activeTab === 'VIEW_LIST' ? 'text-slate-300' : 'text-slate-500'
                 }`}>
-                  All Consumers
+                  {lang === 'bn' ? 'উপভোক্তা তালিকা' : 'All Consumers'}
                 </div>
               </div>
             </div>
             <span
-              className={`ml-1 px-2 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
-                activeTab === 'VIEW_LIST' && !isDashboardExpanded ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
+              className={`px-2 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
+                activeTab === 'VIEW_LIST' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-700'
               }`}
             >
               {userScopedTasks.length}
@@ -1640,9 +1687,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         </div>
       )}
 
-      {/* Main Content Sections */}
-      <>
-          {/* SECTION 1: PERFORMANCE DASHBOARD */}
+      {/* SECTION 1: PERFORMANCE DASHBOARD */}
           {activeTab === 'DASHBOARD' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
               <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-sm">
@@ -1669,22 +1714,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               </div>
 
               {isAgency ? (
-                <AgencyDisconnectionDashboard
+                <DisconnectionPerformanceDashboard
                   tasks={userScopedTasks}
-                  agencyName={currentUser?.name || currentUser?.agencyName || 'Agency'}
+                  lang={lang}
+                  isAdmin={false}
+                  currentUser={currentUser}
                   onRefresh={() => loadData(true)}
                   isRefreshing={isRefreshing}
-                  onUpdateStatus={handleOpenUpdateModal}
-                  onRequestReissue={handleRequestReissue}
-                  onSelectStatusFilter={status => {
+                  onSelectFilter={(status) => {
                     setStatusFilter(status);
                     setActiveTab('VIEW_LIST');
                   }}
-                  onSelectClassFilter={cls => {
-                    setClassFilter(cls);
-                  }}
-                  lang={lang}
-                  onClose={() => setActiveTab('VIEW_LIST')}
+                  onBack={() => setActiveTab('VIEW_LIST')}
                 />
               ) : (
                 <DisconnectionDashboard
@@ -1833,22 +1874,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       </div>
 
                       {isAgency ? (
-                        <AgencyDisconnectionDashboard
+                        <DisconnectionPerformanceDashboard
                           tasks={userScopedTasks}
-                          agencyName={currentUser?.name || currentUser?.agencyName || 'Agency'}
+                          lang={lang}
+                          isAdmin={false}
+                          currentUser={currentUser}
                           onRefresh={() => loadData(true)}
                           isRefreshing={isRefreshing}
-                          onUpdateStatus={handleOpenUpdateModal}
-                          onRequestReissue={handleRequestReissue}
-                          onSelectStatusFilter={status => {
+                          onSelectFilter={(status) => {
                             setStatusFilter(status);
                             setIsDashboardExpanded(false);
                           }}
-                          onSelectClassFilter={cls => {
-                            setClassFilter(cls);
-                          }}
-                          lang={lang}
-                          onClose={() => setIsDashboardExpanded(false)}
+                          onBack={() => setIsDashboardExpanded(false)}
                         />
                       ) : (
                         <DisconnectionDashboard
@@ -2438,7 +2475,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               )}
             </div>
           )}
-        </>
 
       {/* UPDATE STATUS MODAL */}
       {selectedTaskForUpdate && (

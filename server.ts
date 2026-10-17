@@ -4,6 +4,8 @@ import fs from 'fs';
 import dns from 'dns';
 import crypto from 'crypto';
 import net from 'net';
+import zlib from 'zlib';
+import { execSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import * as XLSX from 'xlsx';
 
@@ -4496,6 +4498,18 @@ function clearDisconnectionStateCache() {
   gasCache.clear();
 }
 
+function normalizeConsumerIdKey(val: any): string {
+  if (val === undefined || val === null) return '';
+  let s = String(val).trim();
+  s = s.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').trim();
+  s = s.replace(/\.0+$/, '');
+  s = s.replace(/[, \-_]/g, '');
+  if (/^\d+$/.test(s)) {
+    s = s.replace(/^0+/, '') || '0';
+  }
+  return s.toLowerCase();
+}
+
 function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
   const mergedMap = new Map<string, any>();
   const now = Date.now();
@@ -4504,10 +4518,12 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
   // 1. Always iterate sheetTasks FIRST so Google Sheets 'Disconnection' tab is the Single Source of Truth
   for (const t of sheetTasks) {
     if (isRecordDeleted(t) || !isValidDisconnectionConsumerRow(t)) continue;
-    const key = String(t.consumerId || t['Consumer Id'] || t.taskId || '').trim().toLowerCase();
+    const key = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId);
     if (!key) continue;
 
-    const ov = localDisconnectionOverlayMap.get(key);
+    const ov = localDisconnectionOverlayMap.get(key) ||
+      (t.taskId ? localDisconnectionOverlayMap.get(normalizeConsumerIdKey(t.taskId)) : undefined);
+
     if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
       const sheetStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
       const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || 'PENDING').trim().toUpperCase();
@@ -4538,7 +4554,7 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
           const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
           const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
           if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
-            mergedMap.set(key, t);
+            mergedMap.set(key, { ...existing, ...t });
           }
         } else {
           mergedMap.set(key, t);
@@ -4552,7 +4568,7 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
         const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
         const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
         if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
-          mergedMap.set(key, t);
+          mergedMap.set(key, { ...existing, ...t });
         }
       } else {
         mergedMap.set(key, t);
@@ -4562,15 +4578,17 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
 
   // 2. Include any brand-new uploaded overlay items not yet returned by sheetTasks (only if unsynced and < 35s)
   for (const [key, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
+    const normKey = normalizeConsumerIdKey(key || ov.consumerId || ov['Consumer Id'] || ov.taskId);
+    if (!normKey) continue;
     if (isRecordDeleted(ov) || !isValidDisconnectionConsumerRow(ov)) {
       localDisconnectionOverlayMap.delete(key);
       overlayChanged = true;
       continue;
     }
-    if (!mergedMap.has(key)) {
+    if (!mergedMap.has(normKey)) {
       const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
       if (isRecentUnsynced) {
-        mergedMap.set(key, ov);
+        mergedMap.set(normKey, ov);
       } else {
         localDisconnectionOverlayMap.delete(key);
         overlayChanged = true;
@@ -5719,8 +5737,9 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     _syncedToSheet: false
   };
 
-  if (cIdKey) {
-    localDisconnectionOverlayMap.set(cIdKey, updatedTaskObj);
+  const normCIdKey = normalizeConsumerIdKey(cIdKey || cId);
+  if (normCIdKey) {
+    localDisconnectionOverlayMap.set(normCIdKey, updatedTaskObj);
     saveDiscOverlayToDisk();
   }
 
@@ -5728,21 +5747,42 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     const cacheCopy = { ...updatedTaskObj };
     delete cacheCopy.photoDataUrl;
     const foundIdx = cachedDisconnectionState.tasks.findIndex(
-      (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey || String(t.taskId) === taskId
+      (t: any) => {
+        const tKey = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId);
+        return tKey === normCIdKey || String(t.taskId) === taskId;
+      }
     );
     if (foundIdx !== -1) {
-      cachedDisconnectionState.tasks[foundIdx] = cacheCopy;
+      cachedDisconnectionState.tasks[foundIdx] = { ...cachedDisconnectionState.tasks[foundIdx], ...cacheCopy };
     } else {
-      cachedDisconnectionState.tasks.push(cacheCopy);
+      const digitsOnly = normCIdKey.replace(/\D/g, '');
+      const altIdx = digitsOnly ? cachedDisconnectionState.tasks.findIndex((t: any) => {
+        const altKey = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId).replace(/\D/g, '');
+        return altKey && altKey === digitsOnly;
+      }) : -1;
+      if (altIdx !== -1) {
+        cachedDisconnectionState.tasks[altIdx] = { ...cachedDisconnectionState.tasks[altIdx], ...cacheCopy };
+      } else {
+        cachedDisconnectionState.tasks.push(cacheCopy);
+      }
     }
+    // Deduplicate in-memory cache to ensure zero duplicates
+    const seenCIds = new Set<string>();
+    cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.filter((t: any) => {
+      const k = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId);
+      if (!k) return true;
+      if (seenCIds.has(k)) return false;
+      seenCIds.add(k);
+      return true;
+    });
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
   }
 
   // Persist to Google Sheet Disconnection tab in background queue so UI never blocks or errors on transient GAS busy states
   enqueueGasWrite(async () => {
     const ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
-    if (ok && cIdKey) {
-      localDisconnectionOverlayMap.delete(cIdKey);
+    if (ok && normCIdKey) {
+      localDisconnectionOverlayMap.delete(normCIdKey);
       saveDiscOverlayToDisk();
     }
     gasCache.clear();
@@ -5765,6 +5805,226 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
 
   return res.json(responseObj);
+});
+
+// ============================================================================
+// OFFICIAL WBSEDCL OUTSTANDING REPORT RETRIEVAL ENGINE
+// ============================================================================
+function fetchOfficialWbsedclReport(consumerId: string) {
+  const cleanId = String(consumerId || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+  const officialPortalUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`;
+  const cookieFile = `/tmp/wbsedcl_cookie_${cleanId}.txt`;
+  const outPdf = `/tmp/wbsedcl_pdf_${cleanId}.pdf`;
+
+  try {
+    // 1. Request official WBSEDCL WebDynpro portal endpoint
+    const cmd = `curl -s -m 14 -c "${cookieFile}" -b "${cookieFile}" -H "User-Agent: ${BROWSER_USER_AGENT}" -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" "${officialPortalUrl}"`;
+    const html = execSync(cmd, { encoding: 'utf-8', timeout: 16000 });
+
+    const m = html.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    if (!m) {
+      return {
+        success: false,
+        liveConnected: false,
+        officialPortalUrl,
+        requiresBrowserOpen: true,
+        error: 'Official WBSEDCL SAP portal session expired or requires direct browser verification.'
+      };
+    }
+
+    let rawLink = m[1];
+    rawLink = rawLink.replace(/\\\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
+    rawLink = rawLink.replace(/\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+    const pdfUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/${rawLink}`;
+
+    const dlCmd = `curl -s -m 16 -c "${cookieFile}" -b "${cookieFile}" -H "User-Agent: ${BROWSER_USER_AGENT}" -H "Referer: ${officialPortalUrl}" "${pdfUrl}" -o "${outPdf}"`;
+    execSync(dlCmd, { timeout: 20000 });
+
+    if (!fs.existsSync(outPdf)) {
+      return {
+        success: false,
+        liveConnected: false,
+        officialPortalUrl,
+        requiresBrowserOpen: true,
+        error: 'Failed to download official WBSEDCL report document.'
+      };
+    }
+
+    const pdfBuffer = fs.readFileSync(outPdf);
+    if (!pdfBuffer.slice(0, 5).toString('utf-8').startsWith('%PDF')) {
+      return {
+        success: false,
+        liveConnected: false,
+        officialPortalUrl,
+        requiresBrowserOpen: true,
+        error: 'WBSEDCL did not return a valid PDF document.'
+      };
+    }
+
+    // Extract text from uncompressed streams in the PDF
+    const regex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let match;
+    let fullText = '';
+    while ((match = regex.exec(pdfBuffer.toString('binary'))) !== null) {
+      try {
+        const streamData = Buffer.from(match[1], 'binary');
+        const decompressed = zlib.inflateSync(streamData);
+        fullText += ' ' + decompressed.toString('utf-8');
+      } catch (e) {}
+    }
+
+    const nameMatch = fullText.match(/Name\s*:\s*([^)]+?)\)/i);
+    const addrMatch = fullText.match(/Service Location Address\s*:\s*\)Tj[\s\S]*?\(([^)]+?)\)Tj/i) || fullText.match(/Service Location Address\s*:\s*([^)]+?)\)/i);
+    const officeMatch = fullText.match(/Office Name\s*:\s*([^)]+?)\)/i);
+    const connDateMatch = fullText.match(/Date of Service Connection\s*:\s*([^)]+?)\)/i);
+    const statusMatch = fullText.match(/Connection Status\s*:\s*([^)]+?)\)/i);
+    const isNoDuesCert = /NO DUES CERTIFICATE/i.test(fullText) || /no unpaid bill against/i.test(fullText);
+    const unpaidMatch = fullText.match(/total unpaid bill amount is Rs\.\s*([0-9.,]+)/i);
+    const lpscMatch = fullText.match(/Late Payment Surcharge\s*(?:\\?\(|\()?LPSC(?:\\?\))?\s*amount of Rs\.?\s*([0-9.,]+)/i)
+      || fullText.match(/LPSC.*?amount of Rs\.?\s*([0-9.,]+)/i);
+    const reportingDateMatch = fullText.match(/as on\)\s*Tj[\s\S]*?([0-9]{2}\.[0-9]{2}\.[0-9]{4})/i)
+      || fullText.match(/as on[\s\S]*?([0-9]{2}\.[0-9]{2}\.[0-9]{4})/i)
+      || fullText.match(/([0-9]{2}\.[0-9]{2}\.[0-9]{4})/);
+    const readingDateMatch = fullText.match(/meter reading dated[\s\S]*?([0-9]{2}\.[0-9]{2}\.[0-9]{4})/i)
+      || fullText.match(/meter reading dated\s*([0-9.]+)/i);
+
+    let unpaidAmount: number | null = null;
+    let lpscAmount: number | null = null;
+
+    if (isNoDuesCert) {
+      unpaidAmount = 0;
+      lpscAmount = 0;
+    } else {
+      unpaidAmount = unpaidMatch ? parseFloat(unpaidMatch[1].replace(/,/g, '')) : null;
+      lpscAmount = lpscMatch ? parseFloat(lpscMatch[1].replace(/,/g, '')) : null;
+    }
+
+    const isLpscAvailable = typeof lpscAmount === 'number' && !isNaN(lpscAmount);
+    const isUnpaidAvailable = typeof unpaidAmount === 'number' && !isNaN(unpaidAmount);
+
+    let totalDue: number | null = null;
+    if (isUnpaidAvailable && isLpscAvailable) {
+      totalDue = Math.round(((unpaidAmount ?? 0) + (lpscAmount ?? 0)) * 100) / 100;
+    } else if (isUnpaidAvailable) {
+      totalDue = unpaidAmount;
+    }
+
+    return {
+      success: true,
+      liveConnected: true,
+      officialPortalUrl,
+      pdfBase64: pdfBuffer.toString('base64'),
+      data: {
+        consumerId: cleanId,
+        reportType: isNoDuesCert ? 'NO DUES CERTIFICATE' : 'OUTSTANDING REPORT',
+        consumerName: nameMatch ? nameMatch[1].trim() : '',
+        address: addrMatch ? addrMatch[1].trim() : '',
+        office: officeMatch ? officeMatch[1].trim() : '',
+        connDate: connDateMatch ? connDateMatch[1].trim() : '',
+        connectionStatus: statusMatch ? statusMatch[1].trim() : 'LIVE',
+        outstandingAmount: unpaidAmount,
+        lpscAmount: lpscAmount,
+        lpscSurcharge: lpscAmount,
+        lpscAvailable: isLpscAvailable,
+        totalDueAmount: totalDue,
+        reportingDate: reportingDateMatch ? reportingDateMatch[1].trim() : '',
+        lastReadingDate: readingDateMatch ? readingDateMatch[1].trim().replace(/\.$/, '') : '',
+        lastCheckedAt: new Date().toISOString()
+      }
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      liveConnected: false,
+      officialPortalUrl,
+      requiresBrowserOpen: true,
+      error: `WBSEDCL portal notice: ${err?.message || 'Official report access unavailable. Open direct portal link.'}`
+    };
+  }
+}
+
+app.post('/api/wbsedcl/live-check', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawConsumerId = String(req.body?.consumerId || req.body?.id || req.body?.taskId || '').trim();
+    const cleanId = rawConsumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+    if (!cleanId) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid Consumer ID is required for Outstanding & LPSC check.'
+      });
+    }
+
+    // 1. Retrieve the official WBSEDCL Outstanding Report using authorized official report source
+    const officialReport = fetchOfficialWbsedclReport(cleanId);
+
+    if (officialReport.success && officialReport.data) {
+      return res.json({
+        success: true,
+        liveConnected: true,
+        consumerId: cleanId,
+        consumerName: officialReport.data.consumerName,
+        address: officialReport.data.address,
+        ccc: officialReport.data.office,
+        office: officialReport.data.office,
+        connDate: officialReport.data.connDate,
+        connectionStatus: officialReport.data.connectionStatus,
+        outstandingAmount: officialReport.data.outstandingAmount,
+        lpscAmount: officialReport.data.lpscAmount,
+        lpscSurcharge: officialReport.data.lpscSurcharge,
+        lpscAvailable: officialReport.data.lpscAvailable,
+        totalDueAmount: officialReport.data.totalDueAmount,
+        reportingDate: officialReport.data.reportingDate,
+        lastReadingDate: officialReport.data.lastReadingDate,
+        lastCheckedAt: officialReport.data.lastCheckedAt,
+        reportType: officialReport.data.reportType,
+        pdfBase64: officialReport.pdfBase64,
+        officialPortalUrl: officialReport.officialPortalUrl
+      });
+    }
+
+    // 2. If official endpoint cannot be accessed directly (session requirement, network, etc.)
+    // Show clear error and option to open the official report; never substitute old Disconnection sheet amount as live data.
+    return res.json({
+      success: false,
+      liveConnected: false,
+      consumerId: cleanId,
+      officialPortalUrl: officialReport.officialPortalUrl || `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`,
+      requiresBrowserOpen: true,
+      error: officialReport.error || 'Direct automated retrieval from WBSEDCL was restricted. Please click "Open Official WBSEDCL Report Page" to view/verify the report directly in your browser.'
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Internal server error during live check'
+    });
+  }
+});
+
+// Stream official WBSEDCL PDF directly as a download
+app.get('/api/wbsedcl/download-official-pdf', (req, res) => {
+  const cleanId = String(req.query.consumerId || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+  if (!cleanId) {
+    return res.status(400).send('Consumer ID is required.');
+  }
+
+  const outPdf = `/tmp/wbsedcl_pdf_${cleanId}.pdf`;
+  if (fs.existsSync(outPdf)) {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="WBSEDCL_Outstanding_Report_${cleanId}.pdf"`);
+    return res.sendFile(outPdf);
+  }
+
+  // Fetch on demand
+  const report = fetchOfficialWbsedclReport(cleanId);
+  if (report.success && fs.existsSync(outPdf)) {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="WBSEDCL_Outstanding_Report_${cleanId}.pdf"`);
+    return res.sendFile(outPdf);
+  }
+
+  return res.redirect(`https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`);
 });
 
 app.post('/api/disconnection-tasks/assign', async (req, res) => {

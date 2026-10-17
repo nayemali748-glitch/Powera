@@ -406,6 +406,11 @@ export function doesTaskBelongToAgencyUser(
     return true;
   }
 
+  const isAgencyUser =
+    String(user.role || '').toLowerCase().trim() === 'agency' ||
+    /^(agn|agency)[-_0-9]/i.test(user.idNo || '');
+
+  // For Agency users, strictly inspect the Google Sheet's Agency column only
   const taskAgencyCandidates = [
     (task as any)['Agency'],
     task.Agency,
@@ -414,8 +419,10 @@ export function doesTaskBelongToAgencyUser(
     (task as any)['Agency Name'],
     (task as any)['Assigned Agency'],
     (task as any).agencyName,
-    task.assignedWorkerName && task.assignedWorkerName !== 'Worker' ? task.assignedWorkerName : '',
-    (task as any).workerName && (task as any).workerName !== 'Worker' ? (task as any).workerName : ''
+    ...(!isAgencyUser ? [
+      task.assignedWorkerName && task.assignedWorkerName !== 'Worker' ? task.assignedWorkerName : '',
+      (task as any).workerName && (task as any).workerName !== 'Worker' ? (task as any).workerName : ''
+    ] : [])
   ]
     .map(v => String(v || '').trim())
     .filter(Boolean);
@@ -478,8 +485,8 @@ export function doesTaskBelongToAgencyUser(
 
       const coreUserBrand = stripGenericSuffixes(normUserName);
       if (
-        coreTaskBrand.length >= 4 &&
-        coreUserBrand.length >= 4 &&
+        coreTaskBrand.length >= 3 &&
+        coreUserBrand.length >= 3 &&
         (coreTaskBrand === coreUserBrand ||
           coreTaskBrand.includes(coreUserBrand) ||
           coreUserBrand.includes(coreTaskBrand))
@@ -535,7 +542,7 @@ export function isAgencyUserSession(
  * Filters Disconnection tasks for the logged-in user:
  * - Admin sees all rows.
  * - Agency account ONLY sees rows where the Google Sheet "Agency" column matches their specific Agency Name / ID.
- *   Non-matching rows are strictly hidden.
+ *   Non-matching rows are strictly hidden (zero leakage across agencies).
  * - General Lineman / Field Worker sees the general list.
  */
 export function filterDisconnectionTasksForUser(
@@ -546,12 +553,66 @@ export function filterDisconnectionTasksForUser(
   if (!user) return tasks;
 
   if (isAgencyUserSession(user, tasks)) {
-    const matched = tasks.filter(t => doesTaskBelongToAgencyUser(t, user));
-    if (matched.length > 0) return matched;
-    return tasks;
+    // Strictly return only tasks assigned to this Agency. Never leak other agencies' records.
+    return tasks.filter(t => doesTaskBelongToAgencyUser(t, user));
   }
 
   return tasks;
+}
+
+/**
+ * Filters General Entries / Submissions for the logged-in user:
+ * - Admin sees all submissions across all agencies and workers.
+ * - Agency account ONLY sees submissions belonging to their Agency Name / ID.
+ */
+export function filterEntriesForUser(
+  entries: any[],
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string; agencyName?: string } | null
+): any[] {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  if (!user) return entries;
+
+  const role = String(user.role || '').toLowerCase().trim();
+  if (
+    role === 'admin' ||
+    role === 'superadmin' ||
+    role === 'controller' ||
+    user.idNo === '8695716192' ||
+    user.idNo === 'ADMIN'
+  ) {
+    return entries;
+  }
+
+  if (isAgencyUserSession(user)) {
+    const rawNames = [
+      (user as any).agencyName,
+      user.name,
+      user.username,
+      user.idNo
+    ]
+      .map(v => cleanWorkerOrAgencyName(String(v || '')).toLowerCase().trim())
+      .filter(Boolean);
+
+    return entries.filter(e => {
+      const eAgency = cleanWorkerOrAgencyName(
+        String(e.agencyName || (e as any).agency || (e as any)['Agency'] || (e as any)['Agency Name'] || '')
+      ).toLowerCase().trim();
+      const eSubmitted = cleanWorkerOrAgencyName(
+        String(e.submittedBy || e.workerName || '')
+      ).toLowerCase().trim();
+
+      if (!eAgency && !eSubmitted) return false;
+
+      return rawNames.some(uName => {
+        if (!uName) return false;
+        if (eAgency && (eAgency === uName || eAgency.includes(uName) || uName.includes(eAgency))) return true;
+        if (eSubmitted && (eSubmitted === uName || eSubmitted.includes(uName) || uName.includes(eSubmitted))) return true;
+        return false;
+      });
+    });
+  }
+
+  return entries;
 }
 
 

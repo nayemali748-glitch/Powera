@@ -1254,17 +1254,22 @@ function updateEntry(targetId, category, updateData) {
       const s = getSheet(sheetName);
       if (!s) continue;
       const rows = getSheetRows(sheetName);
-      const bareId = cleanId.replace(/^(TASK-DISC-|SUB-DISC-|PWR-DIS-)/i, '').trim();
-      const found = rows.find(r => {
-        const cId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
-        const mNo = String(r['Meter'] || r.meterNumber || r['Meter No'] || r.meterNo || '').trim();
-        const recId = String(r['Record ID'] || r.id || r.ID || '').trim();
-        const subId = String(r['Submission ID'] || r.submissionId || '').trim();
-        const tId = String(r['Task ID'] || r.taskId || '').trim();
+      const bareId = cleanId.replace(/^(TASK-DISC-|SUB-DISC-|PWR-DIS-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+      const bareDigits = bareId.replace(/\D/g, '');
 
-        return recId === cleanId || subId === cleanId || tId === cleanId ||
-          (cId && (cId === cleanId || cId === bareId || ('TASK-DISC-' + cId) === cleanId)) ||
-          (mNo && mNo === cleanId);
+      const found = rows.find(r => {
+        const rawCId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
+        const normCId = rawCId.replace(/^(TASK-DISC-|SUB-DISC-|PWR-DIS-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        const cIdDigits = normCId.replace(/\D/g, '');
+        const mNo = String(r['Meter'] || r.meterNumber || r['Meter No'] || r.meterNo || '').trim().toLowerCase();
+        const recId = String(r['Record ID'] || r.id || r.ID || '').trim().toLowerCase();
+        const subId = String(r['Submission ID'] || r.submissionId || '').trim().toLowerCase();
+        const tId = String(r['Task ID'] || r.taskId || '').trim().toLowerCase();
+        const cleanLower = cleanId.toLowerCase();
+
+        return recId === cleanLower || subId === cleanLower || tId === cleanLower ||
+          (normCId && (normCId === bareId || (bareDigits && cIdDigits && bareDigits === cIdDigits))) ||
+          (mNo && (mNo === cleanLower || (bareDigits && mNo.replace(/\D/g, '') === bareDigits)));
       });
       if (found) {
         matchedSheet = s;
@@ -1279,15 +1284,19 @@ function updateEntry(targetId, category, updateData) {
   if (!matchedSheet || matchedRowIndex < 2) {
     const patchObj = (updateData && typeof updateData.data === 'object') ? updateData.data : (updateData || {});
     const altConsumerId = String(patchObj.consumerId || patchObj['Consumer Id'] || patchObj['Consumer ID'] || patchObj.accountNumber || '').trim();
-    if (altConsumerId) {
+    const altNorm = altConsumerId.replace(/^(TASK-DISC-|SUB-DISC-|PWR-DIS-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+    const altDigits = altNorm.replace(/\D/g, '');
+    if (altNorm) {
       for (let i = 0; i < sheetsToSearch.length; i++) {
         try {
           const s = getSheet(sheetsToSearch[i]);
           if (!s) continue;
           const rows = getSheetRows(sheetsToSearch[i]);
           const found = rows.find(r => {
-            const cId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
-            return cId === altConsumerId || ('TASK-DISC-' + cId) === altConsumerId;
+            const rawCId = String(r['Consumer Id'] || r['Consumer ID'] || r.consumerId || '').trim();
+            const normCId = rawCId.replace(/^(TASK-DISC-|SUB-DISC-|PWR-DIS-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+            const cIdDigits = normCId.replace(/\D/g, '');
+            return normCId === altNorm || (altDigits && cIdDigits && altDigits === cIdDigits);
           });
           if (found) {
             matchedSheet = s;
@@ -2577,6 +2586,16 @@ function handleSubmitDisconnectionReport(body) {
       return s.toLowerCase();
     }
 
+    function isCIdMatch(val1, val2) {
+      const n1 = normalizeCId(val1);
+      const n2 = normalizeCId(val2);
+      if (!n1 || !n2) return false;
+      if (n1 === n2) return true;
+      const d1 = n1.replace(/\D/g, '');
+      const d2 = n2.replace(/\D/g, '');
+      return Boolean(d1 && d2 && d1 === d2);
+    }
+
     const normTargetCId = normalizeCId(targetConsumerId);
 
     // 1. Match using stable unique record key: Consumer Id column or all columns
@@ -2607,7 +2626,7 @@ function handleSubmitDisconnectionReport(body) {
       if (effectiveCIdCol !== -1) {
         for (let r = 1; r < data.length; r++) {
           const rowCId = String(data[r][effectiveCIdCol] || '').trim();
-          if (normalizeCId(rowCId) === normTargetCId) {
+          if (isCIdMatch(rowCId, targetConsumerId)) {
             matchingRows.push(r + 1);
             if (foundRow === -1) {
               foundRow = r + 1;
@@ -2623,7 +2642,7 @@ function handleSubmitDisconnectionReport(body) {
         for (let r = 1; r < data.length; r++) {
           for (let c = 0; c < data[r].length; c++) {
             const cellVal = String(data[r][c] || '').trim();
-            if (cellVal && normalizeCId(cellVal) === normTargetCId) {
+            if (cellVal && isCIdMatch(cellVal, targetConsumerId)) {
               matchingRows.push(r + 1);
               if (foundRow === -1) {
                 foundRow = r + 1;

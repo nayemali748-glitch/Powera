@@ -41,6 +41,7 @@ import { compressImageFile } from '../utils/imageCompressor';
 import { DisconnectionTaskManagement } from './DisconnectionTaskManagement';
 import { formatDateDDMMYYYY, formatTime12Hour, formatDateTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../utils/dateTimeFormat';
 import { GpsCameraModal } from './GpsCameraModal';
+import { isAgencyUserSession } from '../utils/disconnectionClassifier';
 
 interface EntryFormProps {
   category: CategoryType;
@@ -422,6 +423,14 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingRef.current || loading) return;
+
+    if (isAgencyUserSession(currentUser) && category !== 'DISCONNECTION') {
+      alert(lang === 'bn' 
+        ? 'এজেন্সি অ্যাকাউন্ট শুধুমাত্র Disconnection মডিউলে কাজ করতে পারে। NSC, Pole Case বা অন্যান্য মডিউলে ডেটা এন্ট্রি বা সেভ করা অনুমোদিত নয়।' 
+        : 'Agency accounts can only work in the Disconnection module. Saving entries in other modules is disabled.');
+      return;
+    }
+
     setHasAttemptedSubmit(true);
 
     const validation = validateForm();
@@ -2060,10 +2069,16 @@ export const EntryForm: React.FC<EntryFormProps> = ({
 
           <button
             type="submit"
-            disabled={loading}
-            className="flex-1 sm:flex-initial px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 active:scale-98 ml-auto"
+            disabled={loading || (isAgencyUserSession(currentUser) && category !== 'DISCONNECTION')}
+            className={`flex-1 sm:flex-initial px-8 py-3 ${
+              isAgencyUserSession(currentUser) && category !== 'DISCONNECTION'
+                ? 'bg-slate-500 cursor-not-allowed text-slate-200 opacity-70'
+                : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer hover:shadow-lg'
+            } font-extrabold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 active:scale-98 ml-auto`}
           >
-            {loading ? (
+            {isAgencyUserSession(currentUser) && category !== 'DISCONNECTION' ? (
+              <span>{lang === 'bn' ? 'এজেন্সি: শুধুমাত্র প্রদর্শন (সেভ বন্ধ)' : 'View Only for Agency'}</span>
+            ) : loading ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin" />
                 <span>{t.submitting}</span>

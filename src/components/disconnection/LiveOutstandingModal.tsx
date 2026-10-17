@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Zap,
+  FileCheck2,
   X,
   Search,
   Printer,
   Download,
   AlertCircle,
-  CheckCircle2,
-  Clock,
-  Building2,
   FileText,
+  User,
+  Building2,
+  Calendar,
+  MapPin,
   Loader2,
-  RotateCcw
+  ExternalLink,
+  CheckCircle2,
+  QrCode,
+  ShieldCheck
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
 
@@ -23,18 +27,30 @@ interface LiveOutstandingModalProps {
 }
 
 interface LiveCheckResult {
+  success: boolean;
   liveConnected: boolean;
   consumerId: string;
   consumerName?: string;
   mru?: string;
   ccc?: string;
-  outstandingAmount?: number;
-  lpscAmount?: number;
-  totalDueAmount?: number;
+  office?: string;
+  outstandingAmount?: number | null;
+  lpscAmount?: number | null;
+  lpscSurcharge?: number | null;
+  lpscAvailable?: boolean;
+  totalDueAmount?: number | null;
   connectionStatus?: string;
+  connDate?: string;
+  address?: string;
+  reportingDate?: string;
+  lastReadingDate?: string;
   lastCheckedAt?: string;
+  reportType?: string;
+  pdfBase64?: string;
+  officialPortalUrl?: string;
+  error?: string;
   message?: string;
-  requiresConfig?: boolean;
+  requiresBrowserOpen?: boolean;
 }
 
 export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
@@ -50,29 +66,36 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
   const [consumerId, setConsumerId] = useState<string>(initialConsumerId);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [result, setResult] = useState<LiveCheckResult | null>(null);
+  const printIframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  useEffect(() => {
-    setConsumerId(initialConsumerId);
-    setError(null);
-    setResult(null);
-  }, [initialConsumerId, isOpen]);
+  const formatCurrency = (amount: number): string => {
+    return `₹ ${amount.toLocaleString('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`;
+  };
 
-  if (!isOpen) return null;
+  const cleanIdVal = consumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+  const officialReportUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanIdVal || initialConsumerId}`;
 
-  const handleCheckOutstanding = async () => {
-    const cleanId = consumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+  const handleCheckOutstanding = useCallback(async (searchId?: string) => {
+    const rawId = searchId !== undefined ? searchId : consumerId;
+    const cleanId = rawId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
     if (!cleanId) {
-      setError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক উপভোক্তা আইডি (Consumer ID) লিখুন।' : 'Please enter a valid Consumer ID.');
+      setError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক কনজিউমার আইডি লিখুন।' : 'Please enter a valid Consumer ID.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setSuccessMessage(null);
+    setResult(null); // Never mix previous search results
 
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
+      const timer = setTimeout(() => controller.abort(), 20000);
 
       const res = await fetch('/api/wbsedcl/live-check', {
         method: 'POST',
@@ -84,293 +107,459 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok && data?.error) {
-        throw new Error(data.error);
-      }
-
-      if (data) {
+      if (data && data.success && data.liveConnected) {
         setResult(data);
-        if (!data.liveConnected && data.message) {
-          // If live credentials are not configured, result is displayed with official guidance
-          setError(data.message);
-        }
+        setError(null);
       } else {
-        throw new Error('No response from live verification server');
+        setResult(data || null);
+        const errText = data?.error || data?.message || (lang === 'bn' ? 'WBSEDCL অফিশিয়াল লাইভ সার্ভার থেকে সরাসরি রিপোর্ট লোড করা যায়নি।' : 'Could not retrieve official live report directly from WBSEDCL.');
+        setError(errText);
       }
     } catch (err: any) {
       setError(err?.name === 'AbortError'
-        ? (lang === 'bn' ? 'অনুরোধের সময় শেষ হয়ে গেছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।' : 'Request timed out. Please try again.')
+        ? (lang === 'bn' ? 'অনুরোধের সময় শেষ হয়ে গেছে।' : 'Request timed out while connecting to WBSEDCL portal.')
         : (err?.message || (lang === 'bn' ? 'লাইভ ডেটা লোড করতে ব্যর্থ হয়েছে।' : 'Failed to retrieve live data.'))
       );
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [consumerId, lang]);
 
+  useEffect(() => {
+    setConsumerId(initialConsumerId);
+    setError(null);
+    setSuccessMessage(null);
+    setResult(null);
+    if (isOpen && initialConsumerId) {
+      handleCheckOutstanding(initialConsumerId);
+    }
+  }, [initialConsumerId, isOpen]);
+
+  if (!isOpen) return null;
+
+  // Values strictly from verified official WBSEDCL live response
+  const isLive = Boolean(result && result.liveConnected);
+  const displayName = isLive ? (result?.consumerName || '—') : '—';
+  const displayOffice = isLive ? (result?.office || result?.ccc || '—') : '—';
+  const displayConnStatus = isLive ? (result?.connectionStatus || 'LIVE') : '—';
+  const displayConnDate = isLive ? (result?.connDate || '—') : '—';
+  const displayAddress = isLive ? (result?.address || '—') : '—';
+  const reportingDate = isLive ? result?.reportingDate : '';
+  const lastReadingDate = isLive ? result?.lastReadingDate : '';
+
+  const rawOsd = result?.outstandingAmount;
+  const isOsdParsed = isLive && typeof rawOsd === 'number' && !isNaN(rawOsd);
+  const osdAmount = isOsdParsed ? rawOsd : null;
+
+  const rawLpsc = result?.lpscAmount !== undefined ? result.lpscAmount : result?.lpscSurcharge;
+  const isLpscParsed = isLive && typeof rawLpsc === 'number' && !isNaN(rawLpsc);
+  const lpscAmount = isLpscParsed ? rawLpsc : null;
+
+  const rawTotal = result?.totalDueAmount;
+  const isTotalParsed = isLive && typeof rawTotal === 'number' && !isNaN(rawTotal);
+  const totalDueAmount = isTotalParsed
+    ? rawTotal
+    : (isOsdParsed && isLpscParsed)
+      ? Math.round(((osdAmount ?? 0) + (lpscAmount ?? 0)) * 100) / 100
+      : isOsdParsed
+        ? osdAmount
+        : null;
+
+  // Print authentic official WBSEDCL PDF
   const handlePrint = () => {
-    window.print();
+    try {
+      if (result?.pdfBase64) {
+        const byteCharacters = atob(result.pdfBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        if (!printIframeRef.current) {
+          const iframe = document.createElement('iframe');
+          iframe.style.position = 'fixed';
+          iframe.style.right = '0';
+          iframe.style.bottom = '0';
+          iframe.style.width = '0';
+          iframe.style.height = '0';
+          iframe.style.border = '0';
+          document.body.appendChild(iframe);
+          printIframeRef.current = iframe;
+        }
+
+        printIframeRef.current.src = blobUrl;
+        printIframeRef.current.onload = () => {
+          setTimeout(() => {
+            printIframeRef.current?.contentWindow?.print();
+            setSuccessMessage(lang === 'bn' ? '✓ প্রিন্ট ডায়ালগ সফলভাবে চালু হয়েছে।' : '✓ Official WBSEDCL report sent to print.');
+            setTimeout(() => setSuccessMessage(null), 4000);
+          }, 300);
+        };
+        return;
+      }
+      window.print();
+      setSuccessMessage(lang === 'bn' ? '✓ প্রিন্ট ডায়ালগ সফলভাবে চালু হয়েছে।' : '✓ Print dialog opened.');
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch {
+      window.print();
+    }
   };
 
-  const handleDownloadSlip = () => {
-    const cId = consumerId || initialConsumerId;
-    const name = result?.consumerName || task.consumerName || (task as any)['Name'] || 'Consumer';
-    const mru = result?.mru || task.mru || (task as any)['MRU'] || task.mruSection || 'N/A';
-    const ccc = result?.ccc || (task as any)['off_code'] || 'WBSEDCL CCC';
-    const osd = result?.outstandingAmount !== undefined ? `₹${result.outstandingAmount.toLocaleString('en-IN')}` : (task.outstandingDue || '₹0');
-    const lpsc = result?.lpscAmount !== undefined ? `₹${result.lpscAmount.toLocaleString('en-IN')}` : '₹0';
-    const totalDue = result?.totalDueAmount !== undefined ? `₹${result.totalDueAmount.toLocaleString('en-IN')}` : osd;
-    const connStatus = result?.connectionStatus || task.disconStatus || task.taskStatus || 'CONNECTED';
-    const checkedAt = result?.lastCheckedAt ? new Date(result.lastCheckedAt).toLocaleString('en-IN') : new Date().toLocaleString('en-IN');
+  // Download authentic official WBSEDCL PDF
+  const handleDownload = () => {
+    const cId = cleanIdVal || initialConsumerId;
+    try {
+      if (result?.pdfBase64) {
+        const byteCharacters = atob(result.pdfBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const blobUrl = URL.createObjectURL(blob);
 
-    const slipContent = `
-========================================
-   WBSEDCL - LIVE OUTSTANDING & LPSC SLIP
-========================================
-Date & Time       : ${checkedAt}
-Consumer ID       : ${cId}
-Consumer Name     : ${name}
-Office / CCC      : ${ccc}
-MRU Section       : ${mru}
-Connection Status : ${connStatus}
-----------------------------------------
-Outstanding (OSD) : ${osd}
-LPSC Surcharge    : ${lpsc}
-----------------------------------------
-TOTAL DUE AMOUNT  : ${totalDue}
-========================================
-* WBSEDCL Utility Management System *
-    `.trim();
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `WBSEDCL_Outstanding_Report_${cId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
 
-    const blob = new Blob([slipContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `WBSEDCL_Due_Slip_${cId}_${Date.now()}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+        setSuccessMessage(lang === 'bn' ? '✓ অফিসিয়াল WBSEDCL রিপোর্ট PDF ডাউনলোড সফল হয়েছে।' : '✓ Official WBSEDCL Outstanding Report downloaded successfully.');
+        setTimeout(() => setSuccessMessage(null), 4000);
+        return;
+      }
+
+      // If PDF base64 is missing, trigger direct download route
+      const downloadUrl = `/api/wbsedcl/download-official-pdf?consumerId=${encodeURIComponent(cId)}`;
+      window.open(downloadUrl, '_blank');
+      setSuccessMessage(lang === 'bn' ? '✓ রিপোর্ট ডাউনলোড শুরু হয়েছে।' : '✓ Downloading official report from WBSEDCL.');
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch {
+      window.open(officialReportUrl, '_blank');
+    }
   };
 
-  const displayName = result?.consumerName || task.consumerName || (task as any)['Name'] || '—';
-  const displayMru = result?.mru || task.mru || (task as any)['MRU'] || task.mruSection || '—';
-  const displayOffice = result?.ccc || (task as any)['off_code'] || (task as any)['office'] || '—';
-  const displayConnStatus = result?.connectionStatus || task.disconStatus || task.taskStatus || 'CONNECTED';
+  const handleOpenOfficialPortal = () => {
+    window.open(officialReportUrl, '_blank', 'noopener,noreferrer');
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150">
       <div
-        className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-200"
+        className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94vh] animate-in zoom-in-95 duration-150 font-sans"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-live-check-title"
+        aria-labelledby="osd-check-title"
       >
-        {/* Header with Lightning Bolt badge */}
-        <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 flex items-center justify-center shrink-0">
-              <Zap className="w-5 h-5 fill-blue-400 text-blue-400" />
-            </div>
-            <div>
-              <h2 id="modal-live-check-title" className="text-sm font-black tracking-wide uppercase flex items-center gap-2">
-                <span>{lang === 'bn' ? 'লাইভ বকেয়া ও এলপিএসসি যাচাই' : 'Live Outstanding & LPSC Check'}</span>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-500 text-slate-950">
-                  WBSEDCL
+        {/* 1. Header Bar: OSD & No Dues Check + Circular Close Button */}
+        <div className="px-5 sm:px-6 pt-5 pb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-slate-900">
+            <FileCheck2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <h2 id="osd-check-title" className="text-base sm:text-lg font-bold tracking-tight flex items-center gap-2">
+              <span>OSD & No Dues Check</span>
+              {isLive && (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>WBSEDCL VERIFIED LIVE</span>
                 </span>
-              </h2>
-              <p className="text-[11px] text-slate-400">
-                {lang === 'bn' ? 'রিয়েল-টাইম বকেয়া বিল ও লেট পেমেন্ট সার্চার্জ' : 'Real-time Outstanding Due & Late Payment Surcharge verification'}
-              </p>
-            </div>
+              )}
+            </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className="w-7 h-7 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-500 hover:text-rose-600 flex items-center justify-center transition-colors cursor-pointer"
             aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-5 overflow-y-auto space-y-4">
-          {/* Consumer ID input & Check Action */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-              {lang === 'bn' ? '১. উপভোক্তা আইডি (Consumer ID)' : '1. Consumer ID'}
-            </label>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={consumerId}
-                  onChange={e => {
-                    setConsumerId(e.target.value);
+        {/* Modal Scrollable Content */}
+        <div className="px-5 sm:px-6 pb-6 overflow-y-auto space-y-4">
+          {/* 2. Search Bar Row: Input with clear 'X' + Green Search button */}
+          <div className="flex items-center gap-2.5">
+            <div className="relative flex-1 flex items-center">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5" />
+              <input
+                type="text"
+                value={consumerId}
+                onChange={e => {
+                  setConsumerId(e.target.value);
+                  setError(null);
+                  setSuccessMessage(null);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleCheckOutstanding();
+                  }
+                }}
+                placeholder="Enter Consumer ID..."
+                className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-300 hover:border-slate-400 focus:border-emerald-600 rounded-xl text-sm font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 transition-all placeholder:text-slate-400"
+              />
+              {consumerId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConsumerId('');
                     setError(null);
+                    setSuccessMessage(null);
                   }}
-                  placeholder="e.g. 1020304050"
-                  className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all tracking-wider"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={handleCheckOutstanding}
-                disabled={isLoading}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{lang === 'bn' ? 'যাচাই হচ্ছে...' : 'Checking...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-4 h-4 fill-white text-white" />
-                    <span>{lang === 'bn' ? 'যাচাই করুন' : 'CHECK OUTSTANDING'}</span>
-                  </>
-                )}
-              </button>
+                  className="absolute right-3 p-0.5 text-slate-400 hover:text-slate-600 rounded-full cursor-pointer"
+                  title="Clear"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
+
+            <button
+              type="button"
+              onClick={() => handleCheckOutstanding()}
+              disabled={isLoading}
+              className="px-5 py-2.5 bg-[#00875A] hover:bg-[#00734c] active:scale-95 text-white font-bold text-sm rounded-xl shadow-xs transition-all flex items-center gap-2 shrink-0 disabled:opacity-50 cursor-pointer"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Searching...</span>
+                </>
+              ) : (
+                <>
+                  <Search className="w-4 h-4" />
+                  <span>Search</span>
+                </>
+              )}
+            </button>
           </div>
 
-          {/* Error Banner */}
+          {/* Success Banner if Download or Print Succeeded */}
+          {successMessage && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">{successMessage}</span>
+            </div>
+          )}
+
+          {/* Error Banner with Direct Official Portal Button if Live unavailable */}
           {error && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-start gap-2 animate-in fade-in">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-relaxed">
-                <strong className="font-bold">{lang === 'bn' ? 'বিজ্ঞপ্তি: ' : 'Notice: '}</strong>
-                <span>{error}</span>
+            <div className="p-3.5 bg-amber-50/90 border border-amber-300 rounded-xl text-amber-950 text-xs space-y-2 animate-in fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">
+                  <strong className="font-bold">Notice: </strong>
+                  <span>{error}</span>
+                </div>
+              </div>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleOpenOfficialPortal}
+                  className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open Official WBSEDCL Report Page</span>
+                </button>
               </div>
             </div>
           )}
 
-          {/* Details Card */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3 pb-3 border-b border-slate-200 text-xs">
-              <div>
-                <span className="text-[11px] text-slate-500 font-semibold block">
-                  {lang === 'bn' ? 'উপভোক্তার নাম' : 'Consumer Name'}
+          {/* 3. Outstanding Report Banner: Cream/Yellow Card + Print & Download buttons */}
+          <div className="bg-[#FFF9EE] border border-[#FDE68A] rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <div className="w-6 h-6 rounded-md border-2 border-amber-600 flex items-center justify-center shrink-0">
+                <FileText className="w-3.5 h-3.5 text-amber-700 stroke-[2.5]" />
+              </div>
+              <h3 className="font-extrabold text-sm sm:text-base text-amber-950 uppercase tracking-wide">
+                {isLive ? (result?.reportType || 'OUTSTANDING REPORT') : 'OUTSTANDING REPORT'}
+              </h3>
+              <span className="px-2.5 py-0.5 rounded-full bg-[#FCE7D0] text-amber-900 text-[11px] font-black uppercase tracking-wider">
+                {!isLive ? 'PENDING CHECK' : (totalDueAmount ?? 0) > 0 ? 'OUTSTANDING' : 'NO DUES'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                title="Print Report"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Print</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="px-3.5 py-1.5 bg-[#00875A] hover:bg-[#00734c] text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                title="Download Report"
+              >
+                <Download className="w-3.5 h-3.5 text-white" />
+                <span>Download</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Amount KPI Cards Row (OSD Amount, LPSC Surcharge, Total Dues) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* OSD AMOUNT */}
+            <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-400 tracking-wider uppercase block">
+                OSD AMOUNT
+              </span>
+              <div className="mt-1 text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                {isLive && isOsdParsed ? formatCurrency(osdAmount!) : '—'}
+              </div>
+            </div>
+
+            {/* LPSC SURCHARGE */}
+            <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-400 tracking-wider uppercase block">
+                LPSC SURCHARGE
+              </span>
+              <div className="mt-1">
+                {!isLive ? (
+                  <span className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight block">—</span>
+                ) : isLpscParsed ? (
+                  <span className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight block">
+                    {formatCurrency(lpscAmount!)}
+                  </span>
+                ) : (
+                  <div className="space-y-1">
+                    <span className="text-xs text-amber-700 font-semibold leading-tight block">
+                      LPSC unavailable in official response
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleOpenOfficialPortal}
+                      className="text-[11px] text-amber-800 hover:text-amber-900 underline font-medium flex items-center gap-1 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Verify in Official WBSEDCL Report</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* TOTAL DUES */}
+            <div className="bg-emerald-50/20 border-2 border-[#A3E6CD] rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-500 tracking-wider uppercase block">
+                TOTAL DUES
+              </span>
+              <div className="mt-1 text-xl sm:text-2xl font-black text-[#00875A] tracking-tight">
+                {isLive && typeof totalDueAmount === 'number' && !isNaN(totalDueAmount)
+                  ? formatCurrency(totalDueAmount)
+                  : '—'}
+              </div>
+            </div>
+          </div>
+
+          {/* 5. Consumer Details Container */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-2xs space-y-3.5">
+            {/* Consumer Details Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                  CONSUMER DETAILS
                 </span>
-                <span className="font-bold text-slate-900 block truncate" title={displayName}>
+              </div>
+              <span className="text-xs font-mono font-bold text-slate-500">
+                ID: {cleanIdVal || initialConsumerId || '—'}
+              </span>
+            </div>
+
+            {/* Row 1: Consumer Name, CCC / Office, Connection Status */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="bg-slate-50/60 border border-slate-100 rounded-lg p-2.5">
+                <span className="text-[11px] text-slate-400 block font-medium">
+                  Consumer Name
+                </span>
+                <span className="font-bold text-slate-900 text-xs sm:text-sm block truncate uppercase mt-0.5" title={displayName}>
                   {displayName}
                 </span>
               </div>
-              <div>
-                <span className="text-[11px] text-slate-500 font-semibold block">
-                  {lang === 'bn' ? 'MRU / সেকশন' : 'MRU / Section'}
-                </span>
-                <span className="font-bold text-slate-900 block">
-                  {displayMru}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-500 font-semibold block">
-                  {lang === 'bn' ? 'অফিস / CCC' : 'Office / CCC'}
-                </span>
-                <span className="font-bold text-slate-900 block">
-                  {displayOffice}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-500 font-semibold block">
-                  {lang === 'bn' ? 'কানেকশন স্ট্যাটাস' : 'Connection Status'}
-                </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black bg-slate-200 text-slate-800 uppercase">
-                  {displayConnStatus}
-                </span>
-              </div>
-            </div>
 
-            {/* Live Financial Breakdown */}
-            <div className="space-y-2 pt-1">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-600 font-medium">
-                  {lang === 'bn' ? 'বকেয়া বিল (Outstanding / OSD):' : 'Outstanding / OSD Amount:'}
+              <div className="bg-slate-50/60 border border-slate-100 rounded-lg p-2.5">
+                <span className="text-[11px] text-slate-400 block font-medium">
+                  CCC / Office
                 </span>
-                <span className="font-bold text-slate-900">
-                  {result?.outstandingAmount !== undefined
-                    ? `₹${result.outstandingAmount.toLocaleString('en-IN')}`
-                    : (task.outstandingDue ? `₹${task.outstandingDue}` : '—')}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-600 font-medium">
-                  {lang === 'bn' ? 'লেট পেমেন্ট চার্জ (LPSC):' : 'Late Payment Surcharge (LPSC):'}
-                </span>
-                <span className="font-bold text-amber-700">
-                  {result?.lpscAmount !== undefined
-                    ? `₹${result.lpscAmount.toLocaleString('en-IN')}`
-                    : '₹0 (Check Live)'}
-                </span>
-              </div>
-
-              <div className="pt-2 border-t border-slate-200 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-black text-slate-900 block uppercase">
-                    {lang === 'bn' ? 'সর্বমোট প্রদেয় বকেয়া (Total Due):' : 'Total Due Amount:'}
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    {lang === 'bn' ? '* LPSC সমন্বয়সহ অফিসিয়াল মানদণ্ড' : '* Official WBSEDCL standard with LPSC rule'}
+                <div className="flex items-center gap-1.5 mt-0.5 min-w-0" title={displayOffice}>
+                  <Building2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-bold text-slate-900 text-xs sm:text-sm truncate uppercase">
+                    {displayOffice}
                   </span>
                 </div>
-                <div className="text-right">
-                  <span className="text-base sm:text-lg font-black text-rose-600">
-                    {result?.totalDueAmount !== undefined
-                      ? `₹${result.totalDueAmount.toLocaleString('en-IN')}`
-                      : (task.outstandingDue ? `₹${task.outstandingDue}` : '₹0')}
+              </div>
+
+              <div className="bg-slate-50/60 border border-slate-100 rounded-lg p-2.5">
+                <span className="text-[11px] text-slate-400 block font-medium">
+                  Connection Status
+                </span>
+                <div className="mt-0.5">
+                  <span className="inline-block px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] font-bold uppercase">
+                    {displayConnStatus}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Last Checked Date & Time */}
-            <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
-              <div className="flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-slate-400" />
-                <span>{lang === 'bn' ? 'সর্বশেষ যাচাই:' : 'Last Checked:'}</span>
+            {/* Row 2: Conn. Date, Service Location Address */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="bg-slate-50/60 border border-slate-100 rounded-lg p-2.5">
+                <span className="text-[11px] text-slate-400 block font-medium">
+                  Conn. Date
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-bold text-slate-900 text-xs sm:text-sm">
+                    {displayConnDate}
+                  </span>
+                </div>
               </div>
-              <span className="font-bold text-slate-700">
-                {result?.lastCheckedAt
-                  ? new Date(result.lastCheckedAt).toLocaleString('en-IN')
-                  : new Date().toLocaleDateString('en-IN')}
-              </span>
+
+              <div className="bg-slate-50/60 border border-slate-100 rounded-lg p-2.5 sm:col-span-2">
+                <span className="text-[11px] text-slate-400 block font-medium">
+                  Service Location Address
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5 min-w-0" title={displayAddress}>
+                  <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-bold text-slate-900 text-xs sm:text-sm truncate uppercase">
+                    {displayAddress}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Footer with PRINT, DOWNLOAD and CLOSE */}
-        <div className="bg-slate-100 px-5 py-3 border-t border-slate-200 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Print Bill Slip"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>{lang === 'bn' ? 'প্রিন্ট' : 'PRINT'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadSlip}
-              className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Download Statement Slip"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{lang === 'bn' ? 'ডাউনলোড' : 'DOWNLOAD'}</span>
-            </button>
+            {/* Official Report Verification Footer Details */}
+            {isLive && (
+              <div className="pt-3 border-t border-slate-100 space-y-2 text-[11px] text-slate-500">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px]">
+                  <span>
+                    Reporting Date: <strong className="text-slate-700">{reportingDate || 'Live'}</strong>
+                    {lastReadingDate && (
+                      <> • Last Meter Reading: <strong className="text-slate-700">{lastReadingDate}</strong></>
+                    )}
+                  </span>
+                  <span className="text-slate-600 font-semibold flex items-center gap-1">
+                    <QrCode className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Official Station Manager Copy</span>
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 italic">
+                  * This is a computer-generated document and hence does not requires any signature.
+                </div>
+              </div>
+            )}
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer active:scale-95"
-          >
-            {lang === 'bn' ? 'বন্ধ করুন' : 'CLOSE'}
-          </button>
         </div>
       </div>
     </div>

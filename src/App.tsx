@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import appLogo from './assets/images/power_round_logo_1787860440979.jpg';
 import { Header } from './components/Header';
 import { CategorySelector } from './components/CategorySelector';
@@ -26,7 +26,7 @@ import {
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
 import { formatDateTime12Hour, formatTime12Hour, getNowDateDDMMYYYY } from './utils/dateTimeFormat';
-import { filterDisconnectionTasksForUser } from './utils/disconnectionClassifier';
+import { filterDisconnectionTasksForUser, filterEntriesForUser, isAgencyUserSession } from './utils/disconnectionClassifier';
 import { 
   Zap, 
   ShieldCheck, 
@@ -422,7 +422,7 @@ export default function App() {
     if (isUserAdmin) {
       localStorage.setItem('power_is_admin', 'true');
       setActiveTab('admin');
-    } else if (session.role === 'agency') {
+    } else if (session.role === 'agency' || isAgencyUserSession(session, disconnectionTasks)) {
       localStorage.removeItem('power_is_admin');
       setActiveTab('disconnection');
       setActiveFormCategory('DISCONNECTION');
@@ -519,17 +519,26 @@ export default function App() {
     setSidebarOpen(false);
   };
 
+  const isAgencyUser = useMemo(() => {
+    if (isAdmin) return false;
+    return isAgencyUserSession(currentUser, disconnectionTasks);
+  }, [isAdmin, currentUser, disconnectionTasks]);
+
   const userVisibleDisconnectionTasks = isAdmin
     ? disconnectionTasks
     : filterDisconnectionTasksForUser(disconnectionTasks, currentUser);
 
+  const userVisibleEntries = isAdmin
+    ? entries
+    : filterEntriesForUser(entries, currentUser);
+
   // Helper count badges (strictly 1-to-1 per backend Google Sheet tab, scoped for Agency accounts)
   const categoryCounts: Record<CategoryType, number> = {
-    'NSC': entries.filter(e => e.category === 'NSC').length,
+    'NSC': userVisibleEntries.filter(e => e.category === 'NSC').length,
     'DISCONNECTION': userVisibleDisconnectionTasks.length,
-    'POLE CASE': entries.filter(e => e.category === 'POLE CASE').length,
-    'METER REPLESMENT': entries.filter(e => e.category === 'METER REPLESMENT').length,
-    'DTR REPLESMENT': entries.filter(e => e.category === 'DTR REPLESMENT').length,
+    'POLE CASE': userVisibleEntries.filter(e => e.category === 'POLE CASE').length,
+    'METER REPLESMENT': userVisibleEntries.filter(e => e.category === 'METER REPLESMENT').length,
+    'DTR REPLESMENT': userVisibleEntries.filter(e => e.category === 'DTR REPLESMENT').length,
   };
 
   // If user is not logged in with ID & Password, display LoginScreen
@@ -976,7 +985,7 @@ export default function App() {
                               <div className="hidden sm:flex items-center gap-2 text-xs">
                                 <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-slate-200 text-center">
                                   <span className="text-[10px] text-slate-400 block leading-tight">Total</span>
-                                  <strong className="text-white font-bold">{entries.length + userVisibleDisconnectionTasks.length}</strong>
+                                  <strong className="text-white font-bold">{userVisibleEntries.length + userVisibleDisconnectionTasks.length}</strong>
                                 </div>
                                 <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-emerald-300 text-center">
                                   <span className="text-[10px] text-slate-400 block leading-tight">Status</span>
@@ -1034,7 +1043,7 @@ export default function App() {
                               </div>
 
                               <PerformanceDashboard
-                                entries={entries}
+                                entries={userVisibleEntries}
                                 categoryCounts={categoryCounts}
                                 onSelectCategory={navToCategory}
                                 currentLanguage={currentLanguage}
@@ -1101,12 +1110,12 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               <Clock className="w-4 h-4 text-slate-600" />
                               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                                {t.recordsCount} ({entries.length})
+                                {t.recordsCount} ({userVisibleEntries.length})
                               </h4>
                             </div>
                           </div>
                           <WorkerRecentSubmissions
-                            entries={entries.slice(0, 6)}
+                            entries={userVisibleEntries.slice(0, 6)}
                             workerName={workerName}
                             currentUser={currentUser}
                             onLogout={handleUserLogout}
@@ -1178,29 +1187,47 @@ export default function App() {
                               setActiveTab('entry');
                             }}
                             onTasksChange={() => loadData(true)}
-                            externalTasks={disconnectionTasks}
+                            externalTasks={userVisibleDisconnectionTasks}
                           />
                         </div>
                       ) : (
                         <>
-                          <EntryForm
-                            category={activeFormCategory}
-                            workerName={workerName}
-                            currentUser={currentUser}
-                            initialNotice={selectedWorkOrderForEntry}
-                            availableWorkOrders={workOrders}
-                            disconnectionTasks={disconnectionTasks}
-                            onSuccess={(newEntry) => {
-                              handleEntrySuccess(newEntry);
-                              setSelectedWorkOrderForEntry(null);
-                            }}
-                            onBack={() => {
-                              setActiveFormCategory(null);
-                              setSelectedWorkOrderForEntry(null);
-                            }}
-                            onDataUpdated={() => loadData(false, true)}
-                            lang={currentLanguage}
-                          />
+                          {isAgencyUser ? (
+                            <div className="bg-slate-900 border-2 border-amber-500/40 rounded-2xl p-4 sm:p-5 text-white shadow-md space-y-2">
+                              <div className="flex items-center gap-2.5 text-amber-400 font-black text-sm sm:text-base">
+                                <ShieldCheck className="w-5 h-5 shrink-0" />
+                                <span>
+                                  {currentLanguage === 'bn' 
+                                    ? `${activeFormCategory} — শুধুমাত্র দেখার জন্য অনুমোদিত (View Only)` 
+                                    : `${activeFormCategory} — View Only (Agency)`}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-300 leading-relaxed font-medium">
+                                {currentLanguage === 'bn'
+                                  ? 'এজেন্সি অ্যাকাউন্ট শুধুমাত্র Disconnection মডিউলে কাজ (স্ট্যাটাস আপডেট ও রিমার্ক সাবমিট) করতে পারবে। NSC, Pole Case বা অন্যান্য মডিউলে নতুন ডেটা এন্ট্রি বা সেভ করা অনুমোদিত নয়। আপনি নিচে শুধুমাত্র এই মডিউলের লাইভ রেকর্ডগুলো দেখতে পারেন।'
+                                  : 'Agency accounts can work in the Disconnection module only. Creating or saving new entries for NSC, Pole Case, and other modules is disabled. You may view the live records in the table below.'}
+                              </p>
+                            </div>
+                          ) : (
+                            <EntryForm
+                              category={activeFormCategory}
+                              workerName={workerName}
+                              currentUser={currentUser}
+                              initialNotice={selectedWorkOrderForEntry}
+                              availableWorkOrders={workOrders}
+                              disconnectionTasks={userVisibleDisconnectionTasks}
+                              onSuccess={(newEntry) => {
+                                handleEntrySuccess(newEntry);
+                                setSelectedWorkOrderForEntry(null);
+                              }}
+                              onBack={() => {
+                                setActiveFormCategory(null);
+                                setSelectedWorkOrderForEntry(null);
+                              }}
+                              onDataUpdated={() => loadData(false, true)}
+                              lang={currentLanguage}
+                            />
+                          )}
 
                           {/* Dedicated Module Records List strictly from the corresponding Backend Google Sheet tab */}
                           <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
@@ -1208,7 +1235,7 @@ export default function App() {
                               <div className="flex items-center gap-2">
                                 <Clock className="w-4 h-4 text-slate-600" />
                                 <h4 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                                  {activeFormCategory} — {t.recordsCount} ({entries.filter(e => e.category === activeFormCategory).length})
+                                  {activeFormCategory} — {t.recordsCount} ({userVisibleEntries.filter(e => e.category === activeFormCategory).length})
                                 </h4>
                               </div>
                               <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
@@ -1216,11 +1243,11 @@ export default function App() {
                               </span>
                             </div>
                             <WorkerRecentSubmissions
-                              entries={entries.filter(e => e.category === activeFormCategory)}
+                              entries={userVisibleEntries.filter(e => e.category === activeFormCategory)}
                               workerName={workerName}
                               currentUser={currentUser}
                               onSelectEntry={(entry) => setPreviewEntry(entry)}
-                              onNewEntry={() => {
+                              onNewEntry={isAgencyUser ? undefined : () => {
                                 window.scrollTo({ top: 0, behavior: 'smooth' });
                               }}
                               lang={currentLanguage}
@@ -1284,7 +1311,7 @@ export default function App() {
 
                   {/* Full Performance Dashboard Component */}
                   <PerformanceDashboard
-                    entries={entries}
+                    entries={userVisibleEntries}
                     categoryCounts={categoryCounts}
                     onSelectCategory={(cat) => {
                       setSelectedCategory(cat);
@@ -1301,14 +1328,14 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-slate-600" />
                         <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
-                          {t.recordsCount} ({entries.length})
+                          {t.recordsCount} ({userVisibleEntries.length})
                         </h3>
                       </div>
                       <span className="text-xs text-slate-400">All Field Logs</span>
                     </div>
 
                     <WorkerRecentSubmissions
-                      entries={entries}
+                      entries={userVisibleEntries}
                       workerName={workerName}
                       currentUser={currentUser}
                       onLogout={handleUserLogout}
@@ -1353,7 +1380,7 @@ export default function App() {
               {activeTab === 'my-submissions' && (
                 <div className="space-y-6">
                   <WorkerRecentSubmissions
-                    entries={entries}
+                    entries={userVisibleEntries}
                     workerName={workerName}
                     currentUser={currentUser}
                     onLogout={handleUserLogout}
@@ -1394,7 +1421,7 @@ export default function App() {
                     initialTab={disconnectionInitialTab}
                     onBack={() => setActiveTab('entry')}
                     onTasksChange={() => loadData(true)}
-                    externalTasks={disconnectionTasks}
+                    externalTasks={userVisibleDisconnectionTasks}
                   />
                 </div>
               )}
