@@ -1,5 +1,8 @@
 {
   "rewrites": [
+    { "source": "/api/wbsedcl/live-check", "destination": "/api/wbsedcl/live-check" },
+    { "source": "/api/wbsedcl/download-official-pdf", "destination": "/api/wbsedcl/download-official-pdf" },
+    { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

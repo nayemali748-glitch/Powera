@@ -87,6 +87,9 @@ export function normalizeEntry(entry: any): PowerEntry {
 
   raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
   raw.workOrderDate = raw.workOrderDate || raw['Work Order Date'] || '';
+  raw.volumePageNo = raw.volumePageNo || raw['V- P-'] || raw['Volume / Page No'] || raw['Volume Page No'] || '';
+  raw.volumeNo = raw.volumeNo || raw['Volume No'] || raw['Volume'] || '';
+  raw.pageNo = raw.pageNo || raw['Page No'] || raw['Page'] || '';
   raw.workOrderNoticeId = raw.workOrderNoticeId || raw['Work Order Notice ID'] || '';
   raw.workOrderNoticeTitle = raw.workOrderNoticeTitle || raw['Work Order Notice Title'] || '';
   raw.workOrderNoticeDate = raw.workOrderNoticeDate || raw['Work Order Notice Date'] || '';

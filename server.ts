@@ -8,6 +8,7 @@ import zlib from 'zlib';
 import { execSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import * as XLSX from 'xlsx';
+import { fetchOfficialWbsedclReportAsync } from './src/utils/wbsedclReport';
 
 // Ensure IPv4 resolution first and disable Happy Eyeballs IPv6 stall for stable script.google.com connection
 try {
@@ -53,7 +54,7 @@ setInterval(() => {
       submissionIdMap.delete(subId);
     }
   }
-}, 60000);
+}, 60000).unref();
 
 // Bengali digit normalizer
 function normalizeUniversal(val: any): string {
@@ -5957,7 +5958,7 @@ app.post('/api/wbsedcl/live-check', async (req, res) => {
     }
 
     // 1. Retrieve the official WBSEDCL Outstanding Report using authorized official report source
-    const officialReport = fetchOfficialWbsedclReport(cleanId);
+    const officialReport = await fetchOfficialWbsedclReportAsync(cleanId);
 
     if (officialReport.success && officialReport.data) {
       return res.json({
@@ -6003,7 +6004,7 @@ app.post('/api/wbsedcl/live-check', async (req, res) => {
 });
 
 // Stream official WBSEDCL PDF directly as a download
-app.get('/api/wbsedcl/download-official-pdf', (req, res) => {
+app.get('/api/wbsedcl/download-official-pdf', async (req, res) => {
   const cleanId = String(req.query.consumerId || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
   if (!cleanId) {
     return res.status(400).send('Consumer ID is required.');
@@ -6017,11 +6018,13 @@ app.get('/api/wbsedcl/download-official-pdf', (req, res) => {
   }
 
   // Fetch on demand
-  const report = fetchOfficialWbsedclReport(cleanId);
-  if (report.success && fs.existsSync(outPdf)) {
+  const report = await fetchOfficialWbsedclReportAsync(cleanId);
+  if (report.success && report.pdfBase64) {
+    const pdfBuf = Buffer.from(report.pdfBase64, 'base64');
+    try { fs.writeFileSync(outPdf, pdfBuf); } catch {}
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="WBSEDCL_Outstanding_Report_${cleanId}.pdf"`);
-    return res.sendFile(outPdf);
+    return res.send(pdfBuf);
   }
 
   return res.redirect(`https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`);
@@ -6330,4 +6333,8 @@ async function startServer() {
   startListening(desiredPort);
 }
 
-startServer();
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
+  startServer();
+}
+
+export default app;

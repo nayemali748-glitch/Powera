@@ -110,6 +110,8 @@ export const EntryForm: React.FC<EntryFormProps> = ({
   // 1. NSC (New Service Connection)
   const [workOrderNo, setWorkOrderNo] = useState('');
   const [workOrderDate, setWorkOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [volumeNo, setVolumeNo] = useState('');
+  const [pageNo, setPageNo] = useState('');
   const [consumerName, setConsumerName] = useState('');
   const [fatherName, setFatherName] = useState('');
   const [applicationNo, setApplicationNo] = useState('');
@@ -330,15 +332,17 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       }
     };
 
-    // 1. Worker Name Validation
-    const effectiveWorker = (category === 'NSC' ? (nscWorkerName || worker || currentUser?.name || '') : worker).trim();
-    if (!effectiveWorker) {
-      recordError(
-        'workerName',
-        category === 'NSC' ? 'input-nsc-worker-name' : 'input-worker-name',
-        'লাইনম্যান বা কর্মীর নাম প্রদান করুন',
-        'Lineman/Worker Name is required'
-      );
+    // 1. Worker Name Validation (for non-NSC categories with manual worker input)
+    if (category !== 'NSC') {
+      const effectiveWorker = (worker || currentUser?.name || '').trim();
+      if (!effectiveWorker) {
+        recordError(
+          'workerName',
+          'input-worker-name',
+          'লাইনম্যান বা কর্মীর নাম প্রদান করুন',
+          'Lineman/Worker Name is required'
+        );
+      }
     }
 
     // 2. Critical Field: Photos / Evidence MUST be present
@@ -490,6 +494,12 @@ export const EntryForm: React.FC<EntryFormProps> = ({
     if (category === 'NSC') {
       entryPayload.workOrderNo = workOrderNo.trim();
       entryPayload.workOrderDate = workOrderDate;
+      const vpString = (volumeNo.trim() || pageNo.trim())
+        ? `V-${volumeNo.trim()} P-${pageNo.trim()}`.trim()
+        : '';
+      entryPayload.volumePageNo = vpString;
+      entryPayload.volumeNo = volumeNo.trim();
+      entryPayload.pageNo = pageNo.trim();
       // Attach Official Work Order & Khata Photo uploaded by Admin
       if (selectedWorkOrderNotice) {
         const resolvedUrl = resolveWorkOrderImageUrl(selectedWorkOrderNotice);
@@ -504,7 +514,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.consumerName = consumerName.trim();
       entryPayload.fatherName = fatherName.trim();
       entryPayload.applicationNo = applicationNo.trim();
-      entryPayload.workerName = nscWorkerName.trim() || worker.trim() || String(currentUser?.name || '').trim();
+      entryPayload.workerName = (worker.trim() || String(currentUser?.name || currentUser?.username || 'Staff')).trim();
       entryPayload.agencyName = agencyName.trim();
       entryPayload.cccName = cccName.trim();
       entryPayload.substation = cccName.trim() || substation.trim();
@@ -1032,6 +1042,22 @@ export const EntryForm: React.FC<EntryFormProps> = ({
           {/* 1. NSC SPECIFIC FORM WITH DISTINCT COLOR CODED FIELDS */}
           {category === 'NSC' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
+              {/* Work Order No -> TEAL CARD (Above Work Order Date) */}
+              <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
+                <label className="block font-black text-teal-950 mb-1.5 text-xs flex items-center justify-between">
+                  <span>{lang === 'bn' ? 'ওয়ার্ক অর্ডার নম্বর' : 'Work Order No'}</span>
+                  <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">WO No</span>
+                </label>
+                <input
+                  id="input-work-order-no"
+                  type="text"
+                  value={workOrderNo}
+                  onChange={(e) => setWorkOrderNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-teal-300 rounded-lg text-teal-900 font-mono font-bold focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  placeholder="e.g. WO-2024 / Work Order No"
+                />
+              </div>
+
               {/* 1. Work Order Date -> TEAL CARD */}
               <div className="bg-teal-50/80 border-2 border-teal-300 rounded-xl p-3.5 shadow-xs hover:border-teal-400 transition-colors">
                 <label className="block font-black text-teal-950 mb-1.5 text-xs">
@@ -1046,60 +1072,36 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 />
               </div>
 
-              {/* 3. Lineman / Staff Name (Worker Name) -> VIBRANT BLUE CARD */}
-              <div className={`rounded-xl p-3.5 shadow-xs transition-all ${validationErrors.workerName ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-blue-50/80 border-2 border-blue-300 hover:border-blue-400'}`}>
-                <label className="block font-black text-blue-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.workerName} (Worker Name / Lineman) *</span>
-                  <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-bold">Staff</span>
-                </label>
-                <input
-                  id="input-nsc-worker-name"
-                  type="text"
-                  required
-                  value={nscWorkerName}
-                  onChange={(e) => {
-                    setNscWorkerName(e.target.value);
-                    clearError('workerName');
-                  }}
-                  className={`w-full px-3 py-2 bg-white border-2 rounded-lg font-bold focus:ring-2 focus:outline-none ${validationErrors.workerName ? 'border-red-400 text-red-900 focus:ring-red-500' : 'border-blue-300 text-blue-900 focus:ring-blue-500'}`}
-                  placeholder="Lineman / Worker Name"
-                />
-                {validationErrors.workerName && (
-                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{validationErrors.workerName}</span>
-                  </p>
-                )}
-              </div>
-
-              {/* 4. Agency Name -> VIBRANT AMBER / ORANGE CARD */}
+              {/* 2. V-         P- (Volume No & Page No) -> AMBER CARD */}
               <div className="bg-amber-50/80 border-2 border-amber-300 rounded-xl p-3.5 shadow-xs hover:border-amber-400 transition-colors">
                 <label className="block font-black text-amber-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.agencyName} (Agency Name)</span>
-                  <span className="text-[9px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold">Agency</span>
+                  <span className="font-mono tracking-wider font-extrabold text-xs">V- &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; P-</span>
+                  <span className="text-[9px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Vol & Page</span>
                 </label>
-                <input
-                  type="text"
-                  value={agencyName}
-                  onChange={(e) => setAgencyName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-amber-300 rounded-lg text-amber-900 font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                  placeholder="Contractor / Agency Name"
-                />
-              </div>
-
-              {/* 5. CCC Name -> VIBRANT PURPLE CARD */}
-              <div className="bg-purple-50/80 border-2 border-purple-300 rounded-xl p-3.5 shadow-xs hover:border-purple-400 transition-colors">
-                <label className="block font-black text-purple-950 mb-1.5 text-xs flex items-center justify-between">
-                  <span>{t.cccName} (CCC Name)</span>
-                  <span className="text-[9px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold">CCC Unit</span>
-                </label>
-                <input
-                  type="text"
-                  value={cccName}
-                  onChange={(e) => setCccName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-purple-300 rounded-lg text-purple-900 font-bold focus:ring-2 focus:ring-purple-500 focus:outline-none"
-                  placeholder="e.g. CCC Office Name"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="relative flex items-center">
+                    <span className="absolute left-2.5 font-mono font-black text-xs text-amber-800 pointer-events-none">V-</span>
+                    <input
+                      id="input-nsc-volume-no"
+                      type="text"
+                      value={volumeNo}
+                      onChange={(e) => setVolumeNo(e.target.value)}
+                      placeholder="Volume"
+                      className="w-full pl-8 pr-2 py-2 bg-white border-2 border-amber-300 rounded-lg text-amber-900 font-mono font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none text-xs"
+                    />
+                  </div>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-2.5 font-mono font-black text-xs text-amber-800 pointer-events-none">P-</span>
+                    <input
+                      id="input-nsc-page-no"
+                      type="text"
+                      value={pageNo}
+                      onChange={(e) => setPageNo(e.target.value)}
+                      placeholder="Page"
+                      className="w-full pl-8 pr-2 py-2 bg-white border-2 border-amber-300 rounded-lg text-amber-900 font-mono font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none text-xs"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* 6. Application No (Above Consumer Name) -> ROSE / PINK CARD */}
@@ -1231,21 +1233,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                 )}
               </div>
 
-              {/* 11. Father's / Husband's Name -> INDIGO CARD */}
-              <div className="bg-indigo-50/80 border-2 border-indigo-300 rounded-xl p-3.5 shadow-xs hover:border-indigo-400 transition-colors">
-                <label className="block font-black text-indigo-950 mb-1.5 text-xs">
-                  {t.fatherHusbandName}
-                </label>
-                <input
-                  type="text"
-                  value={fatherName}
-                  onChange={(e) => setFatherName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-indigo-300 rounded-lg text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-medium"
-                  placeholder="Father's / Husband's Name"
-                />
-              </div>
-
-              {/* 11. Premises / Village / GP Address -> SLATE CARD (Span 2/3, above Mobile No) */}
+              {/* 11. Premises / Village / GP Address -> SLATE CARD (Full Width) */}
               <div className={`rounded-xl p-3.5 shadow-xs transition-all sm:col-span-2 lg:col-span-3 ${validationErrors.address ? 'bg-red-50/90 border-2 border-red-500 ring-2 ring-red-300' : 'bg-slate-100/90 border-2 border-slate-300 hover:border-slate-400'}`}>
                 <label className="block font-black text-slate-950 mb-1.5 text-xs flex items-center justify-between">
                   <span>{t.addressLocation} *</span>
@@ -1269,20 +1257,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                     <span>{validationErrors.address}</span>
                   </p>
                 )}
-              </div>
-
-              {/* 12. Mobile No -> ORANGE CARD */}
-              <div className="bg-orange-50/80 border-2 border-orange-300 rounded-xl p-3.5 shadow-xs hover:border-orange-400 transition-colors">
-                <label className="block font-black text-orange-950 mb-1.5 text-xs">
-                  {t.mobileNo}
-                </label>
-                <input
-                  type="tel"
-                  value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-orange-300 rounded-lg text-orange-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono font-bold"
-                  placeholder="e.g. 98300XXXXX"
-                />
               </div>
 
               {/* 13. Initial Meter Reading -> ORANGE CARD */}

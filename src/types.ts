@@ -37,6 +37,9 @@ export interface PowerEntry {
   // NSC specific
   workOrderNo?: string;
   workOrderDate?: string;
+  volumePageNo?: string;
+  volumeNo?: string;
+  pageNo?: string;
   consumerId?: string;
   consumerName?: string;
   fatherName?: string;
