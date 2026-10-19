@@ -4926,19 +4926,21 @@ function refreshDisconnectionFromSheetInBackground() {
   })();
 }
 
-// Keep Disconnection cache synced with Google Sheet every 10 seconds
-setInterval(() => {
-  if (activeGasWriteCount === 0) {
-    refreshDisconnectionFromSheetInBackground();
-  }
-}, 10000);
+// Keep Disconnection cache synced with Google Sheet every 10 seconds (in standalone server only)
+if (!process.env.VERCEL) {
+  setInterval(() => {
+    if (activeGasWriteCount === 0) {
+      refreshDisconnectionFromSheetInBackground();
+    }
+  }, 10000).unref();
 
-// Keep other module caches warm every 90 seconds
-setInterval(() => {
-  if (activeGasWriteCount === 0) {
-    refreshEntriesFromSheetInBackground();
-  }
-}, 90000);
+  // Keep other module caches warm every 90 seconds
+  setInterval(() => {
+    if (activeGasWriteCount === 0) {
+      refreshEntriesFromSheetInBackground();
+    }
+  }, 90000).unref();
+}
 
 app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

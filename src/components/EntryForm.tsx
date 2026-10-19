@@ -1286,20 +1286,6 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   className="w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none"
                 />
               </div>
-
-              {/* 16. Inspection Agency Name -> FUCHSIA CARD */}
-              <div className="bg-fuchsia-50/80 border-2 border-fuchsia-300 rounded-xl p-3.5 shadow-xs hover:border-fuchsia-400 transition-colors">
-                <label className="block font-black text-fuchsia-950 mb-1.5 text-xs">
-                  {t.inspectionAgencyName}
-                </label>
-                <input
-                  type="text"
-                  value={inspectionAgencyName}
-                  onChange={(e) => setInspectionAgencyName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none"
-                  placeholder="Third-party / Inspection Agency Name"
-                />
-              </div>
             </div>
           )}
 
