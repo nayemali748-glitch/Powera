@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/api/wbsedcl/live-check", "destination": "/api/wbsedcl/live-check" },
     { "source": "/api/wbsedcl/download-official-pdf", "destination": "/api/wbsedcl/download-official-pdf" },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import appLogo from '../assets/images/power_round_logo_1787860440979.jpg';
 import { 
   ShieldCheck, 
@@ -678,37 +678,91 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [effectiveDiscTasks]);
 
-  // Filter calculations strictly isolated per category tab
-  const sourceEntriesForSelectedCategory =
-    selectedCategory === 'DISCONNECTION'
-      ? discEntriesFromTasks
-      : selectedCategory === 'ALL'
-        ? activeEntries
-        : activeEntries.filter((item) => item.category === selectedCategory);
+  // Filter calculations strictly isolated per category tab (memoized for instantaneous UI response)
+  const sourceEntriesForSelectedCategory = useMemo(() => {
+    if (selectedCategory === 'DISCONNECTION') {
+      return discEntriesFromTasks;
+    }
+    if (selectedCategory === 'ALL') {
+      return activeEntries;
+    }
+    return activeEntries.filter((item) => item.category === selectedCategory);
+  }, [selectedCategory, discEntriesFromTasks, activeEntries]);
 
-  const filteredEntries = sourceEntriesForSelectedCategory.filter((item) => {
-    if (selectedStatus !== 'ALL' && item.status !== selectedStatus) {
+  const filteredEntries = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const hasQuery = q.length > 0;
+    const matchStatus = selectedStatus !== 'ALL';
+
+    return sourceEntriesForSelectedCategory.filter((item) => {
+      if (matchStatus && item.status !== selectedStatus) {
+        return false;
+      }
+      if (!hasQuery) {
+        return true;
+      }
+      // High-performance targeted property search (avoids expensive full-object JSON.stringify)
+      const fields = [
+        item.consumerName,
+        item.consumerId,
+        item.meterNo,
+        item.mobile,
+        item.applicationNo,
+        item.workerName,
+        item.agencyName,
+        item.id,
+        item.address,
+        item.poleNo,
+        item.status,
+        item.category,
+        item.remarks,
+        item.disconStatus,
+      ];
+      for (let i = 0; i < fields.length; i++) {
+        const val = fields[i];
+        if (val && String(val).toLowerCase().includes(q)) {
+          return true;
+        }
+      }
       return false;
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const stringified = JSON.stringify(item).toLowerCase();
-      return stringified.includes(q);
-    }
-    return true;
-  });
+    });
+  }, [sourceEntriesForSelectedCategory, selectedStatus, searchQuery]);
 
-  // Metrics summary (strictly 1-to-1 with Backend Google Sheet tabs)
-  const nscCount = activeEntries.filter(e => e.category === 'NSC').length;
-  const discCount = effectiveDiscTasks.length;
-  const poleCount = activeEntries.filter(e => e.category === 'POLE CASE').length;
-  const meterCount = activeEntries.filter(e => e.category === 'METER REPLESMENT').length;
-  const dtrCount = activeEntries.filter(e => e.category === 'DTR REPLESMENT').length;
-  const total = nscCount + discCount + poleCount + meterCount + dtrCount;
-  
-  const pendingCount = activeEntries.filter(e => e.status === 'Pending').length;
-  const completedCount = activeEntries.filter(e => e.status === 'Completed').length;
-  const approvedCount = activeEntries.filter(e => e.status === 'Approved').length;
+  // Metrics summary (strictly 1-to-1 with Backend Google Sheet tabs - single-pass loop)
+  const { nscCount, discCount, poleCount, meterCount, dtrCount, total, pendingCount, completedCount, approvedCount } = useMemo(() => {
+    let nsc = 0;
+    let pole = 0;
+    let meter = 0;
+    let dtr = 0;
+    let pending = 0;
+    let completed = 0;
+    let approved = 0;
+
+    for (let i = 0; i < activeEntries.length; i++) {
+      const e = activeEntries[i];
+      if (e.category === 'NSC') nsc++;
+      else if (e.category === 'POLE CASE') pole++;
+      else if (e.category === 'METER REPLESMENT') meter++;
+      else if (e.category === 'DTR REPLESMENT') dtr++;
+
+      if (e.status === 'Pending') pending++;
+      else if (e.status === 'Completed') completed++;
+      else if (e.status === 'Approved') approved++;
+    }
+
+    const disc = effectiveDiscTasks.length;
+    return {
+      nscCount: nsc,
+      discCount: disc,
+      poleCount: pole,
+      meterCount: meter,
+      dtrCount: dtr,
+      total: nsc + disc + pole + meter + dtr,
+      pendingCount: pending,
+      completedCount: completed,
+      approvedCount: approved,
+    };
+  }, [activeEntries, effectiveDiscTasks]);
 
   const handleStatusChange = async (id: string, newStatus: StatusType) => {
     setUpdatingId(id);

@@ -1511,6 +1511,428 @@ app.get('/api/auth/verify/:idNo', async (req, res) => {
   }
 });
 
+// ============================================================================
+// 2FACTOR.IN OFFICIAL SMS & OTP AUTHENTICATION
+// ============================================================================
+const TWOFACTOR_API_KEY = (process.env.TWOFACTOR_API_KEY || process.env['2FACTOR_API_KEY'] || '').trim();
+const TWOFACTOR_LOGIN_TEMPLATE = (
+  process.env.TWOFACTOR_LOGIN_TEMPLATE ||
+  process.env['2FACTOR_LOGIN_TEMPLATE'] ||
+  process.env.TWOFACTOR_OTP_TEMPLATE ||
+  process.env['2FACTOR_OTP_TEMPLATE'] ||
+  process.env.TWOFACTOR_TEMPLATE ||
+  process.env['2FACTOR_TEMPLATE'] ||
+  ''
+).trim();
+const TWOFACTOR_FORGOT_TEMPLATE = (
+  process.env.TWOFACTOR_FORGOT_TEMPLATE ||
+  process.env['2FACTOR_FORGOT_TEMPLATE'] ||
+  process.env.TWOFACTOR_OTP_TEMPLATE ||
+  process.env['2FACTOR_OTP_TEMPLATE'] ||
+  process.env.TWOFACTOR_TEMPLATE ||
+  process.env['2FACTOR_TEMPLATE'] ||
+  ''
+).trim();
+
+interface PendingOtpRecord {
+  phone: string;
+  sessionId: string;
+  purpose: 'login' | 'forgot_password';
+  userIdNo: string;
+  createdAt: number;
+  lastSentAt: number;
+}
+const pendingOtpSessionMap = new Map<string, PendingOtpRecord>();
+const phoneRateLimitMap = new Map<string, { lastSentAt: number; count: number; windowStart: number }>();
+
+async function call2FactorSendOtp(phone10: string, templateName?: string): Promise<{ success: boolean; sessionId?: string; error?: string }> {
+  if (!TWOFACTOR_API_KEY) {
+    return {
+      success: false,
+      error: '2Factor API Key is not configured on the server. Please set TWOFACTOR_API_KEY in Vercel environment variables.'
+    };
+  }
+
+  try {
+    // Official 2Factor default SMS OTP endpoint: if custom template is omitted, 2Factor uses the account's default SMS OTP service
+    const customTemplate = (templateName || '').trim();
+    const tmplPart = customTemplate ? `/${encodeURIComponent(customTemplate)}` : '';
+    const url = `https://2factor.in/API/V1/${encodeURIComponent(TWOFACTOR_API_KEY)}/SMS/${encodeURIComponent(phone10)}/AUTOGEN${tmplPart}`;
+    const resp = await fetch(url);
+    const data = await resp.json().catch(() => null);
+
+    if (data && String(data.Status).toLowerCase() === 'success') {
+      return {
+        success: true,
+        sessionId: String(data.Details || '')
+      };
+    }
+
+    return {
+      success: false,
+      error: data?.Details || data?.error || 'Failed to send OTP via 2Factor default SMS gateway.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Error connecting to 2Factor SMS service.'
+    };
+  }
+}
+
+async function call2FactorVerifyOtp(sessionId: string, otp: string): Promise<{ success: boolean; error?: string }> {
+  if (!TWOFACTOR_API_KEY) {
+    return {
+      success: false,
+      error: '2Factor API Key is not configured on the server. Please set TWOFACTOR_API_KEY in Vercel environment variables.'
+    };
+  }
+
+  try {
+    const url = `https://2factor.in/API/V1/${encodeURIComponent(TWOFACTOR_API_KEY)}/SMS/VERIFY/${encodeURIComponent(sessionId)}/${encodeURIComponent(otp)}`;
+    const resp = await fetch(url);
+    const data = await resp.json().catch(() => null);
+
+    if (data && String(data.Status).toLowerCase() === 'success' && String(data.Details).toLowerCase().includes('match')) {
+      return { success: true };
+    }
+
+    return {
+      success: false,
+      error: data?.Details || 'Invalid OTP or OTP has expired.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Error verifying OTP with 2Factor.'
+    };
+  }
+}
+
+// 1. Send OTP for Login
+app.post('/api/auth/otp/send-login', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || '').trim();
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+
+    if (!phone10 || phone10.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        error: 'অনুগ্রহ করে সঠিক ১০ সংখ্যার মোবাইল নম্বর দিন (Please enter a valid 10-digit mobile number).'
+      });
+    }
+
+    // Verify user exists in Google Sheets Users tab
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: 'এই মোবাইল নম্বরে কোনো নিবন্ধিত অ্যাকাউন্ট পাওয়া যায়নি (No registered account found with this mobile number).'
+      });
+    }
+
+    const status = String(target['Status'] || target.status || 'active').toLowerCase().trim();
+    if (status === 'hold') {
+      return res.status(403).json({
+        success: false,
+        error: 'আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে। এডমিনের সাথে যোগাযোগ করুন।'
+      });
+    }
+
+    // Rate Limiting (60s cooldown, max 5 attempts per 15 min)
+    const now = Date.now();
+    const rate = phoneRateLimitMap.get(phone10);
+    if (rate) {
+      if (now - rate.lastSentAt < 60000) {
+        const remaining = Math.ceil((60000 - (now - rate.lastSentAt)) / 1000);
+        return res.status(429).json({
+          success: false,
+          error: `অনুগ্রহ করে ${remaining} সেকেন্ড অপেক্ষা করুন (Please wait ${remaining}s before requesting a new OTP).`
+        });
+      }
+      if (now - rate.windowStart < 15 * 60 * 1000 && rate.count >= 5) {
+        return res.status(429).json({
+          success: false,
+          error: 'অতিরিক্ত চেষ্টার কারণে ১৫ মিনিটের জন্য ওটিপি পাঠানো স্থগিত করা হয়েছে (Rate limit exceeded. Try after 15m).'
+        });
+      }
+      if (now - rate.windowStart >= 15 * 60 * 1000) {
+        phoneRateLimitMap.set(phone10, { lastSentAt: now, count: 1, windowStart: now });
+      } else {
+        rate.count += 1;
+        rate.lastSentAt = now;
+      }
+    } else {
+      phoneRateLimitMap.set(phone10, { lastSentAt: now, count: 1, windowStart: now });
+    }
+
+    // Dispatch OTP via 2Factor API
+    const sendResult = await call2FactorSendOtp(phone10, TWOFACTOR_LOGIN_TEMPLATE);
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: sendResult.error || 'Failed to send OTP via SMS gateway.'
+      });
+    }
+
+    pendingOtpSessionMap.set(sendResult.sessionId!, {
+      phone: phone10,
+      sessionId: sendResult.sessionId!,
+      purpose: 'login',
+      userIdNo: String(target.idNo || phone10),
+      createdAt: now,
+      lastSentAt: now
+    });
+
+    return res.json({
+      success: true,
+      sessionId: sendResult.sessionId,
+      phone: phone10,
+      message: 'আপনার নিবন্ধিত মোবাইল নম্বরে ওটিপি পাঠানো হয়েছে (OTP sent successfully).'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Server error sending login OTP' });
+  }
+});
+
+// 2. Verify OTP and Complete Login
+app.post('/api/auth/otp/verify-login', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || '').trim();
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    const cleanOtp = String(req.body?.otp || '').trim();
+    const sessionId = String(req.body?.sessionId || '').trim();
+
+    if (!sessionId || !cleanOtp || !phone10) {
+      return res.status(400).json({
+        success: false,
+        error: 'মোবাইল নম্বর, সেশন আইডি এবং ওটিপি প্রয়োজন (Phone, Session ID, and OTP are required).'
+      });
+    }
+
+    // Verify OTP with 2Factor
+    const vRes = await call2FactorVerifyOtp(sessionId, cleanOtp);
+    if (!vRes.success) {
+      return res.status(400).json({
+        success: false,
+        error: vRes.error || 'ভুল ওটিপি অথবা ওটিপির মেয়াদ শেষ হয়ে গেছে (Invalid or expired OTP).'
+      });
+    }
+
+    // Fetch user and construct authentic session
+    const users = await fetchVerifiedUsersFromSheet();
+    const matchedUser = findMatchingUserInList(users, phone10);
+
+    if (!matchedUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'ব্যবহারকারী অ্যাকাউন্ট পাওয়া যায়নি (User account not found).'
+      });
+    }
+
+    const status = String(matchedUser['Status'] || matchedUser.status || 'active').toLowerCase().trim();
+    if (status === 'hold') {
+      return res.status(403).json({
+        success: false,
+        error: 'আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত (ON HOLD) রাখা হয়েছে।'
+      });
+    }
+
+    const roleStr = String(matchedUser['Role'] || matchedUser.role || 'worker').trim().toLowerCase();
+    const idNoStr = String(matchedUser.idNo || matchedUser['User ID'] || phone10).trim();
+    const isRoleAdmin =
+      roleStr === 'admin' ||
+      roleStr === 'controller' ||
+      roleStr === 'administrator' ||
+      roleStr === 'superadmin' ||
+      idNoStr === '8695716192' ||
+      idNoStr.toLowerCase() === 'admin' ||
+      matchedUser.id === 'adm_8695716192' ||
+      /^adm[-_0-9]/i.test(idNoStr);
+
+    const isRoleAgency =
+      !isRoleAdmin &&
+      (roleStr === 'agency' ||
+        /^agn[-_0-9]/i.test(idNoStr) ||
+        /^agency[-_0-9]/i.test(idNoStr));
+    const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+
+    const session = {
+      id: String(matchedUser.id || `usr_${idNoStr}`),
+      idNo: idNoStr,
+      loginId: idNoStr,
+      userId: idNoStr,
+      name: String(matchedUser['Full Name'] || matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
+      agencyName: String(matchedUser['Agency Name'] || matchedUser.agencyName || matchedUser['Full Name'] || matchedUser.name || ''),
+      phone: String(matchedUser['Phone'] || matchedUser.phone || phone10),
+      role: resolvedRole,
+      status: 'active' as const,
+      designation: String(
+        matchedUser['Designation'] ||
+        matchedUser.designation ||
+        (isRoleAdmin ? 'Sub-Divisional Controller' : isRoleAgency ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)')
+      ),
+      badgeNo: String(matchedUser['Badge No'] || matchedUser.badgeNo || idNoStr),
+      token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      loggedInAt: new Date().toISOString()
+    };
+
+    pendingOtpSessionMap.delete(sessionId);
+    return res.json({ success: true, session, data: { session } });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Server error verifying login OTP' });
+  }
+});
+
+// 3. Send OTP for Forgot Password
+app.post('/api/auth/otp/send-forgot-password', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || '').trim();
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+
+    if (!phone10 || phone10.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        error: 'অনুগ্রহ করে সঠিক ১০ সংখ্যার মোবাইল নম্বর দিন (Please enter a valid 10-digit mobile number).'
+      });
+    }
+
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: 'এই মোবাইল নম্বরে কোনো নিবন্ধিত অ্যাকাউন্ট পাওয়া যায়নি (No registered account found with this mobile number).'
+      });
+    }
+
+    // Rate Limiting (60s cooldown)
+    const now = Date.now();
+    const rate = phoneRateLimitMap.get(phone10);
+    if (rate && now - rate.lastSentAt < 60000) {
+      const remaining = Math.ceil((60000 - (now - rate.lastSentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        error: `অনুগ্রহ করে ${remaining} সেকেন্ড অপেক্ষা করুন (Please wait ${remaining}s before requesting a new OTP).`
+      });
+    }
+
+    const sendResult = await call2FactorSendOtp(phone10, TWOFACTOR_FORGOT_TEMPLATE);
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: sendResult.error || 'Failed to send OTP via SMS gateway.'
+      });
+    }
+
+    pendingOtpSessionMap.set(sendResult.sessionId!, {
+      phone: phone10,
+      sessionId: sendResult.sessionId!,
+      purpose: 'forgot_password',
+      userIdNo: String(target.idNo || phone10),
+      createdAt: now,
+      lastSentAt: now
+    });
+
+    return res.json({
+      success: true,
+      sessionId: sendResult.sessionId,
+      phone: phone10,
+      message: 'পাসওয়ার্ড রিসেট ওটিপি আপনার নম্বরে পাঠানো হয়েছে (Reset OTP sent successfully).'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Server error sending forgot password OTP' });
+  }
+});
+
+// 4. Verify OTP and Update Password
+app.post('/api/auth/otp/verify-reset-password', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || '').trim();
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    const cleanOtp = String(req.body?.otp || '').trim();
+    const sessionId = String(req.body?.sessionId || '').trim();
+    const newPassword = String(req.body?.newPassword || req.body?.password || '').trim();
+
+    if (!sessionId || !cleanOtp || !phone10 || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'মোবাইল নম্বর, ওটিপি, সেশন আইডি এবং নতুন পাসওয়ার্ড প্রয়োজন।'
+      });
+    }
+
+    if (newPassword.length < 4) {
+      return res.status(400).json({
+        success: false,
+        error: 'নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে (Password must be at least 4 characters).'
+      });
+    }
+
+    // Verify OTP with 2Factor
+    const vRes = await call2FactorVerifyOtp(sessionId, cleanOtp);
+    if (!vRes.success) {
+      return res.status(400).json({
+        success: false,
+        error: vRes.error || 'ভুল ওটিপি অথবা ওটিপির মেয়াদ শেষ হয়ে গেছে (Invalid or expired OTP).'
+      });
+    }
+
+    // Find user and update password using authorized Google Apps Script mechanism
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: 'ব্যবহারকারী অ্যাকাউন্ট পাওয়া যায়নি (User account not found).'
+      });
+    }
+
+    const cleanNewPass = normalizeUniversal(newPassword).trim();
+    const syncTag = buildUserSyncTag({ ...target, password: cleanNewPass });
+    const updatedTarget = {
+      ...target,
+      password: cleanNewPass,
+      Password: cleanNewPass,
+      status: target.status || 'active',
+      createdAt: syncTag,
+      'Created At': syncTag
+    };
+
+    await callGoogleAppsScript('updateEntry', {
+      id: target.id,
+      category: 'Users',
+      status: target.status || 'active',
+      role: target.role || 'worker',
+      password: cleanNewPass,
+      createdAt: syncTag,
+      'Created At': syncTag,
+      data: updatedTarget
+    }, 'POST');
+
+    clearUsersStateCache();
+    pendingOtpSessionMap.delete(sessionId);
+
+    return res.json({
+      success: true,
+      message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে। নতুন পাসওয়ার্ড দিয়ে লগইন করুন (Password updated successfully).'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Server error resetting password' });
+  }
+});
+
 // Entry deletion validation helper (simplified to support direct confirm/cancel)
 async function validateEntryDeletion(entryId: string, clientPayload: any): Promise<{ allowed: boolean; error?: string; isCritical?: boolean; record?: any }> {
   const cleanId = String(entryId || '').trim();

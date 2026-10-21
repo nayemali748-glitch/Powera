@@ -20,16 +20,23 @@ function fetchHttpsBuffer(url: string, headers: Record<string, string> = {}): Pr
       const chunks: Buffer[] = [];
       res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on('end', () => {
+        let buf = Buffer.concat(chunks);
+        const encoding = res.headers['content-encoding'];
+        if (encoding === 'gzip') {
+          try { buf = zlib.gunzipSync(buf); } catch {}
+        } else if (encoding === 'deflate') {
+          try { buf = zlib.inflateSync(buf); } catch {}
+        }
         resolve({
           statusCode: res.statusCode || 200,
           headers: res.headers,
-          buffer: Buffer.concat(chunks)
+          buffer: buf
         });
       });
     });
 
     req.on('error', reject);
-    req.setTimeout(18000, () => {
+    req.setTimeout(25000, () => {
       req.destroy(new Error('Timeout connecting to WBSEDCL portal.'));
     });
     req.end();
@@ -236,7 +243,12 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const officialReport = await fetchOfficialWbsedclReportAsync(cleanId);
+    let officialReport = await fetchOfficialWbsedclReportAsync(cleanId);
+    if (!officialReport.success) {
+      // Automatic 1-time retry in case of transient portal session handshake hiccup
+      await new Promise(r => setTimeout(r, 600));
+      officialReport = await fetchOfficialWbsedclReportAsync(cleanId);
+    }
 
     if (officialReport.success && officialReport.data) {
       return res.status(200).json({
@@ -260,6 +272,7 @@ export default async function handler(req: any, res: any) {
         officialPortalUrl: officialReport.officialPortalUrl,
         reportType: officialReport.data.reportType,
         hasOfficialPdf: Boolean(officialReport.pdfBase64),
+        pdfBase64: officialReport.pdfBase64,
         source: 'WBSEDCL Official Live WebDynpro Portal'
       });
     }

@@ -1535,6 +1535,68 @@ export async function loginUser(loginId: string, password: string): Promise<User
   return session;
 }
 
+export async function sendLoginOtp(phone: string): Promise<{ success: boolean; sessionId: string; message: string }> {
+  const resp = await nativeFetch('/api/auth/otp/send-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone })
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data?.success) {
+    throw new Error(data?.error || 'Failed to send login OTP via 2Factor.');
+  }
+  return data;
+}
+
+export async function verifyLoginOtp(phone: string, otp: string, sessionId: string): Promise<UserSession> {
+  const resp = await nativeFetch('/api/auth/otp/verify-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, otp, sessionId })
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data?.success || !data?.session) {
+    throw new Error(data?.error || 'Invalid OTP. Please check and try again.');
+  }
+  const session: UserSession = data.session;
+  try {
+    localStorage.setItem('power_user_session', JSON.stringify(session));
+    const isSuperAdmin = session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
+    if (isSuperAdmin) {
+      localStorage.setItem('power_is_admin', 'true');
+    } else {
+      localStorage.removeItem('power_is_admin');
+    }
+  } catch {}
+  return session;
+}
+
+export async function sendForgotPasswordOtp(phone: string): Promise<{ success: boolean; sessionId: string; message: string }> {
+  const resp = await nativeFetch('/api/auth/otp/send-forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone })
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data?.success) {
+    throw new Error(data?.error || 'Failed to send password reset OTP.');
+  }
+  return data;
+}
+
+export async function verifyResetPasswordOtp(phone: string, otp: string, sessionId: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+  const resp = await nativeFetch('/api/auth/otp/verify-reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, otp, sessionId, newPassword })
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data?.success) {
+    throw new Error(data?.error || 'Failed to reset password. Please verify OTP and try again.');
+  }
+  return data;
+}
+
 export async function logoutUser(): Promise<void> {
   try {
     await nativeFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});

@@ -29,15 +29,28 @@ function fetchHttpsBuffer(url, headers = {}) {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on("end", () => {
+        let buf = Buffer.concat(chunks);
+        const encoding = res.headers["content-encoding"];
+        if (encoding === "gzip") {
+          try {
+            buf = zlib.gunzipSync(buf);
+          } catch {
+          }
+        } else if (encoding === "deflate") {
+          try {
+            buf = zlib.inflateSync(buf);
+          } catch {
+          }
+        }
         resolve({
           statusCode: res.statusCode || 200,
           headers: res.headers,
-          buffer: Buffer.concat(chunks)
+          buffer: buf
         });
       });
     });
     req.on("error", reject);
-    req.setTimeout(18e3, () => {
+    req.setTimeout(25e3, () => {
       req.destroy(new Error("Timeout connecting to WBSEDCL portal."));
     });
     req.end();
@@ -1397,6 +1410,327 @@ app.get("/api/auth/verify/:idNo", async (req, res) => {
     return res.json({ valid: true, status: matched.status || "active", role: matched.role });
   } catch (err) {
     return res.status(500).json({ valid: false, error: err.message });
+  }
+});
+var TWOFACTOR_API_KEY = (process.env.TWOFACTOR_API_KEY || process.env["2FACTOR_API_KEY"] || "").trim();
+var TWOFACTOR_LOGIN_TEMPLATE = (process.env.TWOFACTOR_LOGIN_TEMPLATE || process.env["2FACTOR_LOGIN_TEMPLATE"] || process.env.TWOFACTOR_OTP_TEMPLATE || process.env["2FACTOR_OTP_TEMPLATE"] || process.env.TWOFACTOR_TEMPLATE || process.env["2FACTOR_TEMPLATE"] || "").trim();
+var TWOFACTOR_FORGOT_TEMPLATE = (process.env.TWOFACTOR_FORGOT_TEMPLATE || process.env["2FACTOR_FORGOT_TEMPLATE"] || process.env.TWOFACTOR_OTP_TEMPLATE || process.env["2FACTOR_OTP_TEMPLATE"] || process.env.TWOFACTOR_TEMPLATE || process.env["2FACTOR_TEMPLATE"] || "").trim();
+var pendingOtpSessionMap = /* @__PURE__ */ new Map();
+var phoneRateLimitMap = /* @__PURE__ */ new Map();
+async function call2FactorSendOtp(phone10, templateName) {
+  if (!TWOFACTOR_API_KEY) {
+    return {
+      success: false,
+      error: "2Factor API Key is not configured on the server. Please set TWOFACTOR_API_KEY in Vercel environment variables."
+    };
+  }
+  try {
+    const customTemplate = (templateName || "").trim();
+    const tmplPart = customTemplate ? `/${encodeURIComponent(customTemplate)}` : "";
+    const url = `https://2factor.in/API/V1/${encodeURIComponent(TWOFACTOR_API_KEY)}/SMS/${encodeURIComponent(phone10)}/AUTOGEN${tmplPart}`;
+    const resp = await fetch(url);
+    const data = await resp.json().catch(() => null);
+    if (data && String(data.Status).toLowerCase() === "success") {
+      return {
+        success: true,
+        sessionId: String(data.Details || "")
+      };
+    }
+    return {
+      success: false,
+      error: data?.Details || data?.error || "Failed to send OTP via 2Factor default SMS gateway."
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err?.message || "Error connecting to 2Factor SMS service."
+    };
+  }
+}
+async function call2FactorVerifyOtp(sessionId, otp) {
+  if (!TWOFACTOR_API_KEY) {
+    return {
+      success: false,
+      error: "2Factor API Key is not configured on the server. Please set TWOFACTOR_API_KEY in Vercel environment variables."
+    };
+  }
+  try {
+    const url = `https://2factor.in/API/V1/${encodeURIComponent(TWOFACTOR_API_KEY)}/SMS/VERIFY/${encodeURIComponent(sessionId)}/${encodeURIComponent(otp)}`;
+    const resp = await fetch(url);
+    const data = await resp.json().catch(() => null);
+    if (data && String(data.Status).toLowerCase() === "success" && String(data.Details).toLowerCase().includes("match")) {
+      return { success: true };
+    }
+    return {
+      success: false,
+      error: data?.Details || "Invalid OTP or OTP has expired."
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err?.message || "Error verifying OTP with 2Factor."
+    };
+  }
+}
+app.post("/api/auth/otp/send-login", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || "").trim();
+    const cleanDigits = rawPhone.replace(/\D/g, "");
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    if (!phone10 || phone10.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        error: "\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 \u09B8\u09A0\u09BF\u0995 \u09E7\u09E6 \u09B8\u0982\u0996\u09CD\u09AF\u09BE\u09B0 \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0 \u09A6\u09BF\u09A8 (Please enter a valid 10-digit mobile number)."
+      });
+    }
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: "\u098F\u0987 \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0\u09C7 \u0995\u09CB\u09A8\u09CB \u09A8\u09BF\u09AC\u09A8\u09CD\u09A7\u09BF\u09A4 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AA\u09BE\u0993\u09DF\u09BE \u09AF\u09BE\u09DF\u09A8\u09BF (No registered account found with this mobile number)."
+      });
+    }
+    const status = String(target["Status"] || target.status || "active").toLowerCase().trim();
+    if (status === "hold") {
+      return res.status(403).json({
+        success: false,
+        error: "\u0986\u09AA\u09A8\u09BE\u09B0 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u099F\u09BF \u09B8\u09BE\u09AE\u09AF\u09BC\u09BF\u0995\u09AD\u09BE\u09AC\u09C7 \u09B8\u09CD\u09A5\u0997\u09BF\u09A4 (ON HOLD) \u09B0\u09BE\u0996\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964 \u098F\u09A1\u09AE\u09BF\u09A8\u09C7\u09B0 \u09B8\u09BE\u09A5\u09C7 \u09AF\u09CB\u0997\u09BE\u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8\u0964"
+      });
+    }
+    const now = Date.now();
+    const rate = phoneRateLimitMap.get(phone10);
+    if (rate) {
+      if (now - rate.lastSentAt < 6e4) {
+        const remaining = Math.ceil((6e4 - (now - rate.lastSentAt)) / 1e3);
+        return res.status(429).json({
+          success: false,
+          error: `\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 ${remaining} \u09B8\u09C7\u0995\u09C7\u09A8\u09CD\u09A1 \u0985\u09AA\u09C7\u0995\u09CD\u09B7\u09BE \u0995\u09B0\u09C1\u09A8 (Please wait ${remaining}s before requesting a new OTP).`
+        });
+      }
+      if (now - rate.windowStart < 15 * 60 * 1e3 && rate.count >= 5) {
+        return res.status(429).json({
+          success: false,
+          error: "\u0985\u09A4\u09BF\u09B0\u09BF\u0995\u09CD\u09A4 \u099A\u09C7\u09B7\u09CD\u099F\u09BE\u09B0 \u0995\u09BE\u09B0\u09A3\u09C7 \u09E7\u09EB \u09AE\u09BF\u09A8\u09BF\u099F\u09C7\u09B0 \u099C\u09A8\u09CD\u09AF \u0993\u099F\u09BF\u09AA\u09BF \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B8\u09CD\u09A5\u0997\u09BF\u09A4 \u0995\u09B0\u09BE \u09B9\u09DF\u09C7\u099B\u09C7 (Rate limit exceeded. Try after 15m)."
+        });
+      }
+      if (now - rate.windowStart >= 15 * 60 * 1e3) {
+        phoneRateLimitMap.set(phone10, { lastSentAt: now, count: 1, windowStart: now });
+      } else {
+        rate.count += 1;
+        rate.lastSentAt = now;
+      }
+    } else {
+      phoneRateLimitMap.set(phone10, { lastSentAt: now, count: 1, windowStart: now });
+    }
+    const sendResult = await call2FactorSendOtp(phone10, TWOFACTOR_LOGIN_TEMPLATE);
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: sendResult.error || "Failed to send OTP via SMS gateway."
+      });
+    }
+    pendingOtpSessionMap.set(sendResult.sessionId, {
+      phone: phone10,
+      sessionId: sendResult.sessionId,
+      purpose: "login",
+      userIdNo: String(target.idNo || phone10),
+      createdAt: now,
+      lastSentAt: now
+    });
+    return res.json({
+      success: true,
+      sessionId: sendResult.sessionId,
+      phone: phone10,
+      message: "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BF\u09AC\u09A8\u09CD\u09A7\u09BF\u09A4 \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0\u09C7 \u0993\u099F\u09BF\u09AA\u09BF \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B9\u09DF\u09C7\u099B\u09C7 (OTP sent successfully)."
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Server error sending login OTP" });
+  }
+});
+app.post("/api/auth/otp/verify-login", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || "").trim();
+    const cleanDigits = rawPhone.replace(/\D/g, "");
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    const cleanOtp = String(req.body?.otp || "").trim();
+    const sessionId = String(req.body?.sessionId || "").trim();
+    if (!sessionId || !cleanOtp || !phone10) {
+      return res.status(400).json({
+        success: false,
+        error: "\u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0, \u09B8\u09C7\u09B6\u09A8 \u0986\u0987\u09A1\u09BF \u098F\u09AC\u0982 \u0993\u099F\u09BF\u09AA\u09BF \u09AA\u09CD\u09B0\u09DF\u09CB\u099C\u09A8 (Phone, Session ID, and OTP are required)."
+      });
+    }
+    const vRes = await call2FactorVerifyOtp(sessionId, cleanOtp);
+    if (!vRes.success) {
+      return res.status(400).json({
+        success: false,
+        error: vRes.error || "\u09AD\u09C1\u09B2 \u0993\u099F\u09BF\u09AA\u09BF \u0985\u09A5\u09AC\u09BE \u0993\u099F\u09BF\u09AA\u09BF\u09B0 \u09AE\u09C7\u09DF\u09BE\u09A6 \u09B6\u09C7\u09B7 \u09B9\u09DF\u09C7 \u0997\u09C7\u099B\u09C7 (Invalid or expired OTP)."
+      });
+    }
+    const users = await fetchVerifiedUsersFromSheet();
+    const matchedUser = findMatchingUserInList(users, phone10);
+    if (!matchedUser) {
+      return res.status(404).json({
+        success: false,
+        error: "\u09AC\u09CD\u09AF\u09AC\u09B9\u09BE\u09B0\u0995\u09BE\u09B0\u09C0 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AA\u09BE\u0993\u09DF\u09BE \u09AF\u09BE\u09DF\u09A8\u09BF (User account not found)."
+      });
+    }
+    const status = String(matchedUser["Status"] || matchedUser.status || "active").toLowerCase().trim();
+    if (status === "hold") {
+      return res.status(403).json({
+        success: false,
+        error: "\u0986\u09AA\u09A8\u09BE\u09B0 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u099F\u09BF \u09B8\u09BE\u09AE\u09AF\u09BC\u09BF\u0995\u09AD\u09BE\u09AC\u09C7 \u09B8\u09CD\u09A5\u0997\u09BF\u09A4 (ON HOLD) \u09B0\u09BE\u0996\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964"
+      });
+    }
+    const roleStr = String(matchedUser["Role"] || matchedUser.role || "worker").trim().toLowerCase();
+    const idNoStr = String(matchedUser.idNo || matchedUser["User ID"] || phone10).trim();
+    const isRoleAdmin = roleStr === "admin" || roleStr === "controller" || roleStr === "administrator" || roleStr === "superadmin" || idNoStr === "8695716192" || idNoStr.toLowerCase() === "admin" || matchedUser.id === "adm_8695716192" || /^adm[-_0-9]/i.test(idNoStr);
+    const isRoleAgency = !isRoleAdmin && (roleStr === "agency" || /^agn[-_0-9]/i.test(idNoStr) || /^agency[-_0-9]/i.test(idNoStr));
+    const resolvedRole = isRoleAdmin ? "admin" : isRoleAgency ? "agency" : "worker";
+    const session = {
+      id: String(matchedUser.id || `usr_${idNoStr}`),
+      idNo: idNoStr,
+      loginId: idNoStr,
+      userId: idNoStr,
+      name: String(matchedUser["Full Name"] || matchedUser.name || (isRoleAdmin ? "NAYEM (Admin Controller)" : isRoleAgency ? "Agency Partner" : "\u0995\u09B0\u09CD\u09AE\u09C0")),
+      agencyName: String(matchedUser["Agency Name"] || matchedUser.agencyName || matchedUser["Full Name"] || matchedUser.name || ""),
+      phone: String(matchedUser["Phone"] || matchedUser.phone || phone10),
+      role: resolvedRole,
+      status: "active",
+      designation: String(
+        matchedUser["Designation"] || matchedUser.designation || (isRoleAdmin ? "Sub-Divisional Controller" : isRoleAgency ? "\u098F\u099C\u09C7\u09A8\u09CD\u09B8\u09BF \u09AA\u09BE\u09B0\u09CD\u099F\u09A8\u09BE\u09B0 / Agency (WBSEDCL)" : "\u09B2\u09BE\u0987\u09A8\u09AE\u09CD\u09AF\u09BE\u09A8 / Worker (WBSEDCL)")
+      ),
+      badgeNo: String(matchedUser["Badge No"] || matchedUser.badgeNo || idNoStr),
+      token: `SES-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      loggedInAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    pendingOtpSessionMap.delete(sessionId);
+    return res.json({ success: true, session, data: { session } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Server error verifying login OTP" });
+  }
+});
+app.post("/api/auth/otp/send-forgot-password", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || "").trim();
+    const cleanDigits = rawPhone.replace(/\D/g, "");
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    if (!phone10 || phone10.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        error: "\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 \u09B8\u09A0\u09BF\u0995 \u09E7\u09E6 \u09B8\u0982\u0996\u09CD\u09AF\u09BE\u09B0 \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0 \u09A6\u09BF\u09A8 (Please enter a valid 10-digit mobile number)."
+      });
+    }
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: "\u098F\u0987 \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0\u09C7 \u0995\u09CB\u09A8\u09CB \u09A8\u09BF\u09AC\u09A8\u09CD\u09A7\u09BF\u09A4 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AA\u09BE\u0993\u09DF\u09BE \u09AF\u09BE\u09DF\u09A8\u09BF (No registered account found with this mobile number)."
+      });
+    }
+    const now = Date.now();
+    const rate = phoneRateLimitMap.get(phone10);
+    if (rate && now - rate.lastSentAt < 6e4) {
+      const remaining = Math.ceil((6e4 - (now - rate.lastSentAt)) / 1e3);
+      return res.status(429).json({
+        success: false,
+        error: `\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 ${remaining} \u09B8\u09C7\u0995\u09C7\u09A8\u09CD\u09A1 \u0985\u09AA\u09C7\u0995\u09CD\u09B7\u09BE \u0995\u09B0\u09C1\u09A8 (Please wait ${remaining}s before requesting a new OTP).`
+      });
+    }
+    const sendResult = await call2FactorSendOtp(phone10, TWOFACTOR_FORGOT_TEMPLATE);
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: sendResult.error || "Failed to send OTP via SMS gateway."
+      });
+    }
+    pendingOtpSessionMap.set(sendResult.sessionId, {
+      phone: phone10,
+      sessionId: sendResult.sessionId,
+      purpose: "forgot_password",
+      userIdNo: String(target.idNo || phone10),
+      createdAt: now,
+      lastSentAt: now
+    });
+    return res.json({
+      success: true,
+      sessionId: sendResult.sessionId,
+      phone: phone10,
+      message: "\u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09B0\u09BF\u09B8\u09C7\u099F \u0993\u099F\u09BF\u09AA\u09BF \u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09AE\u09CD\u09AC\u09B0\u09C7 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B9\u09DF\u09C7\u099B\u09C7 (Reset OTP sent successfully)."
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Server error sending forgot password OTP" });
+  }
+});
+app.post("/api/auth/otp/verify-reset-password", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const rawPhone = String(req.body?.phone || req.body?.mobile || "").trim();
+    const cleanDigits = rawPhone.replace(/\D/g, "");
+    const phone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    const cleanOtp = String(req.body?.otp || "").trim();
+    const sessionId = String(req.body?.sessionId || "").trim();
+    const newPassword = String(req.body?.newPassword || req.body?.password || "").trim();
+    if (!sessionId || !cleanOtp || !phone10 || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: "\u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0, \u0993\u099F\u09BF\u09AA\u09BF, \u09B8\u09C7\u09B6\u09A8 \u0986\u0987\u09A1\u09BF \u098F\u09AC\u0982 \u09A8\u09A4\u09C1\u09A8 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09AA\u09CD\u09B0\u09DF\u09CB\u099C\u09A8\u0964"
+      });
+    }
+    if (newPassword.length < 4) {
+      return res.status(400).json({
+        success: false,
+        error: "\u09A8\u09A4\u09C1\u09A8 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u0995\u09AE\u09AA\u0995\u09CD\u09B7\u09C7 \u09EA \u0985\u0995\u09CD\u09B7\u09B0\u09C7\u09B0 \u09B9\u09A4\u09C7 \u09B9\u09AC\u09C7 (Password must be at least 4 characters)."
+      });
+    }
+    const vRes = await call2FactorVerifyOtp(sessionId, cleanOtp);
+    if (!vRes.success) {
+      return res.status(400).json({
+        success: false,
+        error: vRes.error || "\u09AD\u09C1\u09B2 \u0993\u099F\u09BF\u09AA\u09BF \u0985\u09A5\u09AC\u09BE \u0993\u099F\u09BF\u09AA\u09BF\u09B0 \u09AE\u09C7\u09DF\u09BE\u09A6 \u09B6\u09C7\u09B7 \u09B9\u09DF\u09C7 \u0997\u09C7\u099B\u09C7 (Invalid or expired OTP)."
+      });
+    }
+    const users = await fetchVerifiedUsersFromSheet();
+    const target = findMatchingUserInList(users, phone10);
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: "\u09AC\u09CD\u09AF\u09AC\u09B9\u09BE\u09B0\u0995\u09BE\u09B0\u09C0 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AA\u09BE\u0993\u09DF\u09BE \u09AF\u09BE\u09DF\u09A8\u09BF (User account not found)."
+      });
+    }
+    const cleanNewPass = normalizeUniversal(newPassword).trim();
+    const syncTag = buildUserSyncTag({ ...target, password: cleanNewPass });
+    const updatedTarget = {
+      ...target,
+      password: cleanNewPass,
+      Password: cleanNewPass,
+      status: target.status || "active",
+      createdAt: syncTag,
+      "Created At": syncTag
+    };
+    await callGoogleAppsScript("updateEntry", {
+      id: target.id,
+      category: "Users",
+      status: target.status || "active",
+      role: target.role || "worker",
+      password: cleanNewPass,
+      createdAt: syncTag,
+      "Created At": syncTag,
+      data: updatedTarget
+    }, "POST");
+    clearUsersStateCache();
+    pendingOtpSessionMap.delete(sessionId);
+    return res.json({
+      success: true,
+      message: "\u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u0995\u09B0\u09BE \u09B9\u09DF\u09C7\u099B\u09C7\u0964 \u09A8\u09A4\u09C1\u09A8 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09A6\u09BF\u09DF\u09C7 \u09B2\u0997\u0987\u09A8 \u0995\u09B0\u09C1\u09A8 (Password updated successfully)."
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Server error resetting password" });
   }
 });
 async function validateEntryDeletion(entryId, clientPayload) {

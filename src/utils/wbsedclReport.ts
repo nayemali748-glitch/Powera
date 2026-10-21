@@ -48,16 +48,23 @@ function fetchHttpsBuffer(url: string, headers: Record<string, string> = {}): Pr
       const chunks: Buffer[] = [];
       res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on('end', () => {
+        let buf = Buffer.concat(chunks);
+        const encoding = res.headers['content-encoding'];
+        if (encoding === 'gzip') {
+          try { buf = zlib.gunzipSync(buf); } catch {}
+        } else if (encoding === 'deflate') {
+          try { buf = zlib.inflateSync(buf); } catch {}
+        }
         resolve({
           statusCode: res.statusCode || 200,
           headers: res.headers,
-          buffer: Buffer.concat(chunks)
+          buffer: buf
         });
       });
     });
 
     req.on('error', reject);
-    req.setTimeout(18000, () => {
+    req.setTimeout(25000, () => {
       req.destroy(new Error('Timeout connecting to WBSEDCL portal.'));
     });
     req.end();

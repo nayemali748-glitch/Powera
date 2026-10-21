@@ -159,6 +159,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   }, [selectedCategoryTab, isAdmin, syncMode]);
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isCompressing || isUploading) return;
     const file = e.target.files?.[0];
     if (file) {
       setUploadFileName(file.name);
@@ -189,6 +190,7 @@ export const WorkOrderNoticeSection: React.FC<WorkOrderNoticeSectionProps> = ({
   };
 
   const handleUploadSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (isUploading) return;
     if (e) {
       e.preventDefault();
       e.stopPropagation();
