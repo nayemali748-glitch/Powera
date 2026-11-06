@@ -12,7 +12,9 @@ import { InstallAppModal } from './components/InstallAppModal';
 import { LanguageModal } from './components/LanguageModal';
 import { HelpSupportModal } from './components/HelpSupportModal';
 import { DisconnectionTaskManagement } from './components/DisconnectionTaskManagement';
-import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode, DisconnectionTask } from './types';
+import { LiveOutstandingModal } from './components/disconnection/LiveOutstandingModal';
+import { TransmissionPylonSvg } from './components/TransmissionPylonSvg';
+import { CategoryType, PowerEntry, ActiveTab, CornerOptionKey, UserSession, WorkOrderNotice, SyncMode, DisconnectionTask, ThemeMode } from './types';
 import {
   fetchEntries,
   fetchStats,
@@ -45,6 +47,7 @@ import {
   AlertTriangle,
   UserCheck,
   Home,
+  PowerOff,
   ArrowLeft,
   Plus,
   LogOut,
@@ -56,7 +59,9 @@ import {
   HelpCircle,
   WifiOff,
   Settings,
-  Scissors
+  Scissors,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 /**
@@ -135,18 +140,59 @@ export default function App() {
           parsed?.role !== 'worker' &&
           parsed?.role !== 'agency' &&
           (parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration');
-        return isAdm ? 'admin' : 'entry';
+        if (isAdm) return 'admin';
+        const isAg =
+          parsed?.role === 'agency' ||
+          String(parsed?.role || '').toLowerCase().includes('agency') ||
+          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+          Boolean((parsed as any)?.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+        if (isAg) return 'disconnection';
+        return 'entry';
       } catch (e) {}
     }
     return 'entry';
   });
-  const [selectedCategory, setSelectedCategory] = useState<CategoryType>('NSC');
-  const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<CategoryType>(() => {
+    const saved = localStorage.getItem('power_user_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const isAg =
+          parsed?.role === 'agency' ||
+          String(parsed?.role || '').toLowerCase().includes('agency') ||
+          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+          Boolean((parsed as any)?.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+        if (isAg) return 'DISCONNECTION';
+      } catch {}
+    }
+    return 'NSC';
+  });
+  const [activeFormCategory, setActiveFormCategory] = useState<CategoryType | null>(() => {
+    const saved = localStorage.getItem('power_user_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const isAg =
+          parsed?.role === 'agency' ||
+          String(parsed?.role || '').toLowerCase().includes('agency') ||
+          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+          Boolean((parsed as any)?.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+        if (isAg) return 'DISCONNECTION';
+      } catch {}
+    }
+    return null;
+  });
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>(() => getCachedEntriesSync());
   const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
   const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>(() => getCachedWorkOrdersSync());
-  const [loading, setLoading] = useState<boolean>(() => getCachedEntriesSync().length === 0 && getCachedDisconnectionTasksSync().length === 0);
+  const [loading, setLoading] = useState<boolean>(false);
   const lastDataHashRef = useRef<string>('');
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
@@ -157,7 +203,39 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
+  const [showGlobalLiveOsdModal, setShowGlobalLiveOsdModal] = useState<boolean>(false);
+  const [liveOsdConsumerId, setLiveOsdConsumerId] = useState<string>('');
   const [isHomeDashboardExpanded, setIsHomeDashboardExpanded] = useState<boolean>(false);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem('power_theme_mode');
+      if (saved === 'night' || saved === 'day') return saved;
+    } catch {}
+    return 'day';
+  });
+
+  const handleToggleTheme = () => {
+    setTheme(prev => {
+      const next: ThemeMode = prev === 'day' ? 'night' : 'day';
+      try {
+        localStorage.setItem('power_theme_mode', next);
+      } catch {}
+      if (next === 'night') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (theme === 'night') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
 
   const handleSelectLanguage = (lang: Language) => {
     setCurrentLanguage(lang);
@@ -190,11 +268,38 @@ export default function App() {
     }
   };
 
-  // Purge any legacy local user storage on mount
+  // Purge any legacy local user storage on mount & listen for global app events
   useEffect(() => {
     try {
       localStorage.removeItem('power_registered_users');
     } catch {}
+
+    const handleOpenLiveOsdEvent = (e: any) => {
+      const consumerId = e?.detail?.consumerId || e?.detail || '';
+      setLiveOsdConsumerId(typeof consumerId === 'string' ? consumerId : '');
+      setShowGlobalLiveOsdModal(true);
+    };
+
+    const handleOpenCornerOptionEvent = (e: any) => {
+      const option = e?.detail;
+      if (option) {
+        setCornerModalOption(option);
+      }
+    };
+
+    const handleOpenSettingsEvent = () => {
+      setCornerModalOption('app_settings');
+    };
+
+    window.addEventListener('power-open-live-osd', handleOpenLiveOsdEvent);
+    window.addEventListener('power-open-corner-option', handleOpenCornerOptionEvent);
+    window.addEventListener('power-open-settings', handleOpenSettingsEvent);
+
+    return () => {
+      window.removeEventListener('power-open-live-osd', handleOpenLiveOsdEvent);
+      window.removeEventListener('power-open-corner-option', handleOpenCornerOptionEvent);
+      window.removeEventListener('power-open-settings', handleOpenSettingsEvent);
+    };
   }, []);
 
   const inFlightRef = useRef(false);
@@ -268,6 +373,9 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) {
       setLoading(false);
+      setEntries([]);
+      setDisconnectionTasks([]);
+      setWorkOrders([]);
       return;
     }
 
@@ -276,7 +384,11 @@ export default function App() {
     } catch {}
 
     lastDataHashRef.current = '';
-    loadData(false, true);
+    lastOrdersHashRef.current = '';
+    setEntries(getCachedEntriesSync());
+    setDisconnectionTasks(getCachedDisconnectionTasksSync());
+    setWorkOrders(getCachedWorkOrdersSync());
+    loadData(true, false);
 
     // Single active 10-second background timer per authenticated app session (POWER APP & SHEETS REFRESH)
     const interval = setInterval(() => {
@@ -365,7 +477,14 @@ export default function App() {
     } else {
       localStorage.removeItem('power_is_admin');
       if (activeTab === 'admin') {
-        setActiveTab('entry');
+        const isAgency =
+          currentUser?.role === 'agency' ||
+          String(currentUser?.role || '').toLowerCase().includes('agency') ||
+          /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+          /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+          Boolean((currentUser as any)?.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '');
+        setActiveTab(isAgency ? 'disconnection' : 'entry');
       }
     }
   }, [currentUser, activeTab]);
@@ -398,9 +517,16 @@ export default function App() {
   // Enforce access control: If user is not admin, never allow staying in the admin panel
   useEffect(() => {
     if (!isAdmin && activeTab === 'admin') {
-      setActiveTab('entry');
+      const isAgency =
+        currentUser?.role === 'agency' ||
+        String(currentUser?.role || '').toLowerCase().includes('agency') ||
+        /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+        /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+        Boolean((currentUser as any)?.agencyName) ||
+        /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '');
+      setActiveTab(isAgency ? 'disconnection' : 'entry');
     }
-  }, [isAdmin, activeTab]);
+  }, [isAdmin, activeTab, currentUser]);
 
   const handleAdminLogout = () => {
     setIsAdmin(false);
@@ -409,20 +535,30 @@ export default function App() {
   };
 
   const handleUserLoginSuccess = (session: UserSession) => {
-    setCurrentUser(session);
-    setWorkerName(session.name);
     localStorage.setItem('power_user_session', JSON.stringify(session));
     localStorage.setItem('power_worker_name', session.name);
+
     const isUserAdmin = Boolean(
       session.role !== 'worker' && 
       session.role !== 'agency' && 
       (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
     );
+    const isAgency = Boolean(
+      !isUserAdmin &&
+      (session.role === 'agency' ||
+        String(session.role || '').toLowerCase().includes('agency') ||
+        /^(agn|agency)[-_0-9]/i.test(session.idNo || '') ||
+        /agency|এজেন্সি/i.test(session.designation || '') ||
+        Boolean(session.agencyName) ||
+        /enterprise|agency|associates|traders|construction/i.test(session.name || '') ||
+        isAgencyUserSession(session, getCachedDisconnectionTasksSync()))
+    );
+
     setIsAdmin(isUserAdmin);
     if (isUserAdmin) {
       localStorage.setItem('power_is_admin', 'true');
       setActiveTab('admin');
-    } else if (session.role === 'agency' || isAgencyUserSession(session, disconnectionTasks)) {
+    } else if (isAgency) {
       localStorage.removeItem('power_is_admin');
       setActiveTab('disconnection');
       setActiveFormCategory('DISCONNECTION');
@@ -431,6 +567,9 @@ export default function App() {
       localStorage.removeItem('power_is_admin');
       setActiveTab('entry');
     }
+
+    setWorkerName(session.name);
+    setCurrentUser(session);
   };
 
   const handleUserLogout = () => {
@@ -442,6 +581,11 @@ export default function App() {
     setIsAdmin(false);
     setWorkerName('');
     setActiveTab('entry');
+    setEntries([]);
+    setDisconnectionTasks([]);
+    setWorkOrders([]);
+    lastDataHashRef.current = '';
+    lastOrdersHashRef.current = '';
   };
 
   const handleExportCsv = () => {
@@ -524,11 +668,11 @@ export default function App() {
     return isAgencyUserSession(currentUser, disconnectionTasks);
   }, [isAdmin, currentUser, disconnectionTasks]);
 
-  const userVisibleDisconnectionTasks = isAdmin
+  const userVisibleDisconnectionTasks = (isAdmin || currentUser?.isOfficeScoped)
     ? disconnectionTasks
     : filterDisconnectionTasksForUser(disconnectionTasks, currentUser);
 
-  const userVisibleEntries = isAdmin
+  const userVisibleEntries = (isAdmin || currentUser?.isOfficeScoped)
     ? entries
     : filterEntriesForUser(entries, currentUser);
 
@@ -553,7 +697,9 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 font-sans antialiased">
+    <div className={`flex h-screen w-screen overflow-hidden font-sans antialiased ${
+      theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
+    }`}>
       {/* Mobile Drawer Overlay */}
       {sidebarOpen && (
         <div 
@@ -564,67 +710,122 @@ export default function App() {
 
       {/* LEFT NAVIGATION SIDEBAR */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-200 ease-in-out md:static md:translate-x-0
+        fixed inset-y-0 left-0 z-50 w-64 flex flex-col transition-transform duration-200 ease-in-out md:static md:translate-x-0
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        ${theme === 'night' ? 'bg-[#0b1226] border-r border-slate-800 text-slate-100 shadow-2xl md:shadow-none' : 'bg-white border-r border-slate-200 text-slate-800 shadow-sm md:shadow-none'}
       `}>
         {/* Brand Header with Round Logo */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className={`p-4 border-b flex items-center justify-between ${
+          theme === 'night' ? 'border-slate-800 bg-[#0a1022]' : 'border-slate-200 bg-slate-50/70'
+        }`}>
           <div className="flex items-center gap-3">
             <img 
               src={appLogo} 
               alt="Power of Construction Logo" 
-              className="w-10 h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-800"
+              className={`w-10 h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ${
+                theme === 'night' ? 'ring-slate-800' : 'ring-amber-200'
+              }`}
               referrerPolicy="no-referrer"
             />
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-white text-sm tracking-wide">{t.appName}</span>
+                <span className={`font-extrabold text-sm tracking-wide ${theme === 'night' ? 'text-white' : 'text-slate-900'}`}>{t.appName}</span>
                 <span className="text-[10px] font-bold bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded">WBSEDCL</span>
               </div>
-              <p className="text-[10px] text-slate-400 leading-tight">Field Utility Standard</p>
+              <p className={`text-[10px] leading-tight ${theme === 'night' ? 'text-slate-400' : 'text-slate-500'}`}>Field Utility Standard</p>
             </div>
           </div>
           <button 
             onClick={() => setSidebarOpen(false)}
-            className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+            className={`md:hidden p-1.5 rounded-lg cursor-pointer ${
+              theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
+            }`}
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* Office Identity Badge in Sidebar */}
+        {currentUser?.officeName && (
+          <div className={`px-4 py-2 border-b flex items-center justify-between gap-2 text-xs ${
+            theme === 'night' ? 'bg-emerald-950/30 border-slate-800' : 'bg-emerald-50/80 border-slate-200'
+          }`}>
+            <div className="truncate">
+              <div className="font-bold text-emerald-700 dark:text-emerald-300 truncate">
+                🏢 {currentUser.officeName}
+              </div>
+              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                {currentUser.databaseName || 'Office Database'}
+              </div>
+            </div>
+            {currentUser.spreadsheetLink && (
+              <a
+                href={currentUser.spreadsheetLink}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline shrink-0"
+              >
+                Sheet ↗
+              </a>
+            )}
+          </div>
+        )}
+
         {/* Navigation Sections */}
         <div className="px-4 py-3">
-          <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">{t.mainModules}</p>
+          <p className={`px-3 text-[11px] font-black uppercase tracking-wider ${theme === 'night' ? 'text-slate-400' : 'text-slate-900'}`}>{t.mainModules}</p>
         </div>
-        <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto">
           <button
             onClick={() => { setActiveTab('entry'); setSidebarOpen(false); }}
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'entry'
-                ? 'bg-slate-800 text-white shadow-xs font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                ? theme === 'night' ? 'bg-slate-800 text-white shadow-xs font-bold' : 'bg-slate-900 text-white shadow-xs font-bold'
+                : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-slate-900 font-bold hover:bg-slate-100 hover:text-black border border-slate-200/60 bg-slate-50/70'
             }`}
           >
             <div className="flex items-center gap-3">
-              <Home className="w-4 h-4 text-amber-400" />
-              <span>{t.dataEntry}</span>
+              <Home className={`w-4 h-4 ${theme === 'night' ? 'text-amber-400' : 'text-amber-600'}`} />
+              <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.dataEntry}</span>
             </div>
-            <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded">Home</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              theme === 'night' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-900 border border-amber-300'
+            }`}>Home</span>
           </button>
 
           <button
             onClick={() => { setActiveTab('my-submissions'); setSidebarOpen(false); }}
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'my-submissions'
-                ? 'bg-slate-800 text-white shadow-xs font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                ? theme === 'night' ? 'bg-slate-800 text-white shadow-xs font-bold' : 'bg-sky-600 text-white shadow-xs font-bold'
+                : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-slate-900 font-bold hover:bg-sky-50 hover:text-sky-900 border border-slate-200/60 bg-slate-50/70'
             }`}
           >
             <div className="flex items-center gap-3">
-              <Clock className="w-4 h-4 text-sky-400" />
-              <span>{t.mySubmissions}</span>
+              <Clock className={`w-4 h-4 ${theme === 'night' ? 'text-sky-400' : 'text-sky-600'}`} />
+              <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.mySubmissions}</span>
             </div>
-            <span className="text-[10px] bg-slate-800 text-slate-400 font-bold px-1.5 py-0.5 rounded">{entries.length}</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              theme === 'night' ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-900 font-extrabold'
+            }`}>{entries.length}</span>
+          </button>
+
+          <button
+            id="sidebar-nav-disconnection-btn"
+            onClick={() => { setActiveTab('disconnection'); setSidebarOpen(false); }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'disconnection'
+                ? 'bg-rose-600 text-white shadow-xs font-bold'
+                : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-rose-950 font-bold bg-rose-50/80 hover:bg-rose-100 border border-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <PowerOff className={`w-4 h-4 ${theme === 'night' ? 'text-rose-400' : 'text-rose-600'}`} />
+              <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.disconnectionTasks || 'ডিসকানেকশন (Disconnection)'}</span>
+            </div>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              theme === 'night' ? 'bg-rose-950/80 text-rose-300' : 'bg-rose-100 text-rose-900 font-extrabold border border-rose-300'
+            }`}>{disconnectionTasks.length}</span>
           </button>
 
           <button
@@ -633,14 +834,16 @@ export default function App() {
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'work-orders'
                 ? 'bg-amber-600 text-white shadow-xs font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-amber-950 font-bold bg-amber-50/80 hover:bg-amber-100 border border-amber-200'
             }`}
           >
             <div className="flex items-center gap-3">
-              <FileSpreadsheet className="w-4 h-4 text-amber-400" />
-              <span>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
+              <FileSpreadsheet className={`w-4 h-4 ${theme === 'night' ? 'text-amber-400' : 'text-amber-600'}`} />
+              <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
             </div>
-            <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded">Live</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              theme === 'night' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-900 font-extrabold border border-amber-300'
+            }`}>Live</span>
           </button>
 
           <button
@@ -648,15 +851,17 @@ export default function App() {
             onClick={() => { setActiveTab('performance'); setSidebarOpen(false); }}
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'performance'
-                ? 'bg-slate-800 text-white shadow-xs font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                ? theme === 'night' ? 'bg-slate-800 text-white shadow-xs font-bold' : 'bg-blue-600 text-white shadow-xs font-bold'
+                : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-blue-950 font-bold bg-blue-50/80 hover:bg-blue-100 border border-blue-200'
             }`}
           >
             <div className="flex items-center gap-3">
-              <BarChart3 className="w-4 h-4 text-blue-400" />
-              <span>{t.performanceDashboard}</span>
+              <BarChart3 className={`w-4 h-4 ${theme === 'night' ? 'text-blue-400' : 'text-blue-600'}`} />
+              <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.performanceDashboard}</span>
             </div>
-            <span className="text-[10px] bg-blue-500/20 text-blue-300 font-bold px-1.5 py-0.5 rounded">Live</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              theme === 'night' ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-900 font-extrabold border border-blue-300'
+            }`}>Live</span>
           </button>
 
           {isAdmin && (
@@ -664,17 +869,107 @@ export default function App() {
               onClick={() => { setActiveTab('admin'); setSidebarOpen(false); loadData(false, true); }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'admin'
-                  ? 'bg-slate-800 text-white shadow-xs font-bold'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? theme === 'night' ? 'bg-slate-800 text-white shadow-xs font-bold' : 'bg-slate-900 text-white shadow-xs font-bold'
+                  : theme === 'night' ? 'text-slate-300 hover:text-white hover:bg-slate-800/50' : 'text-slate-900 font-bold hover:bg-slate-100 border border-slate-200/60 bg-slate-50/70'
               }`}
             >
               <div className="flex items-center gap-3">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>{t.adminCenter}</span>
+                <ShieldCheck className={`w-4 h-4 ${theme === 'night' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+                <span className={theme === 'night' ? 'text-white' : 'text-slate-900 font-black'}>{t.adminCenter}</span>
               </div>
-              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
             </button>
           )}
+
+          {/* LIVE OSD & BILL CHECK OPTION IN SIDEBAR */}
+          <button
+            id="sidebar-nav-live-osd-btn"
+            type="button"
+            onClick={() => {
+              setSidebarOpen(false);
+              setLiveOsdConsumerId('');
+              setShowGlobalLiveOsdModal(true);
+            }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs group ${
+              theme === 'night'
+                ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 hover:text-white border border-emerald-500/40'
+                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border border-emerald-300'
+            }`}
+            title="লাইভ OSD ও বকেয়া চেক (WBSEDCL Live Outstanding & No Dues)"
+          >
+            <div className="flex items-center gap-3">
+              <div className={`p-1.5 rounded-lg shrink-0 group-hover:scale-105 transition-transform ${
+                theme === 'night' ? 'bg-emerald-500 text-slate-950 font-black' : 'bg-emerald-600 text-white font-bold'
+              }`}>
+                <Zap className="w-4 h-4 fill-current" />
+              </div>
+              <div className="text-left">
+                <span className={`block leading-tight font-black text-[12px] ${
+                  theme === 'night' ? 'text-white' : 'text-slate-950'
+                }`}>
+                  {currentLanguage === 'bn' ? 'লাইভ OSD ও বকেয়া চেক' : 'Live OSD & Bill Check'}
+                </span>
+                <span className={`text-[10px] block leading-tight font-semibold ${
+                  theme === 'night' ? 'text-emerald-300' : 'text-emerald-800'
+                }`}>
+                  WBSEDCL Live Portal
+                </span>
+              </div>
+            </div>
+            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-2xs ${
+              theme === 'night' ? 'bg-emerald-500 text-slate-950' : 'bg-emerald-600 text-white'
+            }`}>
+              Live
+            </span>
+          </button>
+
+          {/* DAY / NIGHT MODE SWITCHER OPTION INSIDE MAIN MODULES */}
+          <button
+            id="sidebar-nav-day-night-btn"
+            type="button"
+            onClick={handleToggleTheme}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs border ${
+              theme === 'night'
+                ? 'bg-[#121c38] hover:bg-[#18264d] text-amber-300 hover:text-amber-200 border-indigo-500/40 hover:border-amber-400/60 ring-1 ring-amber-400/20'
+                : 'bg-amber-50/90 hover:bg-amber-100/90 text-amber-950 border-amber-300 hover:border-amber-400 ring-1 ring-amber-200'
+            }`}
+            title={
+              theme === 'night'
+                ? (currentLanguage === 'bn' ? 'রাত মোড সক্রিয় • দিন মোড করতে ক্লিক করুন' : 'Night Mode Active • Click for Day Mode')
+                : (currentLanguage === 'bn' ? 'দিন মোড সক্রিয় • রাত মোড করতে ক্লিক করুন' : 'Day Mode Active • Click for Night Mode')
+            }
+          >
+            <div className="flex items-center gap-2.5">
+              <div className={`p-1.5 rounded-lg shrink-0 ${
+                theme === 'night'
+                  ? 'bg-indigo-950 text-amber-300 border border-indigo-500/40 shadow-xs'
+                  : 'bg-amber-400 text-slate-950 shadow-xs'
+              }`}>
+                {theme === 'night' ? <Moon className="w-4 h-4 text-indigo-300" /> : <Sun className="w-4 h-4 text-slate-950 fill-amber-300" />}
+              </div>
+              <div className="text-left">
+                <span className={`block leading-tight font-black text-[12px] ${
+                  theme === 'night' ? 'text-white' : 'text-slate-950'
+                }`}>
+                  {currentLanguage === 'bn' ? 'দিন বা রাত (Day / Night)' : 'Day / Night Mode'}
+                </span>
+                <span className={`text-[10px] block leading-tight font-bold ${
+                  theme === 'night' ? 'text-indigo-200' : 'text-amber-900'
+                }`}>
+                  {theme === 'night' 
+                    ? (currentLanguage === 'bn' ? 'রাত মোড সক্রিয় (Night)' : 'Night Mode Active') 
+                    : (currentLanguage === 'bn' ? 'দিন মোড সক্রিয় (Day)' : 'Day Mode Active')}
+                </span>
+              </div>
+            </div>
+            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-wider ${
+              theme === 'night'
+                ? 'bg-indigo-900/90 text-amber-300 border-indigo-400/50 shadow-xs'
+                : 'bg-amber-200 text-amber-950 border-amber-400 shadow-xs'
+            }`}>
+              {theme === 'night' ? '🌙 Night' : '☀️ Day'}
+            </span>
+          </button>
 
           {/* LANGUAGE OPTION INSIDE MAIN MODULES BELOW ADMIN CENTER */}
           <button
@@ -683,14 +978,20 @@ export default function App() {
               setSidebarOpen(false);
               setShowLanguageModal(true);
             }}
-            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-blue-300 hover:text-white hover:bg-blue-500/10 border border-blue-500/30 transition-all cursor-pointer shadow-xs"
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              theme === 'night'
+                ? 'text-blue-300 hover:text-white hover:bg-blue-500/10 border border-blue-500/30'
+                : 'text-blue-950 bg-blue-50/90 hover:bg-blue-100 border border-blue-200 font-black'
+            }`}
             title="ভাষা পরিবর্তন করুন (Change Language: Bengali, English, Hindi, Urdu)"
           >
             <div className="flex items-center gap-3">
-              <Globe className="w-4 h-4 text-blue-400" />
-              <span>{t.language}</span>
+              <Globe className={`w-4 h-4 ${theme === 'night' ? 'text-blue-400' : 'text-blue-600'}`} />
+              <span className={theme === 'night' ? 'text-blue-300' : 'text-slate-950 font-black'}>{t.language}</span>
             </div>
-            <span className="text-[9px] bg-blue-500/20 text-blue-300 font-bold px-1.5 py-0.5 rounded border border-blue-500/40 uppercase">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+              theme === 'night' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40' : 'bg-blue-200 text-blue-950 border border-blue-300'
+            }`}>
               {currentLanguage}
             </span>
           </button>
@@ -702,14 +1003,20 @@ export default function App() {
               setSidebarOpen(false);
               setShowInstallModal(true);
             }}
-            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-amber-300 hover:text-white hover:bg-amber-500/10 border border-amber-500/30 transition-all cursor-pointer shadow-xs"
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              theme === 'night'
+                ? 'text-amber-300 hover:text-white hover:bg-amber-500/10 border border-amber-500/30'
+                : 'text-amber-950 bg-amber-50/90 hover:bg-amber-100 border border-amber-200 font-black'
+            }`}
             title="অ্যান্ড্রয়েড ফোনে অ্যাপ ইনস্টল করুন"
           >
             <div className="flex items-center gap-3">
-              <Download className="w-4 h-4 text-amber-400" />
-              <span>{t.installApp}</span>
+              <Download className={`w-4 h-4 ${theme === 'night' ? 'text-amber-400' : 'text-amber-600'}`} />
+              <span className={theme === 'night' ? 'text-amber-300' : 'text-slate-950 font-black'}>{t.installApp}</span>
             </div>
-            <span className="text-[9px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded border border-amber-500/40">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+              theme === 'night' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-amber-200 text-amber-950 border-amber-300'
+            }`}>
               Android
             </span>
           </button>
@@ -721,14 +1028,20 @@ export default function App() {
               setSidebarOpen(false);
               setShowHelpModal(true);
             }}
-            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-emerald-300 hover:text-white hover:bg-emerald-500/10 border border-emerald-500/30 transition-all cursor-pointer shadow-xs"
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              theme === 'night'
+                ? 'text-emerald-300 hover:text-white hover:bg-emerald-500/10 border border-emerald-500/30'
+                : 'text-emerald-950 bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 font-black'
+            }`}
             title="হেল্প ও সাপোর্ট (Email: powerof2026@gmail.com & Admin Live Chat)"
           >
             <div className="flex items-center gap-3">
-              <HelpCircle className="w-4 h-4 text-emerald-400" />
-              <span>{t.helpSupport}</span>
+              <HelpCircle className={`w-4 h-4 ${theme === 'night' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+              <span className={theme === 'night' ? 'text-emerald-300' : 'text-slate-950 font-black'}>{t.helpSupport}</span>
             </div>
-            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.5 rounded border border-emerald-500/40">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+              theme === 'night' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-emerald-200 text-emerald-950 border-emerald-300'
+            }`}>
               Live Chat
             </span>
           </button>
@@ -741,14 +1054,20 @@ export default function App() {
               setSidebarOpen(false);
               setCornerModalOption('app_settings');
             }}
-            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold text-purple-300 hover:text-white hover:bg-purple-500/10 border border-purple-500/30 transition-all cursor-pointer shadow-xs"
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              theme === 'night'
+                ? 'text-purple-300 hover:text-white hover:bg-purple-500/10 border border-purple-500/30'
+                : 'text-purple-950 bg-purple-50/90 hover:bg-purple-100 border border-purple-200 font-black'
+            }`}
             title="অ্যাপ সেটিংস (App Settings - Force System Refresh)"
           >
             <div className="flex items-center gap-3">
-              <Settings className="w-4 h-4 text-purple-400" />
-              <span>{currentLanguage === 'bn' ? 'অ্যাপ সেটিংস (App Settings)' : 'App Settings'}</span>
+              <Settings className={`w-4 h-4 ${theme === 'night' ? 'text-purple-400' : 'text-purple-600'}`} />
+              <span className={theme === 'night' ? 'text-purple-300' : 'text-slate-950 font-black'}>{currentLanguage === 'bn' ? 'অ্যাপ সেটিংস (App Settings)' : 'App Settings'}</span>
             </div>
-            <span className="text-[9px] bg-purple-500/20 text-purple-300 font-bold px-1.5 py-0.5 rounded border border-purple-500/40">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+              theme === 'night' ? 'bg-purple-500/20 text-purple-300 border-purple-500/40' : 'bg-purple-200 text-purple-950 border-purple-300'
+            }`}>
               Settings
             </span>
           </button>
@@ -759,28 +1078,42 @@ export default function App() {
             type="button"
             onClick={handlePowerAppSheetsRefresh}
             disabled={isSyncing}
-            className="w-full text-left bg-slate-800/85 hover:bg-slate-800 border border-emerald-500/30 rounded-lg p-2.5 space-y-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-90"
+            className={`w-full text-left rounded-lg p-2.5 space-y-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-90 ${
+              theme === 'night'
+                ? 'bg-slate-800/85 hover:bg-slate-800 border border-emerald-500/30 text-white'
+                : 'bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-300 text-emerald-950'
+            }`}
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-md flex items-center justify-center bg-emerald-500/20 text-emerald-400 shrink-0">
+                <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${
+                  theme === 'night' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-600 text-white'
+                }`}>
                   <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                 </div>
-                <span className="text-[11px] font-extrabold text-white tracking-wide leading-tight">
+                <span className={`text-[11px] font-black tracking-wide leading-tight ${
+                  theme === 'night' ? 'text-white' : 'text-slate-950'
+                }`}>
                   POWER APP & SHEETS REFRESH
                 </span>
               </div>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className={`w-2 h-2 rounded-full animate-pulse shrink-0 ${
+                theme === 'night' ? 'bg-emerald-400' : 'bg-emerald-600'
+              }`} />
             </div>
 
             {isSyncing ? (
-              <div className="text-[10px] font-bold text-emerald-300 pl-8">
+              <div className={`text-[10px] font-bold pl-8 ${
+                theme === 'night' ? 'text-emerald-300' : 'text-emerald-800 font-extrabold'
+              }`}>
                 Refreshing...
               </div>
             ) : (
-              <div className="text-[10px] text-slate-300 pl-8 space-y-0.5 font-semibold">
-                <div className="text-emerald-400">Auto refresh: ON</div>
-                <div>Last synced: {formatTimeHHMMSS(lastSyncedAt)}</div>
+              <div className={`text-[10px] pl-8 space-y-0.5 font-semibold ${
+                theme === 'night' ? 'text-slate-300' : 'text-slate-800'
+              }`}>
+                <div className={theme === 'night' ? 'text-emerald-400 font-bold' : 'text-emerald-800 font-black'}>Auto refresh: ON</div>
+                <div className={theme === 'night' ? 'text-slate-400' : 'text-slate-700 font-bold'}>Last synced: {formatTimeHHMMSS(lastSyncedAt)}</div>
               </div>
             )}
           </button>
@@ -792,31 +1125,41 @@ export default function App() {
               setSidebarOpen(false);
               handleUserLogout();
             }}
-            className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-950/40 border border-red-900/30 transition-all cursor-pointer"
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              theme === 'night'
+                ? 'text-red-400 hover:text-red-300 hover:bg-red-950/40 border border-red-900/30'
+                : 'text-red-900 bg-red-50 hover:bg-red-100 border border-red-200 font-black'
+            }`}
             title="একাউন্ট থেকে লগআউট করুন"
           >
             <div className="flex items-center gap-3">
-              <LogOut className="w-4 h-4 text-red-400" />
-              <span>{t.logout}</span>
+              <LogOut className={`w-4 h-4 ${theme === 'night' ? 'text-red-400' : 'text-red-600'}`} />
+              <span className={theme === 'night' ? 'text-red-300' : 'text-red-900 font-black'}>{t.logout}</span>
             </div>
-            <span className="text-[9px] bg-red-950 text-red-400 font-mono px-1.5 py-0.5 rounded border border-red-900/40">Exit</span>
+            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+              theme === 'night' ? 'bg-red-950 text-red-400 border-red-900/40' : 'bg-red-200 text-red-900 border-red-300 font-bold'
+            }`}>Exit</span>
           </button>
 
           <div className="pt-4 pb-2">
-            <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">{t.fiveCategories}</p>
+            <p className={`px-3 text-[11px] font-black uppercase tracking-wider ${
+              theme === 'night' ? 'text-slate-400' : 'text-slate-900 font-extrabold'
+            }`}>{t.fiveCategories}</p>
           </div>
 
           <button
             onClick={() => navToCategory('NSC')}
-            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeFormCategory === 'NSC' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeFormCategory === 'NSC' 
+                ? theme === 'night' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'bg-amber-100 text-amber-950 font-black border border-amber-300'
+                : theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800/40' : 'text-slate-900 font-bold hover:bg-amber-50 hover:text-amber-900 bg-slate-50/60 border border-slate-200/50'
             }`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
               <span>1. NSC</span>
             </div>
-            <span className="text-[10px] text-slate-500">{categoryCounts['NSC']}</span>
+            <span className={`text-[10px] font-extrabold ${theme === 'night' ? 'text-slate-400' : 'text-slate-700'}`}>{categoryCounts['NSC']}</span>
           </button>
 
           <button
@@ -826,61 +1169,67 @@ export default function App() {
               setSelectedCategory('DISCONNECTION');
               setSidebarOpen(false);
             }}
-            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
               activeTab === 'disconnection' || activeFormCategory === 'DISCONNECTION'
-                ? 'bg-rose-500/20 text-rose-300 font-bold ring-1 ring-rose-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                ? theme === 'night' ? 'bg-rose-500/20 text-rose-300 font-bold ring-1 ring-rose-500/30' : 'bg-rose-100 text-rose-950 font-black border border-rose-300'
+                : theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800/40' : 'text-slate-900 font-bold hover:bg-rose-50 hover:text-rose-900 bg-slate-50/60 border border-slate-200/50'
             }`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
               <span>2. DISCONNECTION</span>
             </div>
-            <span className="text-[10px] text-slate-500">{categoryCounts['DISCONNECTION']}</span>
+            <span className={`text-[10px] font-extrabold ${theme === 'night' ? 'text-slate-400' : 'text-slate-700'}`}>{categoryCounts['DISCONNECTION']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('POLE CASE')}
-            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeFormCategory === 'POLE CASE' ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeFormCategory === 'POLE CASE' 
+                ? theme === 'night' ? 'bg-sky-500/20 text-sky-300 font-bold' : 'bg-sky-100 text-sky-950 font-black border border-sky-300'
+                : theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800/40' : 'text-slate-900 font-bold hover:bg-sky-50 hover:text-sky-900 bg-slate-50/60 border border-slate-200/50'
             }`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-sky-400"></span>
+              <span className="w-2 h-2 rounded-full bg-sky-500"></span>
               <span>3. POLE CASE</span>
             </div>
-            <span className="text-[10px] text-slate-500">{categoryCounts['POLE CASE']}</span>
+            <span className={`text-[10px] font-extrabold ${theme === 'night' ? 'text-slate-400' : 'text-slate-700'}`}>{categoryCounts['POLE CASE']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('METER REPLESMENT')}
-            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeFormCategory === 'METER REPLESMENT' ? 'bg-emerald-500/20 text-emerald-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeFormCategory === 'METER REPLESMENT' 
+                ? theme === 'night' ? 'bg-emerald-500/20 text-emerald-300 font-bold' : 'bg-emerald-100 text-emerald-950 font-black border border-emerald-300'
+                : theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800/40' : 'text-slate-900 font-bold hover:bg-emerald-50 hover:text-emerald-900 bg-slate-50/60 border border-slate-200/50'
             }`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
               <span>4. METER REPLESMENT</span>
             </div>
-            <span className="text-[10px] text-slate-500">{categoryCounts['METER REPLESMENT']}</span>
+            <span className={`text-[10px] font-extrabold ${theme === 'night' ? 'text-slate-400' : 'text-slate-700'}`}>{categoryCounts['METER REPLESMENT']}</span>
           </button>
 
           <button
             onClick={() => navToCategory('DTR REPLESMENT')}
-            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeFormCategory === 'DTR REPLESMENT' ? 'bg-indigo-500/20 text-indigo-300 font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+            className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeFormCategory === 'DTR REPLESMENT' 
+                ? theme === 'night' ? 'bg-indigo-500/20 text-indigo-300 font-bold' : 'bg-indigo-100 text-indigo-950 font-black border border-indigo-300'
+                : theme === 'night' ? 'text-slate-400 hover:text-white hover:bg-slate-800/40' : 'text-slate-900 font-bold hover:bg-indigo-50 hover:text-indigo-900 bg-slate-50/60 border border-slate-200/50'
             }`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+              <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
               <span>5. DTR REPLESMENT</span>
             </div>
-            <span className="text-[10px] text-slate-500">{categoryCounts['DTR REPLESMENT']}</span>
+            <span className={`text-[10px] font-extrabold ${theme === 'night' ? 'text-slate-400' : 'text-slate-700'}`}>{categoryCounts['DTR REPLESMENT']}</span>
           </button>
         </nav>
 
         {/* User / Admin Profile & Logout at Bottom */}
-        <div className="p-3.5 border-t border-slate-800 bg-slate-950/50">
+        <div className={`p-3.5 border-t ${theme === 'night' ? 'border-slate-800 bg-[#090f20]' : 'border-slate-200 bg-slate-50'}`}>
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5 overflow-hidden">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
@@ -889,14 +1238,16 @@ export default function App() {
                 {currentUser.role === 'admin' ? <ShieldCheck className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
               </div>
               <div className="text-xs overflow-hidden">
-                <p className="text-white font-bold leading-tight truncate">{currentUser.name}</p>
-                <p className="text-slate-400 text-[10px] truncate">{currentUser.designation}</p>
+                <p className={`font-bold leading-tight truncate ${theme === 'night' ? 'text-white' : 'text-slate-900'}`}>{currentUser.name}</p>
+                <p className={`text-[10px] truncate ${theme === 'night' ? 'text-slate-400' : 'text-slate-500'}`}>{currentUser.designation}</p>
               </div>
             </div>
 
             <button
               onClick={handleUserLogout}
-              className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800/80 transition-colors shrink-0 cursor-pointer"
+              className={`p-2 rounded-lg transition-colors shrink-0 cursor-pointer ${
+                theme === 'night' ? 'text-slate-400 hover:text-red-400 hover:bg-slate-800/80' : 'text-slate-500 hover:text-red-600 hover:bg-red-50'
+              }`}
               title="লগআউট করুন (Logout)"
             >
               <LogOut className="w-4 h-4" />
@@ -906,7 +1257,9 @@ export default function App() {
       </aside>
 
       {/* MAIN VIEWPORT (Top Header + Scrollable Content) */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
+      <main className={`flex-1 flex flex-col min-w-0 overflow-hidden ${
+        theme === 'night' ? 'bg-[#060a17]' : 'bg-slate-50'
+      }`}>
         {/* Top Operations Header */}
         <Header
           isAdmin={isAdmin}
@@ -924,89 +1277,91 @@ export default function App() {
           onOpenLanguageModal={() => setShowLanguageModal(true)}
           forceRefreshState={forceRefreshState}
           onForceSystemRefresh={handleForceSystemRefresh}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onOpenLiveOsdCheck={() => {
+            setLiveOsdConsumerId('');
+            setShowGlobalLiveOsdModal(true);
+          }}
         />
 
         {/* Content Container */}
-        <section className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
+        <section className={`flex-1 overflow-y-auto px-3.5 py-4 sm:px-6 sm:py-6 lg:px-8 space-y-5 ${
+          theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
+        }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
               {activeTab === 'entry' && (
-                <div className="space-y-6">
+                <div className="max-w-4xl mx-auto w-full space-y-4 sm:space-y-5">
                   {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
                   {activeFormCategory === null ? (
-                    <div className="space-y-6">
+                    <div className="space-y-4 sm:space-y-5">
                       {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
                       <div className="space-y-4">
                         <div 
                           onClick={() => setIsHomeDashboardExpanded(!isHomeDashboardExpanded)}
-                          className="bg-linear-to-r from-blue-900/90 via-slate-900 to-indigo-950 text-white rounded-2xl p-4 sm:p-5 border border-blue-500/30 shadow-md hover:shadow-xl hover:border-blue-400/60 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none"
+                          className={`rounded-2xl sm:rounded-3xl p-4 sm:p-5 lg:p-6 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none ${
+                            theme === 'night'
+                              ? 'bg-gradient-to-r from-[#030d22] via-[#051638] to-[#020b1f] border-2 border-[#0ea5e9] text-white shadow-[0_0_25px_rgba(14,165,233,0.35)] hover:shadow-[0_0_35px_rgba(14,165,233,0.5)]'
+                              : 'bg-gradient-to-br from-[#1d2f6f] via-[#142358] to-[#0d163a] text-white shadow-md hover:shadow-lg'
+                          }`}
                           role="button"
                           tabIndex={0}
                           aria-expanded={isHomeDashboardExpanded}
                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsHomeDashboardExpanded(!isHomeDashboardExpanded); }}
                         >
-                          {/* Background glow accents */}
-                          <div className="absolute top-0 right-0 -mt-8 -mr-8 w-44 h-44 bg-blue-500/10 rounded-full blur-2xl pointer-events-none group-hover:bg-blue-500/20 transition-all"></div>
+                          {theme === 'night' && (
+                            <TransmissionPylonSvg
+                              theme={theme}
+                              mode="banner"
+                              className="absolute right-0 top-0 bottom-0 w-64 sm:w-84 h-full pointer-events-none select-none"
+                            />
+                          )}
                           
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
                             {/* Left: Icon, Title, Subtitle, Live Badge */}
-                            <div className="flex items-center gap-3.5">
-                              <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shadow-inner shrink-0 transition-all duration-300 ${
-                                isHomeDashboardExpanded 
-                                  ? 'bg-blue-600 text-white scale-105 ring-2 ring-blue-400' 
-                                  : 'bg-blue-600/30 text-blue-400 border border-blue-500/40 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white'
+                            <div className="flex items-start sm:items-center gap-3.5">
+                              <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                                theme === 'night'
+                                  ? 'bg-gradient-to-br from-[#0284c7] to-[#1e40af] text-white shadow-[0_0_15px_rgba(14,165,233,0.6)] border border-cyan-400/30'
+                                  : 'bg-blue-600/30 border border-blue-400/30 text-blue-400'
                               }`}>
-                                <BarChart3 className="w-6 h-6" />
+                                <BarChart3 className="w-5 h-5 sm:w-6 sm:h-6" />
                               </div>
                               <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h2 className="text-sm sm:text-base font-black tracking-wide text-white flex items-center gap-1.5 uppercase">
-                                    <span>{t.performanceDashboard}</span>
-                                  </h2>
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                <h2 className="text-sm sm:text-base lg:text-lg font-black tracking-wide text-white uppercase">
+                                  <span>{t.performanceDashboard}</span>
+                                </h2>
+                                <div className="mt-1">
+                                  <span className="bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5 shadow-2xs">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                                     LIVE METRICS
                                   </span>
                                 </div>
-                                <p className="text-xs text-slate-300 mt-0.5 line-clamp-1">
+                                <p className="text-xs text-slate-200/90 font-medium mt-1 line-clamp-1">
                                   {isHomeDashboardExpanded
                                     ? (currentLanguage === 'bn' 
                                         ? 'ক্লিক করে ড্যাশবোর্ড সংক্ষেপ বা বন্ধ করুন' 
                                         : 'Click to collapse performance dashboard')
                                     : (currentLanguage === 'bn' 
-                                        ? 'ক্লিক করুন — অ্যানিমেশনের সাহায্যে লাইভ পারফরম্যান্স ড্যাশবোর্ড ওপেন হবে' 
-                                        : 'Click to open real-time performance dashboard with animation')}
+                                        ? 'ক্লিক করুন — রিয়েল-টাইম পারফরম্যান্স দেখুন...' 
+                                        : 'Click to open real-time performance...')}
                                 </p>
                               </div>
                             </div>
 
-                            {/* Right: Quick Micro-Stats & Action CTA Button with Rotating Chevron */}
-                            <div className="flex items-center gap-3 self-end md:self-auto shrink-0">
-                              {/* Micro Stats Pills */}
-                              <div className="hidden sm:flex items-center gap-2 text-xs">
-                                <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-slate-200 text-center">
-                                  <span className="text-[10px] text-slate-400 block leading-tight">Total</span>
-                                  <strong className="text-white font-bold">{userVisibleEntries.length + userVisibleDisconnectionTasks.length}</strong>
-                                </div>
-                                <div className="bg-slate-800/80 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-emerald-300 text-center">
-                                  <span className="text-[10px] text-slate-400 block leading-tight">Status</span>
-                                  <strong className="font-bold">Active</strong>
-                                </div>
-                              </div>
-
-                              {/* CTA Open / Close Button with rotating chevron */}
-                              <div className={`px-4 py-2.5 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all duration-300 ${
-                                isHomeDashboardExpanded
-                                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-amber-300'
-                                  : 'bg-blue-600 group-hover:bg-blue-500 text-white'
+                            {/* Right: CTA Open / Close Button matching photo */}
+                            <div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
+                              <div className={`px-4 sm:px-5 py-2 sm:py-2.5 font-black rounded-xl sm:rounded-2xl text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md cursor-pointer ${
+                                theme === 'night'
+                                  ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_15px_rgba(0,180,255,0.6)] hover:brightness-110'
+                                  : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-md'
                               }`}>
                                 <span>
                                   {isHomeDashboardExpanded
                                     ? (currentLanguage === 'bn' ? 'ড্যাশবোর্ড বন্ধ করুন' : 'Close Dashboard')
                                     : (currentLanguage === 'bn' ? 'ড্যাশবোর্ড খুলুন' : 'Open Dashboard')}
                                 </span>
-                                <ChevronDown className={`w-4 h-4 transition-transform duration-300 ease-out ${
-                                  isHomeDashboardExpanded ? 'rotate-180 text-slate-950' : 'text-white'
-                                }`} />
+                                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isHomeDashboardExpanded ? 'rotate-180' : ''}`} />
                               </div>
                             </div>
                           </div>
@@ -1015,18 +1370,24 @@ export default function App() {
                         {/* Smooth Animated Accordion Container for Performance Dashboard on Home Screen */}
                         {isHomeDashboardExpanded && (
                           <div className="overflow-hidden transition-all duration-500 ease-in-out animate-in fade-in slide-in-from-top-4 duration-300">
-                            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-md space-y-4">
-                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div className={`border rounded-2xl p-4 sm:p-6 shadow-md space-y-4 ${
+                              theme === 'night' ? 'bg-[#0c1428] border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
+                            }`}>
+                              <div className={`flex items-center justify-between border-b pb-3 ${
+                                theme === 'night' ? 'border-slate-800' : 'border-slate-100'
+                              }`}>
                                 <div className="flex items-center gap-2">
-                                  <BarChart3 className="w-5 h-5 text-blue-600" />
-                                  <h3 className="text-sm font-bold text-slate-900">
+                                  <BarChart3 className="w-5 h-5 text-blue-500" />
+                                  <h3 className={`text-sm font-bold ${theme === 'night' ? 'text-white' : 'text-slate-900'}`}>
                                     {t.performanceDashboard} - {currentLanguage === 'bn' ? '৫টি ক্যাটাগরির লাইভ পরিসংখ্যান' : '5 Categories Live Analytics'}
                                   </h3>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <button
                                     onClick={() => setActiveTab('performance')}
-                                    className="text-xs text-blue-600 hover:text-blue-800 font-bold px-3 py-1 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                                    className={`text-xs font-bold px-3 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
+                                      theme === 'night' ? 'text-blue-300 hover:text-white bg-blue-950/60 hover:bg-blue-900/60 border border-blue-500/30' : 'text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100'
+                                    }`}
                                     title={currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ডেডিকেটেড পেজে দেখুন' : 'View full dedicated page'}
                                   >
                                     <span>{currentLanguage === 'bn' ? 'পূর্ণাঙ্গ ভিউ' : 'Fullscreen'}</span>
@@ -1034,7 +1395,9 @@ export default function App() {
                                   </button>
                                   <button
                                     onClick={() => setIsHomeDashboardExpanded(false)}
-                                    className="text-xs text-slate-600 hover:text-slate-900 font-bold px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                                    className={`text-xs font-bold px-3 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
+                                      theme === 'night' ? 'text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700' : 'text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200'
+                                    }`}
                                   >
                                     <X className="w-3.5 h-3.5" />
                                     <span>{currentLanguage === 'bn' ? 'বন্ধ করুন' : 'Close'}</span>
@@ -1069,24 +1432,29 @@ export default function App() {
                         }}
                         categoryCounts={categoryCounts}
                         currentLanguage={currentLanguage}
+                        theme={theme}
                       />
 
                       {/* Work Order & Khata Quick Access Banner on Home Screen */}
-                      <div className="bg-linear-to-r from-amber-500/15 via-amber-50 to-orange-500/10 border-2 border-amber-400/80 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className={`border rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                        theme === 'night'
+                          ? 'bg-gradient-to-r from-amber-950/40 via-[#0d162d] to-orange-950/30 border-amber-500/40 text-white'
+                          : 'bg-gradient-to-r from-amber-50 via-white to-amber-50/80 border-amber-300/90 text-slate-900'
+                      }`}>
                         <div className="flex items-center gap-3.5">
-                          <div className="w-11 h-11 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
-                            <FileSpreadsheet className="w-6 h-6" />
+                          <div className="w-11 h-11 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
+                            <FileSpreadsheet className="w-5.5 h-5.5" />
                           </div>
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="text-sm sm:text-base font-black text-slate-900">
+                              <h3 className={`text-sm sm:text-base font-extrabold tracking-tight ${theme === 'night' ? 'text-amber-300' : 'text-slate-900'}`}>
                                 {t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata)'}
                               </h3>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white shadow-2xs">
                                 {workOrders.filter(w => isAdmin || !w.isHidden).length} Live
                               </span>
                             </div>
-                            <p className="text-xs text-slate-600 mt-0.5">
+                            <p className={`text-xs mt-0.5 font-medium ${theme === 'night' ? 'text-slate-300' : 'text-slate-600'}`}>
                               {t.workOrderNoticeDesc}
                             </p>
                           </div>
@@ -1095,7 +1463,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => setActiveTab('work-orders')}
-                            className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
+                            className="w-full sm:w-auto px-4 py-2 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
                           >
                             <FileSpreadsheet className="w-4 h-4" />
                             <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata'}</span>
@@ -1104,12 +1472,14 @@ export default function App() {
                       </div>
 
                       {/* Recent Submissions */}
-                      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
+                      <div className={`border rounded-2xl sm:rounded-3xl p-4 sm:p-5.5 shadow-xs ${
+                        theme === 'night' ? 'bg-[#0c1428] border-slate-800 text-white' : 'bg-white border-slate-200/90 text-slate-900'
+                      }`}>
                         <div>
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
-                              <Clock className="w-4 h-4 text-slate-600" />
-                              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                              <Clock className={`w-4 h-4 ${theme === 'night' ? 'text-slate-400' : 'text-slate-600'}`} />
+                              <h4 className={`text-xs font-bold uppercase tracking-wide ${theme === 'night' ? 'text-slate-200' : 'text-slate-800'}`}>
                                 {t.recordsCount} ({userVisibleEntries.length})
                               </h4>
                             </div>
@@ -1468,6 +1838,16 @@ export default function App() {
         currentUser={currentUser}
         lang={currentLanguage}
       />
+
+      {/* Global WBSEDCL Live OSD & Bill Check Modal */}
+      {showGlobalLiveOsdModal && (
+        <LiveOutstandingModal
+          isOpen={showGlobalLiveOsdModal}
+          initialId={liveOsdConsumerId}
+          onClose={() => setShowGlobalLiveOsdModal(false)}
+          lang={currentLanguage === 'bn' ? 'bn' : 'en'}
+        />
+      )}
 
       {/* Quick Preview & Slip Modal */}
       {previewEntry && (

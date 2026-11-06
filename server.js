@@ -1,9 +1,11 @@
 // server.ts
+import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
-import path from "path";
-import fs from "fs";
+import path2 from "path";
+import fs2 from "fs";
 import dns from "dns";
-import crypto from "crypto";
+import crypto2 from "crypto";
 import net from "net";
 import { GoogleGenAI } from "@google/genai";
 import * as XLSX from "xlsx";
@@ -56,8 +58,17 @@ function fetchHttpsBuffer(url, headers = {}) {
     req.end();
   });
 }
+function cleanAndNormalizeConsumerId(consumerId) {
+  if (!consumerId) return "";
+  let str = String(consumerId).trim();
+  const bengaliDigits = ["\u09E6", "\u09E7", "\u09E8", "\u09E9", "\u09EA", "\u09EB", "\u09EC", "\u09ED", "\u09EE", "\u09EF"];
+  for (let i = 0; i < bengaliDigits.length; i++) {
+    str = str.replaceAll(bengaliDigits[i], i.toString());
+  }
+  return str.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-|TASK-|DISC-|CON-)/i, "").replace(/\.0+$/, "").replace(/[, \-_]/g, "").trim();
+}
 async function fetchOfficialWbsedclReportAsync(consumerId) {
-  const cleanId = String(consumerId || "").replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, "").replace(/\.0+$/, "").replace(/[, \-_]/g, "").trim();
+  const cleanId = cleanAndNormalizeConsumerId(consumerId);
   const officialPortalUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`;
   if (!cleanId) {
     return {
@@ -71,9 +82,13 @@ async function fetchOfficialWbsedclReportAsync(consumerId) {
     const r1 = await fetchHttpsBuffer(officialPortalUrl);
     const rawSetCookie = r1.headers["set-cookie"] || [];
     const cookieStr = rawSetCookie.map((c) => c.split(";")[0]).join("; ");
-    const r2 = await fetchHttpsBuffer(officialPortalUrl, cookieStr ? { "Cookie": cookieStr } : {});
-    const html = r2.buffer.toString("utf-8");
-    const m = html.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    const html1 = r1.buffer.toString("utf-8");
+    let m = html1.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    if (!m) {
+      const r2 = await fetchHttpsBuffer(officialPortalUrl, cookieStr ? { "Cookie": cookieStr } : {});
+      const html2 = r2.buffer.toString("utf-8");
+      m = html2.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    }
     if (!m) {
       return {
         success: false,
@@ -86,7 +101,7 @@ async function fetchOfficialWbsedclReportAsync(consumerId) {
     let rawLink = m[1];
     rawLink = rawLink.replace(/\\\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
     rawLink = rawLink.replace(/\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
-    const pdfUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/${rawLink}`;
+    const pdfUrl = new URL(rawLink, officialPortalUrl).href;
     const pdfRes = await fetchHttpsBuffer(pdfUrl, {
       "Referer": officialPortalUrl,
       ...cookieStr ? { "Cookie": cookieStr } : {}
@@ -173,7 +188,585 @@ async function fetchOfficialWbsedclReportAsync(consumerId) {
   }
 }
 
+// src/services/officeRegistryBackend.ts
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+var DEDICATED_REGISTRY_SPREADSHEET_ID = process.env.OFFICE_REGISTRY_SPREADSHEET_ID || "1-mceU8a_JjYTrU3QUFGDKiXGRVA1AvzklKgoc-ezkAw";
+var PROTECTED_PRODUCTION_SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1-3LtAbXZU6klisReK6ffIxDUwbM4wXvhxSbKVpE7raY";
+var REGISTRY_REQUIRED_HEADERS = [
+  "Office ID",
+  "Office Name",
+  "Office Admin Name",
+  "Admin Mobile",
+  "Admin User ID",
+  "Password Hash",
+  "Password Salt",
+  "Database Name",
+  "Google Spreadsheet Link",
+  "Verified Spreadsheet ID",
+  "Status",
+  "Registered At",
+  "Registered By"
+];
+function normalizePrivateKey(rawKey) {
+  if (!rawKey || typeof rawKey !== "string") return "";
+  let key = rawKey.trim();
+  if (key.startsWith('"') && key.endsWith('"') || key.startsWith("'") && key.endsWith("'")) {
+    key = key.slice(1, -1).trim();
+  }
+  if (key.includes("\\n")) {
+    key = key.replace(/\\n/g, "\n");
+  }
+  if (key.includes("\\r")) {
+    key = key.replace(/\\r/g, "\r");
+  }
+  key = key.replace(/\r\n/g, "\n");
+  return key.trim();
+}
+function isValidPrivateKeyFormat(key) {
+  if (!key || typeof key !== "string") return false;
+  const hasBegin = key.includes("-----BEGIN PRIVATE KEY-----") || key.includes("-----BEGIN RSA PRIVATE KEY-----");
+  const hasEnd = key.includes("-----END PRIVATE KEY-----") || key.includes("-----END RSA PRIVATE KEY-----");
+  if (!hasBegin || !hasEnd) return false;
+  try {
+    const signer = crypto.createSign("RSA-SHA256");
+    signer.update("credential-format-probe");
+    signer.sign(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isHexKeyId(str) {
+  if (!str || typeof str !== "string") return false;
+  return /^[0-9a-fA-F]{40}$/.test(str.trim());
+}
+function hasValidPemDelimiters(key) {
+  if (!key || typeof key !== "string") return false;
+  const hasBegin = key.includes("-----BEGIN PRIVATE KEY-----") || key.includes("-----BEGIN RSA PRIVATE KEY-----");
+  const hasEnd = key.includes("-----END PRIVATE KEY-----") || key.includes("-----END RSA PRIVATE KEY-----");
+  return hasBegin && hasEnd;
+}
+function inspectServiceAccountConfiguration() {
+  const rawKeyJson = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || process.env.GCP_SERVICE_ACCOUNT_KEY || process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim();
+  const sepEmail = (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GCP_SERVICE_ACCOUNT_EMAIL || "").trim();
+  const sepKey = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || process.env.GCP_PRIVATE_KEY || "").trim();
+  const candidateFiles = [
+    path.join(process.cwd(), ".service-account.json"),
+    path.join(process.cwd(), ".service-account-backup.json"),
+    path.join(process.cwd(), "service-account.json"),
+    rawKeyJson
+  ].filter((f) => f && typeof f === "string" && fs.existsSync(f));
+  for (const credFilePath of candidateFiles) {
+    try {
+      const fileContent = fs.readFileSync(credFilePath, "utf8");
+      const parsed = JSON.parse(fileContent);
+      const email = parsed.client_email || parsed.clientEmail || "";
+      const key = parsed.private_key || parsed.privateKey || "";
+      const cleanKey = normalizePrivateKey(key);
+      const keyValid = isValidPrivateKeyFormat(cleanKey);
+      if (email && keyValid) {
+        return {
+          configured: true,
+          keyValid: true,
+          source: "file_path",
+          keyFormatStatus: "valid_rsa_pem",
+          serviceAccountEmail: email,
+          spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+          message: `Google Service Account credentials configured and key format validated from file (${path.basename(credFilePath)}).`
+        };
+      }
+    } catch {
+    }
+  }
+  if (rawKeyJson) {
+    let stripped = rawKeyJson;
+    if (stripped.startsWith('"') && stripped.endsWith('"') || stripped.startsWith("'") && stripped.endsWith("'")) {
+      stripped = stripped.slice(1, -1).trim();
+    }
+    if (isHexKeyId(stripped)) {
+      return {
+        configured: false,
+        keyValid: false,
+        source: "none",
+        keyFormatStatus: "is_hex_key_id",
+        serviceAccountEmail: sepEmail || "power-office-registry@gen-lang-client-0685870335.iam.gserviceaccount.com",
+        spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+        message: 'Google Service Account key format error: The configured key is a 40-character Key ID (private_key_id) rather than the actual RSA private key or complete service-account JSON credential. In Google Cloud Console, click "Add Key" -> "Create new key" -> "JSON", download the JSON file, and copy its complete content into GOOGLE_SERVICE_ACCOUNT_KEY.'
+      };
+    }
+    let jsonStr = stripped;
+    if (!jsonStr.startsWith("{")) {
+      try {
+        const b64 = Buffer.from(jsonStr, "base64").toString("utf8").trim();
+        if (b64.startsWith("{")) {
+          jsonStr = b64;
+        }
+      } catch {
+      }
+    }
+    if (jsonStr.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const email = String(parsed.client_email || parsed.clientEmail || "").trim();
+        const key = String(parsed.private_key || parsed.privateKey || "");
+        const cleanKey = normalizePrivateKey(key);
+        const keyValid = isValidPrivateKeyFormat(cleanKey);
+        const keyFormatStatus = keyValid ? "valid_rsa_pem" : isHexKeyId(cleanKey) ? "is_hex_key_id" : "invalid_syntax";
+        return {
+          configured: Boolean(email && key),
+          keyValid,
+          source: stripped.startsWith("{") ? "json_full" : "base64_json",
+          keyFormatStatus,
+          serviceAccountEmail: email || "client_email missing from JSON",
+          spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+          message: keyValid ? "Google Service Account credentials configured and key format validated." : isHexKeyId(cleanKey) ? "The private_key inside the service-account JSON is a 40-character Key ID rather than the full RSA PEM key." : "The private_key inside the service-account JSON is malformed or invalid."
+        };
+      } catch {
+        return {
+          configured: false,
+          keyValid: false,
+          source: "json_full",
+          keyFormatStatus: "invalid_syntax",
+          serviceAccountEmail: sepEmail || "Pending valid JSON",
+          spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+          message: "GOOGLE_SERVICE_ACCOUNT_KEY contains malformed JSON syntax. Please verify the JSON string is complete and untruncated."
+        };
+      }
+    }
+    if (stripped.includes("BEGIN PRIVATE KEY") || stripped.includes("BEGIN RSA PRIVATE KEY")) {
+      const cleanKey = normalizePrivateKey(stripped);
+      const keyValid = isValidPrivateKeyFormat(cleanKey);
+      return {
+        configured: Boolean(sepEmail),
+        keyValid,
+        source: "pem_direct",
+        keyFormatStatus: keyValid ? "valid_rsa_pem" : "invalid_syntax",
+        serviceAccountEmail: sepEmail || "Service account email missing (set GOOGLE_SERVICE_ACCOUNT_EMAIL)",
+        spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+        message: keyValid && sepEmail ? "Google Service Account credentials configured with direct PEM key." : "PEM key detected in GOOGLE_SERVICE_ACCOUNT_KEY, but GOOGLE_SERVICE_ACCOUNT_EMAIL is missing or key is malformed."
+      };
+    }
+  }
+  if (sepEmail || sepKey) {
+    const cleanKey = normalizePrivateKey(sepKey);
+    const keyValid = isValidPrivateKeyFormat(cleanKey);
+    const keyFormatStatus = isHexKeyId(cleanKey) ? "is_hex_key_id" : keyValid ? "valid_rsa_pem" : cleanKey ? "invalid_syntax" : "missing";
+    return {
+      configured: Boolean(sepEmail && sepKey),
+      keyValid,
+      source: "separate_vars",
+      keyFormatStatus,
+      serviceAccountEmail: sepEmail || "GOOGLE_SERVICE_ACCOUNT_EMAIL is missing",
+      spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+      message: keyValid && sepEmail ? "Google Service Account credentials configured and key format validated via separate environment variables." : isHexKeyId(cleanKey) ? 'Google Service Account key format error: The configured key is a 40-character Key ID (private_key_id) rather than the actual RSA private key ("-----BEGIN PRIVATE KEY-----") or complete service-account JSON credential. Please paste the entire downloaded service-account JSON file into GOOGLE_SERVICE_ACCOUNT_KEY.' : "Service Account credentials incomplete: Check GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY."
+    };
+  }
+  return {
+    configured: false,
+    keyValid: false,
+    source: "none",
+    keyFormatStatus: "missing",
+    serviceAccountEmail: "Not configured in environment variables",
+    spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+    message: "Service Account credentials pending in environment variables (GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)."
+  };
+}
+function getServiceAccountCredentials() {
+  const rawKeyJson = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || process.env.GCP_SERVICE_ACCOUNT_KEY || process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim();
+  const candidateFiles = [
+    path.join(process.cwd(), ".service-account.json"),
+    path.join(process.cwd(), ".service-account-backup.json"),
+    path.join(process.cwd(), "service-account.json"),
+    rawKeyJson
+  ].filter((f) => f && typeof f === "string" && fs.existsSync(f));
+  for (const credFilePath of candidateFiles) {
+    try {
+      const fileContent = fs.readFileSync(credFilePath, "utf8");
+      const parsed = JSON.parse(fileContent);
+      const email2 = parsed.client_email || parsed.clientEmail;
+      const rawKey = parsed.private_key || parsed.privateKey;
+      if (email2 && rawKey) {
+        const cleanKey = normalizePrivateKey(rawKey);
+        if (!isHexKeyId(cleanKey) && hasValidPemDelimiters(cleanKey)) {
+          return {
+            client_email: String(email2).trim(),
+            private_key: cleanKey,
+            project_id: parsed.project_id || parsed.projectId || "gen-lang-client-0685870335"
+          };
+        }
+      }
+    } catch {
+    }
+  }
+  if (rawKeyJson) {
+    let decoded = rawKeyJson;
+    if (decoded.startsWith('"') && decoded.endsWith('"') || decoded.startsWith("'") && decoded.endsWith("'")) {
+      decoded = decoded.slice(1, -1).trim();
+    }
+    if (isHexKeyId(decoded)) {
+      return null;
+    }
+    let jsonStr = decoded;
+    if (!jsonStr.startsWith("{")) {
+      try {
+        const b64 = Buffer.from(jsonStr, "base64").toString("utf8").trim();
+        if (b64.startsWith("{")) {
+          jsonStr = b64;
+        }
+      } catch {
+      }
+    }
+    if (jsonStr.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const email2 = parsed.client_email || parsed.clientEmail;
+        const rawKey = parsed.private_key || parsed.privateKey;
+        if (email2 && rawKey) {
+          const cleanKey = normalizePrivateKey(rawKey);
+          if (!isHexKeyId(cleanKey) && hasValidPemDelimiters(cleanKey)) {
+            return {
+              client_email: String(email2).trim(),
+              private_key: cleanKey,
+              project_id: parsed.project_id || parsed.projectId || "gen-lang-client-0685870335"
+            };
+          }
+        }
+      } catch {
+      }
+    }
+    if (decoded.includes("BEGIN PRIVATE KEY") || decoded.includes("BEGIN RSA PRIVATE KEY")) {
+      const email2 = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GCP_SERVICE_ACCOUNT_EMAIL;
+      const cleanKey = normalizePrivateKey(decoded);
+      if (email2 && !isHexKeyId(cleanKey) && hasValidPemDelimiters(cleanKey)) {
+        return {
+          client_email: String(email2).trim(),
+          private_key: cleanKey,
+          project_id: process.env.GCP_PROJECT_ID || "gen-lang-client-0685870335"
+        };
+      }
+    }
+  }
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GCP_SERVICE_ACCOUNT_EMAIL;
+  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || process.env.GCP_PRIVATE_KEY;
+  if (email && privateKey) {
+    const cleanKey = normalizePrivateKey(privateKey);
+    if (!isHexKeyId(cleanKey) && hasValidPemDelimiters(cleanKey)) {
+      return {
+        client_email: String(email).trim(),
+        private_key: cleanKey,
+        project_id: process.env.GCP_PROJECT_ID || "gen-lang-client-0685870335"
+      };
+    }
+  }
+  return null;
+}
+async function getGoogleSheetsAccessToken(creds) {
+  const normalizedKey = normalizePrivateKey(creds.private_key);
+  if (isHexKeyId(normalizedKey)) {
+    throw new Error(
+      'Google Service Account key format error: The configured key is a 40-character Key ID (private_key_id) rather than the actual RSA private key ("-----BEGIN PRIVATE KEY-----") or complete service-account JSON credential. Please paste the entire downloaded service-account JSON file into GOOGLE_SERVICE_ACCOUNT_KEY.'
+    );
+  }
+  if (!isValidPrivateKeyFormat(normalizedKey)) {
+    throw new Error(
+      'Google Service Account private key is improperly formatted. Please verify that GOOGLE_SERVICE_ACCOUNT_KEY contains the complete service-account JSON with "-----BEGIN PRIVATE KEY-----".'
+    );
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const claimSet = Buffer.from(JSON.stringify({
+    iss: creds.client_email,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now
+  })).toString("base64url");
+  let signature;
+  try {
+    const signer = crypto.createSign("RSA-SHA256");
+    signer.update(`${header}.${claimSet}`);
+    signature = signer.sign(normalizedKey, "base64url");
+  } catch (signErr) {
+    throw new Error(
+      `Google Service Account signing failed: ${signErr?.message || "OpenSSL decoder error"}. Ensure the private key is a valid RSA private key.`
+    );
+  }
+  const jwt = `${header}.${claimSet}.${signature}`;
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    }).toString()
+  });
+  const tokenData = await tokenRes.json().catch(() => null);
+  if (!tokenRes.ok || !tokenData?.access_token) {
+    const errMsg = tokenData?.error_description || tokenData?.error || `HTTP ${tokenRes.status}`;
+    throw new Error(`Google Service Account authentication failed: ${errMsg}`);
+  }
+  return tokenData.access_token;
+}
+function hashPasswordSecurely(plainPassword) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(plainPassword, salt, 64).toString("hex");
+  return { salt, hash };
+}
+function verifyOfficePassword(plainPassword, salt, storedHash) {
+  try {
+    const cleanPass = String(plainPassword || "").trim();
+    const cleanHash = String(storedHash || "").trim();
+    const cleanSalt = String(salt || "").trim();
+    if (!cleanPass || !cleanHash) return false;
+    if (cleanSalt) {
+      try {
+        const computed = crypto.scryptSync(cleanPass, cleanSalt, 64).toString("hex");
+        if (crypto.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(cleanHash, "hex"))) {
+          return true;
+        }
+      } catch {
+      }
+    }
+    const passSha = crypto.createHash("sha256").update(cleanPass).digest("hex").toLowerCase();
+    if (cleanHash.toLowerCase() === passSha) {
+      return true;
+    }
+    if (cleanHash === cleanPass || cleanHash.toLowerCase() === cleanPass.toLowerCase()) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function extractAndValidateSpreadsheetId(url) {
+  if (!url || typeof url !== "string") {
+    return { valid: false, error: "Google Spreadsheet Link is required." };
+  }
+  const trimmed = url.trim();
+  const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9_\-]+)/i);
+  if (!match || !match[1]) {
+    return {
+      valid: false,
+      error: "Invalid Google Spreadsheet URL. Must be formatted like https://docs.google.com/spreadsheets/d/.../edit"
+    };
+  }
+  const id = match[1].trim();
+  if (id === PROTECTED_PRODUCTION_SPREADSHEET_ID) {
+    return {
+      valid: false,
+      error: "Security Error: You cannot assign the primary production database spreadsheet as a separate office database."
+    };
+  }
+  if (id === DEDICATED_REGISTRY_SPREADSHEET_ID) {
+    return {
+      valid: false,
+      error: "Security Error: You cannot assign the Master Office Registry spreadsheet as an operational database."
+    };
+  }
+  if (id.length < 15) {
+    return { valid: false, error: "The extracted Google Spreadsheet ID is too short to be valid." };
+  }
+  return { valid: true, id };
+}
+async function verifySpreadsheetAccessible(spreadsheetId, accessToken) {
+  try {
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=spreadsheetId,properties.title`, {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Accept": "application/json"
+      }
+    });
+    if (res.status === 404) {
+      return { accessible: false, error: "Spreadsheet not found. Please verify the link exists and is spelled correctly." };
+    }
+    if (res.status === 403) {
+      return { accessible: false, error: "Permission denied: Please ensure the service account email is granted Editor access to this spreadsheet." };
+    }
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      return { accessible: false, error: errJson?.error?.message || `Google Sheets API returned status ${res.status}` };
+    }
+    const data = await res.json();
+    return { accessible: true, title: data.properties?.title || "Google Spreadsheet" };
+  } catch (err) {
+    return { accessible: false, error: err.message || "Network error verifying spreadsheet" };
+  }
+}
+async function fetchAllRegisteredOffices(accessToken) {
+  const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}?fields=sheets.properties`, {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/json"
+    }
+  });
+  if (!metaRes.ok) {
+    const err = await metaRes.json().catch(() => null);
+    throw new Error(err?.error?.message || `Failed to read Registry spreadsheet metadata (Status ${metaRes.status})`);
+  }
+  const metaData = await metaRes.json();
+  const sheets = metaData.sheets || [];
+  if (sheets.length === 0) {
+    throw new Error("The dedicated Registry spreadsheet contains no sheets/tabs.");
+  }
+  const officesTab = sheets.find((s) => s.properties?.title?.toLowerCase() === "offices") || sheets[0];
+  const sheetTitle = officesTab.properties.title;
+  const valRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}/values/${encodeURIComponent(sheetTitle)}!A1:M`, {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/json"
+    }
+  });
+  if (!valRes.ok) {
+    const err = await valRes.json().catch(() => null);
+    throw new Error(err?.error?.message || `Failed to read Registry spreadsheet rows (Status ${valRes.status})`);
+  }
+  const valData = await valRes.json();
+  const rows = valData.values || [];
+  if (rows.length === 0) {
+    return { success: true, records: [], sheetTitle, hasHeaders: false };
+  }
+  const headerRow = rows[0].map((h) => String(h || "").trim());
+  const records = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0 || !row[0]) continue;
+    records.push({
+      id: String(row[0] || "").trim(),
+      officeName: String(row[1] || "").trim(),
+      adminName: String(row[2] || "").trim(),
+      adminMobile: String(row[3] || "").trim(),
+      adminUserId: String(row[4] || "").trim(),
+      databaseName: String(row[7] || "").trim(),
+      spreadsheetLink: String(row[8] || "").trim(),
+      verifiedSpreadsheetId: String(row[9] || "").trim(),
+      status: "active",
+      registeredAt: String(row[11] || "").trim(),
+      registeredBy: String(row[12] || "").trim()
+    });
+  }
+  return { success: true, records, sheetTitle, hasHeaders: headerRow.length > 0 };
+}
+async function fetchAllRegisteredOfficesWithAuth(accessToken) {
+  const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}?fields=sheets.properties`, {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/json"
+    }
+  });
+  if (!metaRes.ok) {
+    const err = await metaRes.json().catch(() => null);
+    throw new Error(err?.error?.message || `Failed to read Registry spreadsheet metadata (Status ${metaRes.status})`);
+  }
+  const metaData = await metaRes.json();
+  const sheets = metaData.sheets || [];
+  if (sheets.length === 0) {
+    throw new Error("The dedicated Registry spreadsheet contains no sheets/tabs.");
+  }
+  const officesTab = sheets.find((s) => s.properties?.title?.toLowerCase() === "offices") || sheets[0];
+  const sheetTitle = officesTab.properties.title;
+  const valRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}/values/${encodeURIComponent(sheetTitle)}!A1:M`, {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/json"
+    }
+  });
+  if (!valRes.ok) {
+    const err = await valRes.json().catch(() => null);
+    throw new Error(err?.error?.message || `Failed to read Registry spreadsheet rows (Status ${valRes.status})`);
+  }
+  const valData = await valRes.json();
+  const rows = valData.values || [];
+  if (rows.length === 0) {
+    return { success: true, records: [], sheetTitle, hasHeaders: false };
+  }
+  const headerRow = rows[0].map((h) => String(h || "").trim());
+  const records = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0 || !row[0]) continue;
+    records.push({
+      id: String(row[0] || "").trim(),
+      officeName: String(row[1] || "").trim(),
+      adminName: String(row[2] || "").trim(),
+      adminMobile: String(row[3] || "").trim(),
+      adminUserId: String(row[4] || "").trim(),
+      passwordHash: String(row[5] || "").trim(),
+      passwordSalt: String(row[6] || "").trim(),
+      databaseName: String(row[7] || "").trim(),
+      spreadsheetLink: String(row[8] || "").trim(),
+      verifiedSpreadsheetId: String(row[9] || "").trim(),
+      status: "active",
+      registeredAt: String(row[11] || "").trim(),
+      registeredBy: String(row[12] || "").trim()
+    });
+  }
+  return { success: true, records, sheetTitle, hasHeaders: headerRow.length > 0 };
+}
+async function appendOfficeToRegistry(record, sheetTitle, hasHeaders, accessToken) {
+  if (!hasHeaders) {
+    const headerWriteRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}/values/${encodeURIComponent(sheetTitle)}!A1:M1?valueInputOption=USER_ENTERED`,
+      {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          values: [REGISTRY_REQUIRED_HEADERS]
+        })
+      }
+    );
+    if (!headerWriteRes.ok) {
+      const err = await headerWriteRes.json().catch(() => null);
+      throw new Error(err?.error?.message || "Failed to initialize headers on Registry Spreadsheet.");
+    }
+  }
+  const rowValues = [
+    record.id,
+    record.officeName,
+    record.adminName,
+    record.adminMobile,
+    record.adminUserId,
+    record.passwordHash,
+    record.passwordSalt,
+    record.databaseName,
+    record.spreadsheetLink,
+    record.verifiedSpreadsheetId,
+    record.status,
+    record.registeredAt,
+    record.registeredBy
+  ];
+  const appendRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${DEDICATED_REGISTRY_SPREADSHEET_ID}/values/${encodeURIComponent(sheetTitle)}!A1:append?valueInputOption=USER_ENTERED`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        values: [rowValues]
+      })
+    }
+  );
+  if (!appendRes.ok) {
+    const err = await appendRes.json().catch(() => null);
+    throw new Error(err?.error?.message || `Failed to append office record to Registry Spreadsheet (Status ${appendRes.status})`);
+  }
+}
+
 // server.ts
+try {
+  const envLocalPath = path2.join(process.cwd(), ".env.local");
+  if (fs2.existsSync(envLocalPath)) {
+    dotenv.config({ path: envLocalPath, override: true });
+  }
+} catch {
+}
 try {
   dns.setDefaultResultOrder("ipv4first");
   if (typeof net.setDefaultAutoSelectFamily === "function") {
@@ -340,13 +933,13 @@ function normalizeServerEntry(entry) {
   raw.notes = raw.notes || raw["Notes"] || raw.remarks || raw["Remarks"] || "";
   return raw;
 }
-var LARGE_IMAGES_FILE = path.join(process.cwd(), ".large-images-store.json");
-var UPLOADED_PHOTO_LINKS_FILE = path.join(process.cwd(), ".uploaded-photo-links.json");
+var LARGE_IMAGES_FILE = path2.join(process.cwd(), ".large-images-store.json");
+var UPLOADED_PHOTO_LINKS_FILE = path2.join(process.cwd(), ".uploaded-photo-links.json");
 var PUBLIC_APP_BASE_URL = (process.env.SHARED_APP_URL || process.env.APP_URL || "https://ais-pre-rh4ipudzd63obfsffyyaxm-140503423112.asia-southeast1.run.app").replace(/\/+$/, "");
 var largeImagesMap = /* @__PURE__ */ new Map();
 try {
-  if (fs.existsSync(LARGE_IMAGES_FILE)) {
-    const rawMap = JSON.parse(fs.readFileSync(LARGE_IMAGES_FILE, "utf-8"));
+  if (fs2.existsSync(LARGE_IMAGES_FILE)) {
+    const rawMap = JSON.parse(fs2.readFileSync(LARGE_IMAGES_FILE, "utf-8"));
     if (rawMap && typeof rawMap === "object") {
       for (const [k, v] of Object.entries(rawMap)) {
         if (typeof v === "string") largeImagesMap.set(k, v);
@@ -357,8 +950,8 @@ try {
 }
 var uploadedPhotoLinksMap = /* @__PURE__ */ new Map();
 try {
-  if (fs.existsSync(UPLOADED_PHOTO_LINKS_FILE)) {
-    const rawLinks = JSON.parse(fs.readFileSync(UPLOADED_PHOTO_LINKS_FILE, "utf-8"));
+  if (fs2.existsSync(UPLOADED_PHOTO_LINKS_FILE)) {
+    const rawLinks = JSON.parse(fs2.readFileSync(UPLOADED_PHOTO_LINKS_FILE, "utf-8"));
     if (rawLinks && typeof rawLinks === "object") {
       for (const [k, v] of Object.entries(rawLinks)) {
         if (typeof v === "string") uploadedPhotoLinksMap.set(k, v);
@@ -373,7 +966,7 @@ function saveLargeImagesToDisk() {
     for (const [k, v] of largeImagesMap.entries()) {
       obj[k] = v;
     }
-    fs.writeFileSync(LARGE_IMAGES_FILE, JSON.stringify(obj), "utf-8");
+    fs2.writeFileSync(LARGE_IMAGES_FILE, JSON.stringify(obj), "utf-8");
   } catch {
   }
 }
@@ -383,7 +976,7 @@ function saveUploadedPhotoLinksToDisk() {
     for (const [k, v] of uploadedPhotoLinksMap.entries()) {
       obj[k] = v;
     }
-    fs.writeFileSync(UPLOADED_PHOTO_LINKS_FILE, JSON.stringify(obj), "utf-8");
+    fs2.writeFileSync(UPLOADED_PHOTO_LINKS_FILE, JSON.stringify(obj), "utf-8");
   } catch {
   }
 }
@@ -412,7 +1005,7 @@ async function convertDataUrlToClickablePhotoLink(val, recordKeyHint = "") {
   if (!trimmed.startsWith("data:")) {
     return trimmed;
   }
-  const imgHash = crypto.createHash("sha1").update(trimmed).digest("hex").slice(0, 16);
+  const imgHash = crypto2.createHash("sha1").update(trimmed).digest("hex").slice(0, 16);
   const safeHint = String(recordKeyHint || "photo").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
   const imgKey = `${safeHint}_${imgHash}`;
   largeImagesMap.set(imgKey, trimmed);
@@ -832,21 +1425,21 @@ app.get(["/healthz", "/health", "/ping", "/ready"], (req, res) => {
   });
 });
 app.get(["/Code.gs", "/api/code-gs"], (req, res) => {
-  const filePath = path.resolve(process.cwd(), "Code.gs");
-  if (fs.existsSync(filePath)) {
+  const filePath = path2.resolve(process.cwd(), "Code.gs");
+  if (fs2.existsSync(filePath)) {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.send(fs.readFileSync(filePath, "utf-8"));
+    res.send(fs2.readFileSync(filePath, "utf-8"));
   } else {
     res.status(404).send("Code.gs not found");
   }
 });
 app.get("/api/code-gs/download", (req, res) => {
-  const filePath = path.resolve(process.cwd(), "Code.gs");
-  if (fs.existsSync(filePath)) {
+  const filePath = path2.resolve(process.cwd(), "Code.gs");
+  if (fs2.existsSync(filePath)) {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="Code.gs"');
-    res.send(fs.readFileSync(filePath, "utf-8"));
+    res.send(fs2.readFileSync(filePath, "utf-8"));
   } else {
     res.status(404).send("Code.gs not found");
   }
@@ -872,12 +1465,12 @@ app.get("/api/health", async (req, res) => {
     });
   }
 });
-var USERS_CACHE_FILE = path.join(process.cwd(), ".users-cache.json");
+var USERS_CACHE_FILE = path2.join(process.cwd(), ".users-cache.json");
 var cachedUsersState = null;
 var isRefreshingUsersInBg = false;
 try {
-  if (fs.existsSync(USERS_CACHE_FILE)) {
-    const diskUsers = JSON.parse(fs.readFileSync(USERS_CACHE_FILE, "utf-8"));
+  if (fs2.existsSync(USERS_CACHE_FILE)) {
+    const diskUsers = JSON.parse(fs2.readFileSync(USERS_CACHE_FILE, "utf-8"));
     if (Array.isArray(diskUsers) && diskUsers.length > 0) {
       cachedUsersState = { users: diskUsers, timestamp: Date.now() };
     }
@@ -899,7 +1492,7 @@ function saveUsersStateToDisk(users) {
   });
   cachedUsersState = { users: filtered, timestamp: Date.now() };
   try {
-    fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(filtered), "utf-8");
+    fs2.writeFileSync(USERS_CACHE_FILE, JSON.stringify(filtered), "utf-8");
   } catch {
   }
 }
@@ -1165,8 +1758,8 @@ function findMatchingUserInList(users, cleanId) {
 }
 function checkUserPasswordMatch(matchedUser, cleanPass) {
   if (!matchedUser || !cleanPass) return false;
-  const passSha256 = crypto.createHash("sha256").update(cleanPass).digest("hex").toLowerCase();
-  const passLowerSha256 = crypto.createHash("sha256").update(cleanPass.toLowerCase()).digest("hex").toLowerCase();
+  const passSha256 = crypto2.createHash("sha256").update(cleanPass).digest("hex").toLowerCase();
+  const passLowerSha256 = crypto2.createHash("sha256").update(cleanPass.toLowerCase()).digest("hex").toLowerCase();
   const storedPass = String(
     matchedUser["Password"] !== void 0 && matchedUser["Password"] !== "" ? matchedUser["Password"] : matchedUser.password !== void 0 ? matchedUser.password : ""
   ).trim();
@@ -1183,6 +1776,89 @@ function checkUserPasswordMatch(matchedUser, cleanPass) {
   }
   return false;
 }
+var loginRateLimitMap = /* @__PURE__ */ new Map();
+function checkLoginRateLimit(key) {
+  const now = Date.now();
+  const rec = loginRateLimitMap.get(key);
+  if (!rec) return { locked: false };
+  if (rec.lockUntil > now) {
+    return { locked: true, waitSeconds: Math.ceil((rec.lockUntil - now) / 1e3) };
+  }
+  if (rec.lockUntil > 0 && rec.lockUntil <= now) {
+    loginRateLimitMap.delete(key);
+  }
+  return { locked: false };
+}
+function recordFailedLogin(key) {
+  const now = Date.now();
+  const rec = loginRateLimitMap.get(key) || { failedCount: 0, lockUntil: 0 };
+  rec.failedCount += 1;
+  if (rec.failedCount >= 5) {
+    rec.lockUntil = now + 3 * 60 * 1e3;
+  }
+  loginRateLimitMap.set(key, rec);
+}
+function clearFailedLogin(key) {
+  loginRateLimitMap.delete(key);
+}
+var REGISTERED_OFFICES_CACHE_FILE = path2.join(process.cwd(), ".registered-offices-cache.json");
+function readRegisteredOfficesCache() {
+  try {
+    if (fs2.existsSync(REGISTERED_OFFICES_CACHE_FILE)) {
+      const raw = fs2.readFileSync(REGISTERED_OFFICES_CACHE_FILE, "utf8");
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) return list;
+    }
+  } catch {
+  }
+  return [];
+}
+function saveRegisteredOfficesCache(offices) {
+  try {
+    fs2.writeFileSync(REGISTERED_OFFICES_CACHE_FILE, JSON.stringify(offices, null, 2), { encoding: "utf8", mode: 384 });
+  } catch {
+  }
+}
+function findMatchingOfficeAdmin(offices, cleanId) {
+  const lowerId = cleanId.toLowerCase();
+  const cleanIdAlnum = lowerId.replace(/[^a-z0-9]/g, "");
+  const cleanDigits = cleanId.replace(/\D/g, "");
+  const cleanPhone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : "";
+  return offices.find((o) => {
+    if (!o) return false;
+    const uAdminId = String(o.adminUserId || "").trim().toLowerCase();
+    const uAdminIdAlnum = uAdminId.replace(/[^a-z0-9]/g, "");
+    const uMobile = String(o.adminMobile || "").replace(/\D/g, "");
+    const uMobile10 = uMobile.length >= 10 ? uMobile.slice(-10) : uMobile;
+    if (uAdminId && uAdminId === lowerId) return true;
+    if (cleanIdAlnum && uAdminIdAlnum && uAdminIdAlnum === cleanIdAlnum) return true;
+    if (cleanPhone10 && uMobile10 && uMobile10 === cleanPhone10) return true;
+    return false;
+  });
+}
+async function getRegisteredOfficesForAuth(forceLiveRefresh = false) {
+  const cached = readRegisteredOfficesCache();
+  if (!forceLiveRefresh && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const creds = getServiceAccountCredentials();
+    if (!creds) return cached;
+    const token = await getGoogleSheetsAccessToken(creds);
+    const res = await fetchAllRegisteredOfficesWithAuth(token);
+    if (res && Array.isArray(res.records) && res.records.length > 0) {
+      const map = /* @__PURE__ */ new Map();
+      for (const c of cached) map.set(c.id, c);
+      for (const r of res.records) map.set(r.id, r);
+      const combined = Array.from(map.values());
+      saveRegisteredOfficesCache(combined);
+      return combined;
+    }
+  } catch (err) {
+    console.warn("[OfficeRegistry] Notice fetching live offices:", err?.message || err);
+  }
+  return cached;
+}
 async function authenticateUserCredentials(rawId, rawPassword) {
   const cleanId = normalizeUniversal(rawId).trim();
   const cleanPass = normalizeUniversal(rawPassword).trim();
@@ -1192,6 +1868,16 @@ async function authenticateUserCredentials(rawId, rawPassword) {
       body: {
         success: false,
         error: "\u0987\u0989\u099C\u09BE\u09B0 \u0986\u0987\u09A1\u09BF / \u09AE\u09CB\u09AC\u09BE\u0987\u09B2 \u09A8\u09AE\u09CD\u09AC\u09B0 \u098F\u09AC\u0982 \u09AA\u09BE\u09B8\u0993\u09AF\u09BC\u09BE\u09B0\u09CD\u09A1 \u09AA\u09CD\u09B0\u09AF\u09BC\u09CB\u099C\u09A8 (User ID / Phone & Password required)"
+      }
+    };
+  }
+  const rateLimit = checkLoginRateLimit(cleanId);
+  if (rateLimit.locked) {
+    return {
+      status: 429,
+      body: {
+        success: false,
+        error: `\u0985\u09A4\u09BF\u09B0\u09BF\u0995\u09CD\u09A4 \u09AD\u09C1\u09B2 \u099A\u09C7\u09B7\u09CD\u099F\u09BE\u09B0 \u0995\u09BE\u09B0\u09A3\u09C7 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09B8\u09BE\u09AE\u09DF\u09BF\u0995\u09AD\u09BE\u09AC\u09C7 \u09B2\u0995 \u09B9\u09DF\u09C7\u099B\u09C7\u0964 ${rateLimit.waitSeconds} \u09B8\u09C7\u0995\u09C7\u09A8\u09CD\u09A1 \u09AA\u09B0 \u099A\u09C7\u09B7\u09CD\u099F\u09BE \u0995\u09B0\u09C1\u09A8\u0964 (Too many failed attempts. Please wait ${rateLimit.waitSeconds}s)`
       }
     };
   }
@@ -1238,6 +1924,51 @@ async function authenticateUserCredentials(rawId, rawPassword) {
     }
   }
   if (!matchedUser) {
+    let registeredOffices = await getRegisteredOfficesForAuth(false);
+    let matchedOffice = findMatchingOfficeAdmin(registeredOffices, cleanId);
+    if (!matchedOffice) {
+      registeredOffices = await getRegisteredOfficesForAuth(true);
+      matchedOffice = findMatchingOfficeAdmin(registeredOffices, cleanId);
+    }
+    if (matchedOffice) {
+      const isPassMatch = verifyOfficePassword(cleanPass, matchedOffice.passwordSalt, matchedOffice.passwordHash);
+      if (!isPassMatch) {
+        recordFailedLogin(cleanId);
+        return {
+          status: 401,
+          body: {
+            success: false,
+            error: "\u09AD\u09C1\u09B2 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1! \u09B8\u09A0\u09BF\u0995 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09AC\u09BE \u09AA\u09BF\u09A8 \u09A6\u09BF\u09A8 (Invalid Password)"
+          }
+        };
+      }
+      clearFailedLogin(cleanId);
+      const session2 = {
+        id: `office_${matchedOffice.id}`,
+        idNo: matchedOffice.adminUserId,
+        loginId: matchedOffice.adminUserId,
+        userId: matchedOffice.adminUserId,
+        name: `${matchedOffice.adminName} (${matchedOffice.officeName})`,
+        officeName: matchedOffice.officeName,
+        officeId: matchedOffice.id,
+        databaseName: matchedOffice.databaseName,
+        spreadsheetId: matchedOffice.verifiedSpreadsheetId,
+        spreadsheetLink: matchedOffice.spreadsheetLink,
+        phone: matchedOffice.adminMobile,
+        role: "admin",
+        isOfficeScoped: true,
+        status: "active",
+        designation: `Office Administrator (${matchedOffice.officeName})`,
+        badgeNo: matchedOffice.adminUserId,
+        token: `SES-OFFICE-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        loggedInAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      return {
+        status: 200,
+        body: { success: true, session: session2, data: { session: session2 } }
+      };
+    }
+    recordFailedLogin(cleanId);
     return {
       status: 401,
       body: {
@@ -1258,6 +1989,7 @@ async function authenticateUserCredentials(rawId, rawPassword) {
   }
   const passwordValid = checkUserPasswordMatch(matchedUser, cleanPass);
   if (!passwordValid) {
+    recordFailedLogin(cleanId);
     return {
       status: 401,
       body: {
@@ -1266,6 +1998,7 @@ async function authenticateUserCredentials(rawId, rawPassword) {
       }
     };
   }
+  clearFailedLogin(cleanId);
   const roleStr = String(matchedUser["Role"] || matchedUser.role || "worker").trim().toLowerCase();
   const idNoStr = String(matchedUser.idNo || matchedUser["User ID"] || cleanId).trim();
   const isRoleAdmin = roleStr === "admin" || roleStr === "controller" || roleStr === "administrator" || roleStr === "superadmin" || idNoStr === "8695716192" || idNoStr.toLowerCase() === "admin" || matchedUser.id === "adm_8695716192" || /^adm[-_0-9]/i.test(idNoStr);
@@ -1302,7 +2035,7 @@ app.all(["/api/auth/login", "/api/login"], async (req, res) => {
     const result = await authenticateUserCredentials(rawId, body.password);
     return res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Login error:", error);
+    console.warn("Login authentication notice:", error?.message || error);
     if (!res.headersSent) {
       return res.status(500).json({
         success: false,
@@ -2152,7 +2885,7 @@ app.all("/api/gas-proxy", async (req, res) => {
           const idx = cachedDisconnectionState.tasks.findIndex((t) => String(t.consumerId || t["Consumer Id"] || "").trim().toLowerCase() === cIdKey);
           if (idx !== -1) cachedDisconnectionState.tasks[idx] = mergedTask;
           try {
-            fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
+            fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
           } catch {
           }
         }
@@ -2226,12 +2959,12 @@ app.all("/api/gas-proxy", async (req, res) => {
     });
   }
 });
-var TOMBSTONES_FILE = path.join(process.cwd(), ".deleted-tombstones.json");
-var DISC_OVERLAY_FILE = path.join(process.cwd(), ".disconnection-overlay.json");
-var DISC_CACHE_FILE = path.join(process.cwd(), ".disconnection-cache.json");
-var ENTRIES_OVERLAY_FILE = path.join(process.cwd(), ".entries-overlay.json");
-var ENTRIES_CACHE_FILE = path.join(process.cwd(), ".entries-cache.json");
-var REISSUE_REQUESTS_FILE = path.join(process.cwd(), ".reissue-requests.json");
+var TOMBSTONES_FILE = path2.join(process.cwd(), ".deleted-tombstones.json");
+var DISC_OVERLAY_FILE = path2.join(process.cwd(), ".disconnection-overlay.json");
+var DISC_CACHE_FILE = path2.join(process.cwd(), ".disconnection-cache.json");
+var ENTRIES_OVERLAY_FILE = path2.join(process.cwd(), ".entries-overlay.json");
+var ENTRIES_CACHE_FILE = path2.join(process.cwd(), ".entries-cache.json");
+var REISSUE_REQUESTS_FILE = path2.join(process.cwd(), ".reissue-requests.json");
 var deletedTombstoneSet = /* @__PURE__ */ new Set();
 var localDisconnectionOverlayMap = /* @__PURE__ */ new Map();
 var localEntriesOverlayMap = /* @__PURE__ */ new Map();
@@ -2241,15 +2974,15 @@ var isRefreshingEntriesInBg = false;
 var isRefreshingDiscInBg = false;
 function loadDiskPersistence() {
   try {
-    if (fs.existsSync(TOMBSTONES_FILE)) {
-      const arr = JSON.parse(fs.readFileSync(TOMBSTONES_FILE, "utf-8"));
+    if (fs2.existsSync(TOMBSTONES_FILE)) {
+      const arr = JSON.parse(fs2.readFileSync(TOMBSTONES_FILE, "utf-8"));
       if (Array.isArray(arr)) arr.forEach((id) => deletedTombstoneSet.add(String(id).trim().toLowerCase()));
     }
   } catch {
   }
   try {
-    if (fs.existsSync(DISC_OVERLAY_FILE)) {
-      const obj = JSON.parse(fs.readFileSync(DISC_OVERLAY_FILE, "utf-8"));
+    if (fs2.existsSync(DISC_OVERLAY_FILE)) {
+      const obj = JSON.parse(fs2.readFileSync(DISC_OVERLAY_FILE, "utf-8"));
       if (obj && typeof obj === "object") {
         for (const [k, v] of Object.entries(obj)) {
           localDisconnectionOverlayMap.set(k, v);
@@ -2259,8 +2992,8 @@ function loadDiskPersistence() {
   } catch {
   }
   try {
-    if (fs.existsSync(REISSUE_REQUESTS_FILE)) {
-      const obj = JSON.parse(fs.readFileSync(REISSUE_REQUESTS_FILE, "utf-8"));
+    if (fs2.existsSync(REISSUE_REQUESTS_FILE)) {
+      const obj = JSON.parse(fs2.readFileSync(REISSUE_REQUESTS_FILE, "utf-8"));
       if (obj && typeof obj === "object") {
         for (const [k, v] of Object.entries(obj)) {
           if (v && typeof v === "object") {
@@ -2272,8 +3005,8 @@ function loadDiskPersistence() {
   } catch {
   }
   try {
-    if (fs.existsSync(ENTRIES_OVERLAY_FILE)) {
-      const obj = JSON.parse(fs.readFileSync(ENTRIES_OVERLAY_FILE, "utf-8"));
+    if (fs2.existsSync(ENTRIES_OVERLAY_FILE)) {
+      const obj = JSON.parse(fs2.readFileSync(ENTRIES_OVERLAY_FILE, "utf-8"));
       if (obj && typeof obj === "object") {
         for (const [k, v] of Object.entries(obj)) {
           localEntriesOverlayMap.set(k, v);
@@ -2283,8 +3016,8 @@ function loadDiskPersistence() {
   } catch {
   }
   try {
-    if (fs.existsSync(ENTRIES_CACHE_FILE)) {
-      const arr = JSON.parse(fs.readFileSync(ENTRIES_CACHE_FILE, "utf-8"));
+    if (fs2.existsSync(ENTRIES_CACHE_FILE)) {
+      const arr = JSON.parse(fs2.readFileSync(ENTRIES_CACHE_FILE, "utf-8"));
       if (Array.isArray(arr)) {
         const cleaned = arr.filter((e) => {
           const catUp = String(e?.category || e?.Category || "").toUpperCase().trim();
@@ -2303,7 +3036,7 @@ function loadDiskPersistence() {
 loadDiskPersistence();
 function saveTombstonesToDisk() {
   try {
-    fs.writeFileSync(TOMBSTONES_FILE, JSON.stringify(Array.from(deletedTombstoneSet)), "utf-8");
+    fs2.writeFileSync(TOMBSTONES_FILE, JSON.stringify(Array.from(deletedTombstoneSet)), "utf-8");
   } catch {
   }
 }
@@ -2313,7 +3046,7 @@ function saveDiscOverlayToDisk() {
     for (const [k, v] of localDisconnectionOverlayMap.entries()) {
       obj[k] = v;
     }
-    fs.writeFileSync(DISC_OVERLAY_FILE, JSON.stringify(obj), "utf-8");
+    fs2.writeFileSync(DISC_OVERLAY_FILE, JSON.stringify(obj), "utf-8");
   } catch {
   }
 }
@@ -2323,7 +3056,7 @@ function saveReissueRequestsToDisk() {
     for (const [k, v] of reissueRequestsMap.entries()) {
       obj[k] = v;
     }
-    fs.writeFileSync(REISSUE_REQUESTS_FILE, JSON.stringify(obj), "utf-8");
+    fs2.writeFileSync(REISSUE_REQUESTS_FILE, JSON.stringify(obj), "utf-8");
   } catch {
   }
 }
@@ -2333,7 +3066,7 @@ function saveEntriesOverlayToDisk() {
     for (const [k, v] of localEntriesOverlayMap.entries()) {
       obj[k] = v;
     }
-    fs.writeFileSync(ENTRIES_OVERLAY_FILE, JSON.stringify(obj), "utf-8");
+    fs2.writeFileSync(ENTRIES_OVERLAY_FILE, JSON.stringify(obj), "utf-8");
   } catch {
   }
 }
@@ -2376,14 +3109,14 @@ function registerDeletedRecord(id, consumerId, submissionId) {
   if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
     cachedEntriesState.entries = cachedEntriesState.entries.filter((e) => !isRecordDeleted(e));
     try {
-      fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
+      fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
     } catch {
     }
   }
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
     cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.filter((t) => !isRecordDeleted(t));
     try {
-      fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
+      fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
     } catch {
     }
   }
@@ -2536,11 +3269,11 @@ async function handleClearAllProductionDatabase() {
   saveDiscOverlayToDisk();
   saveEntriesOverlayToDisk();
   try {
-    fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify([]), "utf-8");
+    fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify([]), "utf-8");
   } catch {
   }
   try {
-    fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify([]), "utf-8");
+    fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify([]), "utf-8");
   } catch {
   }
   enqueueGasWrite(async () => {
@@ -2780,13 +3513,13 @@ async function handleFastCreateEntry(rawPayload, actionName = "createEntry") {
     ];
     cachedEntriesState.timestamp = Date.now();
     try {
-      fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
+      fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
     } catch {
     }
   } else {
     cachedEntriesState = { entries: [normalized], timestamp: Date.now() };
     try {
-      fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
+      fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
     } catch {
     }
   }
@@ -2892,7 +3625,7 @@ async function handleFastUpdateEntry(cleanId, bodyData) {
           cachedDisconnectionState.tasks.push(updatedDiscTask);
         }
         try {
-          fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
+          fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
         } catch {
         }
       }
@@ -2958,7 +3691,7 @@ async function handleFastUpdateEntry(cleanId, bodyData) {
       cachedEntriesState.entries.unshift(merged);
     }
     try {
-      fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
+      fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
     } catch {
     }
   }
@@ -3037,13 +3770,180 @@ async function refreshEntriesFromSheetInBackground() {
     const combined = mergeEntriesWithOverlay(allModuleLists.flat());
     cachedEntriesState = { entries: combined, timestamp: Date.now() };
     try {
-      fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), "utf-8");
+      fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), "utf-8");
     } catch {
     }
   } catch (err) {
     console.warn("[Background Entries Sync] Notice:", err);
   } finally {
     isRefreshingEntriesInBg = false;
+  }
+}
+var officeSpreadsheetCacheMap = /* @__PURE__ */ new Map();
+function getTargetSpreadsheetId(req) {
+  const headerId = req.headers["x-spreadsheet-id"] || "";
+  const queryId = req.query.spreadsheetId || "";
+  const bodyId = req.body?.spreadsheetId || "";
+  let candidate = (headerId || queryId || bodyId || "").trim();
+  if (candidate.includes("/spreadsheets/d/")) {
+    const match = candidate.match(/\/spreadsheets\/d\/([a-zA-Z0-9_\-]+)/i);
+    if (match && match[1]) candidate = match[1].trim();
+  }
+  const officeId = (req.headers["x-office-id"] || req.query.officeId || req.body?.officeId || "").trim();
+  if (officeId) {
+    const offices = readRegisteredOfficesCache();
+    const found = offices.find((o) => o.id === officeId || o.adminUserId.toLowerCase() === officeId.toLowerCase());
+    if (found && found.verifiedSpreadsheetId) {
+      return found.verifiedSpreadsheetId;
+    }
+  }
+  if (candidate && candidate.length > 15 && candidate !== GOOGLE_SHEET_ID && candidate !== DEDICATED_REGISTRY_SPREADSHEET_ID) {
+    return candidate;
+  }
+  return null;
+}
+async function fetchOfficeSpreadsheetData(officeSpreadsheetId, forceRefresh = false) {
+  const cached = officeSpreadsheetCacheMap.get(officeSpreadsheetId);
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < 3e4) {
+    return cached;
+  }
+  const creds = getServiceAccountCredentials();
+  if (!creds) {
+    let tasks = [];
+    let entries = [];
+    try {
+      const gasDisc = await callGoogleAppsScript("getDisconnectionTasks", { spreadsheetId: officeSpreadsheetId }, "GET", 15e3);
+      const rawTasks = Array.isArray(gasDisc?.tasks) ? gasDisc.tasks : Array.isArray(gasDisc?.data) ? gasDisc.data : [];
+      if (rawTasks.length > 0) {
+        tasks = rawTasks.filter(isValidDisconnectionConsumerRow).map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
+      }
+    } catch {
+    }
+    try {
+      const gasEntries = await callGoogleAppsScript("entries", { spreadsheetId: officeSpreadsheetId }, "GET", 15e3);
+      const rawEntries = Array.isArray(gasEntries?.entries) ? gasEntries.entries : Array.isArray(gasEntries?.data) ? gasEntries.data : [];
+      if (rawEntries.length > 0) {
+        entries = rawEntries.map(normalizeServerEntry);
+      }
+    } catch {
+    }
+    const gasResult = {
+      tasks,
+      entries,
+      workOrders: [],
+      sheetNames: [],
+      spreadsheetId: officeSpreadsheetId,
+      timestamp: Date.now()
+    };
+    if (tasks.length > 0 || entries.length > 0) {
+      officeSpreadsheetCacheMap.set(officeSpreadsheetId, gasResult);
+    }
+    return gasResult;
+  }
+  try {
+    const token = await getGoogleSheetsAccessToken(creds);
+    const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${officeSpreadsheetId}?fields=sheets.properties`, {
+      headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+    });
+    if (!metaRes.ok) {
+      return cached || { tasks: [], entries: [], workOrders: [], sheetNames: [], spreadsheetId: officeSpreadsheetId, timestamp: Date.now() };
+    }
+    const metaData = await metaRes.json();
+    const sheets = metaData.sheets || [];
+    const sheetNames = sheets.map((s) => s.properties?.title || "").filter(Boolean);
+    let tasks = [];
+    let entries = [];
+    let workOrders = [];
+    const discSheet = sheets.find((s) => {
+      const t = String(s.properties?.title || "").toUpperCase().trim();
+      return t === "DISCONNECTION" || t.includes("DISCON") || t === "TASKS";
+    });
+    if (discSheet) {
+      const title = discSheet.properties.title;
+      const range = encodeURIComponent(`'${title}'!A1:ZZ`);
+      const valRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${officeSpreadsheetId}/values/${range}`, {
+        headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+      });
+      if (valRes.ok) {
+        const valData = await valRes.json();
+        const rows = valData.values || [];
+        if (rows.length > 1) {
+          const headers = rows[0].map((h) => String(h || "").trim());
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length === 0 || !row[0]) continue;
+            const obj = {};
+            for (let c = 0; c < headers.length; c++) {
+              const h = headers[c];
+              if (h) obj[h] = row[c] !== void 0 ? row[c] : "";
+            }
+            const consumerId = String(obj["Consumer Id"] || obj.consumerId || obj.consumer_id || obj["Consumer ID"] || row[2] || row[0] || "").trim();
+            if (!consumerId) continue;
+            const converted = convertSheetEntryToDisconnectionTask({
+              ...obj,
+              id: obj.id || `DISC-${consumerId}`,
+              consumerId,
+              consumerName: String(obj["Name"] || obj.consumerName || row[3] || "").trim(),
+              address: String(obj["Address"] || obj.address || row[4] || "").trim(),
+              disconStatus: String(obj["Discon Status"] || obj.status || row[14] || "Pending").trim(),
+              arrearAmount: String(obj["D2 Net O/S"] || obj.arrearAmount || row[9] || "0").trim(),
+              mobileNumber: String(obj["Mobile Number"] || obj.mobile || row[10] || "").trim(),
+              agency: String(obj["Agency"] || row[11] || "").trim(),
+              meterNo: String(obj["Device"] || obj["Meter"] || row[7] || "").trim(),
+              substation: String(obj["off_code"] || row[0] || "").trim(),
+              feederName: String(obj["MRU"] || row[1] || "").trim(),
+              disconDate: String(obj["Discon Date"] || row[15] || "").trim(),
+              reading: String(obj["Reading"] || row[17] || "").trim(),
+              paymentStatus: String(obj["Payment Status"] || row[18] || "").trim(),
+              notes: String(obj["Notes"] || row[21] || "").trim(),
+              officeSpreadsheetId
+            }, i);
+            tasks.push(converted);
+          }
+        }
+      }
+    }
+    const entriesSheet = sheets.find((s) => {
+      const t = String(s.properties?.title || "").toUpperCase().trim();
+      return t === "ENTRIES" || t === "NSC" || t === "SUBMISSIONS";
+    });
+    if (entriesSheet) {
+      const title = entriesSheet.properties.title;
+      const range = encodeURIComponent(`'${title}'!A1:ZZ`);
+      const valRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${officeSpreadsheetId}/values/${range}`, {
+        headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+      });
+      if (valRes.ok) {
+        const valData = await valRes.json();
+        const rows = valData.values || [];
+        if (rows.length > 1) {
+          const headers = rows[0].map((h) => String(h || "").trim());
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length === 0 || !row[0]) continue;
+            const obj = {};
+            for (let c = 0; c < headers.length; c++) {
+              const h = headers[c];
+              if (h) obj[h] = row[c] !== void 0 ? row[c] : "";
+            }
+            entries.push(normalizeServerEntry(obj));
+          }
+        }
+      }
+    }
+    const result = {
+      tasks,
+      entries,
+      workOrders,
+      sheetNames,
+      spreadsheetId: officeSpreadsheetId,
+      timestamp: Date.now()
+    };
+    officeSpreadsheetCacheMap.set(officeSpreadsheetId, result);
+    return result;
+  } catch (err) {
+    console.warn("[OfficeSpreadsheetData] Fetch notice:", err?.message || err);
+    return cached || { tasks: [], entries: [], workOrders: [], sheetNames: [], spreadsheetId: officeSpreadsheetId, timestamp: Date.now() };
   }
 }
 async function getFastMergedEntries(query = {}, forceRefresh = false) {
@@ -3088,7 +3988,7 @@ async function getFastMergedEntries(query = {}, forceRefresh = false) {
       if (combined.length > 0 || !cachedEntriesState) {
         cachedEntriesState = { entries: combined, timestamp: Date.now() };
         try {
-          fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), "utf-8");
+          fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), "utf-8");
         } catch {
         }
       }
@@ -3109,6 +4009,16 @@ app.get("/api/entries", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   try {
     const force = req.query.refresh === "true" || req.query.force === "true";
+    const officeSheetId = getTargetSpreadsheetId(req);
+    if (officeSheetId) {
+      const officeData = await fetchOfficeSpreadsheetData(officeSheetId, force);
+      let list = officeData.entries;
+      if (req.query?.category && String(req.query.category).toUpperCase().trim() !== "ALL") {
+        const cat = String(req.query.category).trim().toUpperCase();
+        list = list.filter((e) => String(e.category || "").toUpperCase() === cat);
+      }
+      return res.json(list);
+    }
     const entries = await getFastMergedEntries(req.query, force);
     return res.json(entries);
   } catch (err) {
@@ -3230,7 +4140,7 @@ app.post("/api/users", async (req, res) => {
     const cleanIdNo = normalizeUniversal(payload.idNo || payload.name || payload.phone || "").trim();
     const cleanPhone = normalizeUniversal(payload.phone || "").replace(/\D/g, "");
     const plainPass = normalizeUniversal(payload.password || "1234").trim();
-    const passHash = crypto.createHash("sha256").update(plainPass).digest("hex").toLowerCase();
+    const passHash = crypto2.createHash("sha256").update(plainPass).digest("hex").toLowerCase();
     const rawRoleInput = String(payload.role || "worker").trim().toLowerCase();
     const cleanRole = rawRoleInput === "admin" ? "admin" : rawRoleInput === "agency" ? "agency" : "worker";
     const cleanStatus = String(payload.status || "active").trim().toLowerCase() === "hold" ? "hold" : "active";
@@ -3401,7 +4311,7 @@ app.put("/api/users/:id", async (req, res) => {
     };
     if (payload.password !== void 0 && String(payload.password).trim() !== "") {
       const plainPass = normalizeUniversal(payload.password).trim();
-      const passHash = crypto.createHash("sha256").update(plainPass).digest("hex").toLowerCase();
+      const passHash = crypto2.createHash("sha256").update(plainPass).digest("hex").toLowerCase();
       mergedUser.password = plainPass;
       mergedUser["Password"] = plainPass;
       mergedUser.passwordHash = passHash;
@@ -3464,15 +4374,15 @@ app.put("/api/users/:id", async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-var WORK_ORDERS_CACHE_FILE = path.join(process.cwd(), ".work-orders-cache.json");
+var WORK_ORDERS_CACHE_FILE = path2.join(process.cwd(), ".work-orders-cache.json");
 var WO_SHEET_CATEGORY = "Work Orders";
 var serverWorkOrdersCache = [];
 var lastWorkOrdersFetchTime = Date.now();
 var hasLoadedWorkOrdersOnce = true;
 var isSyncingWorkOrdersFromSheet = false;
 try {
-  if (fs.existsSync(WORK_ORDERS_CACHE_FILE)) {
-    const parsed = JSON.parse(fs.readFileSync(WORK_ORDERS_CACHE_FILE, "utf-8"));
+  if (fs2.existsSync(WORK_ORDERS_CACHE_FILE)) {
+    const parsed = JSON.parse(fs2.readFileSync(WORK_ORDERS_CACHE_FILE, "utf-8"));
     if (Array.isArray(parsed)) {
       serverWorkOrdersCache = parsed.filter((w) => w && w.id && !deletedTombstoneSet.has(String(w.id).trim().toLowerCase()));
     }
@@ -3481,7 +4391,7 @@ try {
 }
 function saveWorkOrdersToDisk() {
   try {
-    fs.writeFileSync(WORK_ORDERS_CACHE_FILE, JSON.stringify(serverWorkOrdersCache), "utf-8");
+    fs2.writeFileSync(WORK_ORDERS_CACHE_FILE, JSON.stringify(serverWorkOrdersCache), "utf-8");
   } catch (err) {
     console.warn("[WorkOrders] Disk save notice:", err);
   }
@@ -3759,6 +4669,15 @@ app.get("/api/work-orders", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   try {
     const force = req.query.refresh === "true" || req.query.force === "true";
+    const officeSheetId = getTargetSpreadsheetId(req);
+    if (officeSheetId) {
+      const officeData = await fetchOfficeSpreadsheetData(officeSheetId, force);
+      return res.json({
+        success: true,
+        workOrders: officeData.workOrders,
+        data: { workOrders: officeData.workOrders }
+      });
+    }
     const orders = await getMergedWorkOrders(req.query.category, force);
     return res.json({
       success: true,
@@ -3870,24 +4789,44 @@ async function computeLiveDashboardStats() {
 app.get("/api/stats", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   try {
+    const officeSheetId = getTargetSpreadsheetId(req);
+    if (officeSheetId) {
+      const officeData = await fetchOfficeSpreadsheetData(officeSheetId, false);
+      const total = officeData.entries.length + officeData.tasks.length;
+      return res.json({
+        total,
+        categories: {
+          NSC: officeData.entries.filter((e) => e.category === "NSC").length,
+          DISCONNECTION: officeData.tasks.length,
+          POLE_CASE: officeData.entries.filter((e) => e.category === "POLE_CASE").length,
+          METER_REPLESMENT: officeData.entries.filter((e) => e.category === "METER_REPLESMENT").length,
+          DTR_REPLESMENT: officeData.entries.filter((e) => e.category === "DTR_REPLESMENT").length
+        },
+        status: {
+          pending: officeData.tasks.filter((t) => t.disconStatus === "Pending").length,
+          completed: officeData.tasks.filter((t) => t.disconStatus === "Completed").length,
+          approved: officeData.tasks.filter((t) => t.disconStatus === "Approved").length
+        }
+      });
+    }
     const stats = await computeLiveDashboardStats();
     return res.json(stats);
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to fetch dashboard stats" });
   }
 });
-var CHAT_CACHE_FILE = path.join(process.cwd(), ".chat-messages-cache.json");
+var CHAT_CACHE_FILE = path2.join(process.cwd(), ".chat-messages-cache.json");
 var serverChatCache = [];
 try {
-  if (fs.existsSync(CHAT_CACHE_FILE)) {
-    const arr = JSON.parse(fs.readFileSync(CHAT_CACHE_FILE, "utf-8"));
+  if (fs2.existsSync(CHAT_CACHE_FILE)) {
+    const arr = JSON.parse(fs2.readFileSync(CHAT_CACHE_FILE, "utf-8"));
     if (Array.isArray(arr)) serverChatCache = arr;
   }
 } catch {
 }
 function saveChatToDisk() {
   try {
-    fs.writeFileSync(CHAT_CACHE_FILE, JSON.stringify(serverChatCache), "utf-8");
+    fs2.writeFileSync(CHAT_CACHE_FILE, JSON.stringify(serverChatCache), "utf-8");
   } catch {
   }
 }
@@ -4330,7 +5269,7 @@ function isValidDisconnectionConsumerRow(e) {
       });
       if (cachedEntriesState.entries.length !== beforeLen) {
         try {
-          fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
+          fs2.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), "utf-8");
         } catch {
         }
       }
@@ -4340,15 +5279,15 @@ function isValidDisconnectionConsumerRow(e) {
 })();
 var cachedDisconnectionState = null;
 try {
-  if (fs.existsSync(DISC_CACHE_FILE)) {
-    const diskTasks = JSON.parse(fs.readFileSync(DISC_CACHE_FILE, "utf-8"));
+  if (fs2.existsSync(DISC_CACHE_FILE)) {
+    const diskTasks = JSON.parse(fs2.readFileSync(DISC_CACHE_FILE, "utf-8"));
     if (Array.isArray(diskTasks)) {
       const validDiskTasks = diskTasks.filter(
         (t) => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t)
       );
       if (validDiskTasks.length !== diskTasks.length) {
         try {
-          fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(validDiskTasks), "utf-8");
+          fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(validDiskTasks), "utf-8");
         } catch {
         }
       }
@@ -4683,7 +5622,7 @@ async function fetchDisconnectionTasksFromGoogleSheet() {
         timestamp: Date.now()
       };
       try {
-        fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), "utf-8");
+        fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), "utf-8");
       } catch {
       }
       for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
@@ -4768,6 +5707,20 @@ app.get("/api/disconnection-tasks", async (req, res) => {
   const workerId = String(query.workerId || "").toLowerCase().trim();
   const workerName = String(query.workerName || "").toLowerCase().trim();
   const forceRefresh = query.refresh === "true" || query.force === "true";
+  const officeSheetId = getTargetSpreadsheetId(req);
+  if (officeSheetId) {
+    const officeData = await fetchOfficeSpreadsheetData(officeSheetId, forceRefresh);
+    const stats2 = computeLocalStats(officeData.tasks, workerId, workerName);
+    return res.json({
+      success: true,
+      sheetConnected: true,
+      spreadsheetId: officeSheetId,
+      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${officeSheetId}/edit`,
+      sheetName: "Disconnection",
+      tasks: officeData.tasks,
+      stats: stats2
+    });
+  }
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
     const isStale = Date.now() - cachedDisconnectionState.timestamp > DISCONNECTION_CACHE_TTL_MS;
     if (forceRefresh || isStale) {
@@ -5004,7 +5957,7 @@ app.post("/api/disconnection-tasks/upload", async (req, res) => {
     const mergedAllTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
     cachedDisconnectionState = { tasks: mergedAllTasks, timestamp: Date.now() };
     try {
-      fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(mergedAllTasks), "utf-8");
+      fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(mergedAllTasks), "utf-8");
     } catch {
     }
     const syncRow = (rowPayload) => {
@@ -5457,7 +6410,7 @@ app.post("/api/disconnection-tasks/report", async (req, res) => {
       return true;
     });
     try {
-      fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
+      fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
     } catch {
     }
   }
@@ -5486,11 +6439,11 @@ app.post("/api/disconnection-tasks/report", async (req, res) => {
   submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
   return res.json(responseObj);
 });
-app.post("/api/wbsedcl/live-check", async (req, res) => {
+app.all("/api/wbsedcl/live-check", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   try {
-    const rawConsumerId = String(req.body?.consumerId || req.body?.id || req.body?.taskId || "").trim();
-    const cleanId = rawConsumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, "").replace(/\.0+$/, "").replace(/[, \-_]/g, "").trim();
+    const rawConsumerId = String(req.body?.consumerId || req.query?.consumerId || req.body?.id || req.body?.taskId || req.query?.id || "").trim();
+    const cleanId = cleanAndNormalizeConsumerId(rawConsumerId);
     if (!cleanId) {
       return res.status(400).json({
         success: false,
@@ -5543,7 +6496,7 @@ app.get("/api/wbsedcl/download-official-pdf", async (req, res) => {
     return res.status(400).send("Consumer ID is required.");
   }
   const outPdf = `/tmp/wbsedcl_pdf_${cleanId}.pdf`;
-  if (fs.existsSync(outPdf)) {
+  if (fs2.existsSync(outPdf)) {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="WBSEDCL_Outstanding_Report_${cleanId}.pdf"`);
     return res.sendFile(outPdf);
@@ -5552,7 +6505,7 @@ app.get("/api/wbsedcl/download-official-pdf", async (req, res) => {
   if (report.success && report.pdfBase64) {
     const pdfBuf = Buffer.from(report.pdfBase64, "base64");
     try {
-      fs.writeFileSync(outPdf, pdfBuf);
+      fs2.writeFileSync(outPdf, pdfBuf);
     } catch {
     }
     res.setHeader("Content-Type", "application/pdf");
@@ -5612,7 +6565,7 @@ app.post("/api/disconnection-tasks/assign", async (req, res) => {
     saveDiscOverlayToDisk();
     if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
       try {
-        fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
+        fs2.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), "utf-8");
       } catch {
       }
     }
@@ -5737,8 +6690,316 @@ app.get("/api/disconnection-tasks/history", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   return res.json({ success: true, history: [] });
 });
+app.get("/api/superadmin/registry-status", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  const diag = inspectServiceAccountConfiguration();
+  return res.json({
+    success: true,
+    configured: diag.configured,
+    keyValid: diag.keyValid,
+    source: diag.source,
+    keyFormatStatus: diag.keyFormatStatus,
+    spreadsheetId: diag.spreadsheetId,
+    serviceAccountEmail: diag.serviceAccountEmail,
+    message: diag.message
+  });
+});
+app.post("/api/superadmin/offices", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const session = req.body.session || req.body;
+    const callerId = String(session?.idNo || session?.loginId || "").trim().toLowerCase();
+    const callerRole = String(session?.role || "").trim().toLowerCase();
+    const isSuper = callerRole === "admin" || callerRole === "superadmin" || callerId === "8695716192" || callerId === "admin" || callerId === "controller";
+    if (!isSuper) {
+      return res.status(403).json({ success: false, error: "Unauthorized: Super Admin access required." });
+    }
+    const creds = getServiceAccountCredentials();
+    if (!creds) {
+      const diag = inspectServiceAccountConfiguration();
+      return res.status(503).json({
+        success: false,
+        error: diag.message || "Google Service Account credentials (GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY) are not yet configured in environment variables."
+      });
+    }
+    const token = await getGoogleSheetsAccessToken(creds);
+    const registryData = await fetchAllRegisteredOffices(token);
+    return res.json({ success: true, offices: registryData.records });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message || "Failed to read from dedicated Registry Spreadsheet." });
+  }
+});
+app.post("/api/superadmin/register-office", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const payload = req.body;
+    const session = payload.session;
+    const callerId = String(session?.idNo || session?.loginId || "").trim().toLowerCase();
+    const callerRole = String(session?.role || "").trim().toLowerCase();
+    const isSuper = callerRole === "admin" || callerRole === "superadmin" || callerId === "8695716192" || callerId === "admin" || callerId === "controller";
+    if (!isSuper) {
+      return res.status(403).json({ success: false, error: "Unauthorized: Only authorized Super Admin can register offices." });
+    }
+    const officeName = String(payload.officeName || "").trim();
+    const adminName = String(payload.adminName || "").trim();
+    const cleanPhone = String(payload.adminMobile || "").replace(/\D/g, "");
+    const adminUserId = String(payload.adminUserId || "").trim();
+    const plainPass = String(payload.adminPassword || "").trim();
+    const databaseName = String(payload.databaseName || "").trim();
+    const spreadsheetLink = String(payload.spreadsheetLink || "").trim();
+    if (!officeName) return res.status(400).json({ success: false, error: "Office Name is required." });
+    if (!adminName) return res.status(400).json({ success: false, error: "Office Admin Name is required." });
+    if (!cleanPhone || cleanPhone.length !== 10) return res.status(400).json({ success: false, error: "Valid 10-digit Admin Mobile Number is required." });
+    if (!adminUserId || adminUserId.length < 3) return res.status(400).json({ success: false, error: "Admin User ID must be at least 3 characters." });
+    if (!plainPass || plainPass.length < 4) return res.status(400).json({ success: false, error: "Admin Password must be at least 4 characters." });
+    if (!databaseName) return res.status(400).json({ success: false, error: "Database Name is required." });
+    const urlCheck = extractAndValidateSpreadsheetId(spreadsheetLink);
+    if (!urlCheck.valid || !urlCheck.id) {
+      return res.status(400).json({ success: false, error: urlCheck.error || "Invalid Google Spreadsheet URL." });
+    }
+    const verifiedSpreadsheetId = urlCheck.id;
+    const creds = getServiceAccountCredentials();
+    if (!creds) {
+      const diag = inspectServiceAccountConfiguration();
+      return res.status(503).json({
+        success: false,
+        error: diag.message || "Service Account credentials not configured: Please set GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in environment variables."
+      });
+    }
+    const token = await getGoogleSheetsAccessToken(creds);
+    const accessCheck = await verifySpreadsheetAccessible(verifiedSpreadsheetId, token);
+    if (!accessCheck.accessible) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot access assigned spreadsheet "${verifiedSpreadsheetId}": ${accessCheck.error}. Please share this Google Spreadsheet with "${creds.client_email}" as Editor in Google Sheets.`,
+        serviceAccountEmail: creds.client_email,
+        spreadsheetId: verifiedSpreadsheetId,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${verifiedSpreadsheetId}/edit`,
+        needsOfficeSheetSharing: true
+      });
+    }
+    const existingRegistry = await fetchAllRegisteredOffices(token);
+    const isDuplicateOfficeName = existingRegistry.records.some((r) => r.officeName.toLowerCase() === officeName.toLowerCase());
+    if (isDuplicateOfficeName) {
+      return res.status(409).json({ success: false, error: `Duplicate: Office Name "${officeName}" is already registered.` });
+    }
+    const isDuplicateUserId = existingRegistry.records.some((r) => r.adminUserId.toLowerCase() === adminUserId.toLowerCase());
+    if (isDuplicateUserId) {
+      return res.status(409).json({ success: false, error: `Duplicate: Admin User ID "${adminUserId}" is already assigned to another office.` });
+    }
+    const isDuplicateSheetId = existingRegistry.records.some((r) => r.verifiedSpreadsheetId === verifiedSpreadsheetId);
+    if (isDuplicateSheetId) {
+      return res.status(409).json({ success: false, error: `Duplicate: This Google Spreadsheet ID is already assigned to another office.` });
+    }
+    const { salt, hash } = hashPasswordSecurely(plainPass);
+    const officeId = `OFFICE-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const recordToSave = {
+      id: officeId,
+      officeName,
+      adminName,
+      adminMobile: cleanPhone,
+      adminUserId,
+      passwordHash: hash,
+      passwordSalt: salt,
+      databaseName,
+      spreadsheetLink,
+      verifiedSpreadsheetId,
+      status: "active",
+      registeredAt: nowIso,
+      registeredBy: callerId || "SuperAdmin"
+    };
+    await appendOfficeToRegistry(recordToSave, existingRegistry.sheetTitle, existingRegistry.hasHeaders, token);
+    const verifyRegistry = await fetchAllRegisteredOffices(token);
+    const verifiedRecord = verifyRegistry.records.find((r) => r.id === officeId || r.officeName.toLowerCase() === officeName.toLowerCase() && r.adminUserId.toLowerCase() === adminUserId.toLowerCase());
+    if (!verifiedRecord) {
+      return res.status(500).json({
+        success: false,
+        error: "Persistence verification failed: Record was appended but could not be confirmed in Registry Spreadsheet read-back."
+      });
+    }
+    try {
+      const cached = readRegisteredOfficesCache();
+      const filtered = cached.filter((o) => o.id !== officeId && o.adminUserId.toLowerCase() !== adminUserId.toLowerCase());
+      filtered.push(recordToSave);
+      saveRegisteredOfficesCache(filtered);
+    } catch {
+    }
+    return res.json({
+      success: true,
+      message: `Office "${officeName}" (${databaseName}) has been durably registered in the dedicated Registry Spreadsheet!`,
+      data: verifiedRecord
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || "An unexpected error occurred during office registration."
+    });
+  }
+});
+app.post("/api/superadmin/configure-service-account", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const session = req.body.session;
+    const callerId = String(session?.idNo || session?.loginId || "").trim().toLowerCase();
+    const callerRole = String(session?.role || "").trim().toLowerCase();
+    const isSuper = callerRole === "admin" || callerRole === "superadmin" || callerId === "8695716192" || callerId === "admin" || callerId === "controller";
+    if (!isSuper) {
+      return res.status(403).json({ success: false, error: "Unauthorized: Only authorized Super Admin can configure service account credentials." });
+    }
+    const rawInput = String(req.body.keyJson || req.body.keyData || req.body.keyContent || "").trim();
+    if (!rawInput) {
+      return res.status(400).json({ success: false, error: "Credential input is empty. Please select or paste the service account JSON file." });
+    }
+    if (isHexKeyId(rawInput)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Google Cloud Key ID detected: The provided value is a 40-character Key ID (private_key_id) rather than the actual RSA private key. In Google Cloud Console, click "Add Key" -> "Create new key" -> "JSON" to download the key file, then upload that .json file.'
+      });
+    }
+    let parsed;
+    let jsonStr = rawInput;
+    if (!jsonStr.startsWith("{")) {
+      try {
+        const b64 = Buffer.from(jsonStr, "base64").toString("utf8").trim();
+        if (b64.startsWith("{")) jsonStr = b64;
+      } catch {
+      }
+    }
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid JSON syntax: Please ensure the entire contents of the downloaded service-account .json file are provided."
+      });
+    }
+    const email = String(parsed.client_email || parsed.clientEmail || "").trim();
+    const rawKey = String(parsed.private_key || parsed.privateKey || "");
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Service Account JSON: "client_email" is missing or invalid in the credential file.'
+      });
+    }
+    const cleanKey = normalizePrivateKey(rawKey);
+    if (isHexKeyId(cleanKey)) {
+      return res.status(400).json({
+        success: false,
+        error: "The private_key in the provided JSON is a 40-character Key ID rather than the full RSA PEM private key."
+      });
+    }
+    if (!isValidPrivateKeyFormat(cleanKey)) {
+      return res.status(400).json({
+        success: false,
+        error: 'The private_key in the provided JSON is malformed or not a valid RSA PEM key (must include "-----BEGIN PRIVATE KEY-----").'
+      });
+    }
+    const creds = {
+      client_email: email,
+      private_key: cleanKey,
+      project_id: String(parsed.project_id || parsed.projectId || "gen-lang-client-0685870335").trim()
+    };
+    let token;
+    try {
+      token = await getGoogleSheetsAccessToken(creds);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        success: false,
+        error: `Google OAuth verification failed: ${tokenErr?.message || "Unable to authenticate with Google"}.`
+      });
+    }
+    const jsonText = JSON.stringify(parsed, null, 2);
+    try {
+      fs2.writeFileSync(path2.join(process.cwd(), ".service-account.json"), jsonText, { encoding: "utf8", mode: 384 });
+    } catch {
+    }
+    try {
+      fs2.writeFileSync(path2.join(process.cwd(), ".service-account-backup.json"), jsonText, { encoding: "utf8", mode: 384 });
+    } catch {
+    }
+    try {
+      fs2.writeFileSync(path2.join(process.cwd(), "service-account.json"), jsonText, { encoding: "utf8", mode: 384 });
+    } catch {
+    }
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY = JSON.stringify(parsed);
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL = creds.client_email;
+    process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = creds.private_key;
+    try {
+      const envLocalPath = path2.join(process.cwd(), ".env.local");
+      let envLines = [];
+      if (fs2.existsSync(envLocalPath)) {
+        envLines = fs2.readFileSync(envLocalPath, "utf8").split("\n").filter((l) => !l.startsWith("GOOGLE_SERVICE_ACCOUNT_KEY=") && !l.startsWith("GOOGLE_SERVICE_ACCOUNT_EMAIL="));
+      }
+      envLines.push(`GOOGLE_SERVICE_ACCOUNT_KEY=${JSON.stringify(JSON.stringify(parsed))}`);
+      envLines.push(`GOOGLE_SERVICE_ACCOUNT_EMAIL=${creds.client_email}`);
+      fs2.writeFileSync(envLocalPath, envLines.join("\n"), "utf8");
+    } catch {
+    }
+    const accessCheck = await verifySpreadsheetAccessible(DEDICATED_REGISTRY_SPREADSHEET_ID, token);
+    if (!accessCheck.accessible) {
+      return res.json({
+        success: false,
+        needsSharing: true,
+        email: creds.client_email,
+        spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${DEDICATED_REGISTRY_SPREADSHEET_ID}/edit`,
+        message: `Authentication succeeded with Google! However, the Registry Spreadsheet (ID: ${DEDICATED_REGISTRY_SPREADSHEET_ID}) is not accessible yet: ${accessCheck.error}. Please share the Google Spreadsheet with "${email}" as Editor in Google Sheets, then click "Verify Now".`
+      });
+    }
+    return res.json({
+      success: true,
+      needsSharing: false,
+      message: `Service Account "${email}" verified successfully with Google Sheets API and saved! Dedicated Registry Spreadsheet is live and accessible.`,
+      email: creds.client_email,
+      spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to configure service account credentials."
+    });
+  }
+});
+app.post("/api/superadmin/test-registry-connection", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const session = req.body.session;
+    const callerId = String(session?.idNo || session?.loginId || "").trim().toLowerCase();
+    const callerRole = String(session?.role || "").trim().toLowerCase();
+    const isSuper = callerRole === "admin" || callerRole === "superadmin" || callerId === "8695716192" || callerId === "admin" || callerId === "controller";
+    if (!isSuper) {
+      return res.status(403).json({ success: false, error: "Unauthorized: Only Super Admin can test connection." });
+    }
+    const creds = getServiceAccountCredentials();
+    if (!creds) {
+      return res.status(400).json({ success: false, error: "No Service Account credentials found. Please upload the service-account .json file first." });
+    }
+    const token = await getGoogleSheetsAccessToken(creds);
+    const accessCheck = await verifySpreadsheetAccessible(DEDICATED_REGISTRY_SPREADSHEET_ID, token);
+    if (!accessCheck.accessible) {
+      return res.json({
+        success: false,
+        needsSharing: true,
+        email: creds.client_email,
+        spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${DEDICATED_REGISTRY_SPREADSHEET_ID}/edit`,
+        message: `Still not accessible: ${accessCheck.error}. Please make sure you added "${creds.client_email}" as Editor in Google Sheets.`
+      });
+    }
+    return res.json({
+      success: true,
+      needsSharing: false,
+      message: `Google Sheets connection verified! Dedicated Registry Spreadsheet is fully accessible by "${creds.client_email}".`,
+      email: creds.client_email,
+      spreadsheetId: DEDICATED_REGISTRY_SPREADSHEET_ID
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Connection test failed." });
+  }
+});
 async function startServer() {
-  const distPath = path.join(process.cwd(), "dist");
+  const distPath = path2.join(process.cwd(), "dist");
   const isProduction = process.env.NODE_ENV === "production";
   const desiredPort = isProduction ? parseInt(process.env.PORT || "3000", 10) : 3e3;
   let viteMiddleware = null;
@@ -5792,8 +7053,8 @@ async function startServer() {
   }));
   app.get("*", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    const indexPath = path.join(distPath, "index.html");
-    if (fs.existsSync(indexPath)) {
+    const indexPath = path2.join(distPath, "index.html");
+    if (fs2.existsSync(indexPath)) {
       res.sendFile(indexPath);
     } else {
       res.status(200).send('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>POWER</title></head><body><div id="root"></div></body></html>');

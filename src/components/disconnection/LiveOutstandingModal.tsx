@@ -18,9 +18,11 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
+import { cleanAndNormalizeConsumerId } from '../../utils/wbsedclReport';
 
 interface LiveOutstandingModalProps {
-  task: DisconnectionTask;
+  task?: DisconnectionTask | null;
+  initialId?: string;
   isOpen: boolean;
   onClose: () => void;
   lang?: 'en' | 'bn';
@@ -55,20 +57,30 @@ interface LiveCheckResult {
 
 export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
   task,
+  initialId,
   isOpen,
   onClose,
   lang = 'en'
 }) => {
-  const initialConsumerId = String(
-    task.consumerId || (task as any)['Consumer Id'] || (task as any)['Consumer ID'] || task.taskId || ''
-  ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').trim();
+  const initialConsumerId = cleanAndNormalizeConsumerId(
+    initialId ||
+    task?.consumerId ||
+    (task as any)?.['Consumer Id'] ||
+    (task as any)?.['Consumer ID'] ||
+    task?.taskId ||
+    ''
+  );
 
   const [consumerId, setConsumerId] = useState<string>(initialConsumerId);
+  const consumerIdRef = useRef<string>(consumerId);
+  consumerIdRef.current = consumerId;
+
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [result, setResult] = useState<LiveCheckResult | null>(null);
   const printIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const lastOpenedKeyRef = useRef<string | null>(null);
 
   const formatCurrency = (amount: number): string => {
     return `₹ ${amount.toLocaleString('en-IN', {
@@ -77,14 +89,14 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
     })}`;
   };
 
-  const cleanIdVal = consumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
-  const officialReportUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanIdVal || initialConsumerId}`;
+  const cleanIdVal = cleanAndNormalizeConsumerId(consumerId || initialConsumerId);
+  const officialReportUrl = result?.officialPortalUrl || `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanIdVal}`;
 
   const handleCheckOutstanding = useCallback(async (searchId?: string) => {
-    const rawId = searchId !== undefined ? searchId : consumerId;
-    const cleanId = rawId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+    const rawId = searchId !== undefined ? searchId : consumerIdRef.current;
+    const cleanId = cleanAndNormalizeConsumerId(rawId);
     if (!cleanId) {
-      setError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক কনজিউমার আইডি লিখুন।' : 'Please enter a valid Consumer ID.');
+      setError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক ৯-সংখ্যার কনজিউমার আইডি লিখুন।' : 'Please enter a valid Consumer ID.');
       return;
     }
 
@@ -95,7 +107,7 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
 
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 20000);
+      const timer = setTimeout(() => controller.abort(), 35000);
 
       const res = await fetch('/api/wbsedcl/live-check', {
         method: 'POST',
@@ -123,17 +135,35 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [consumerId, lang]);
+  }, [lang]);
 
   useEffect(() => {
-    setConsumerId(initialConsumerId);
-    setError(null);
-    setSuccessMessage(null);
-    setResult(null);
-    if (isOpen && initialConsumerId) {
-      handleCheckOutstanding(initialConsumerId);
+    if (!isOpen) {
+      lastOpenedKeyRef.current = null;
+      return;
     }
-  }, [initialConsumerId, isOpen]);
+
+    const nextId = cleanAndNormalizeConsumerId(
+      initialId ||
+      task?.consumerId ||
+      (task as any)?.['Consumer Id'] ||
+      (task as any)?.['Consumer ID'] ||
+      task?.taskId ||
+      ''
+    );
+
+    const openKey = `${isOpen ? 'open' : 'closed'}_${initialId || ''}_${task?.taskId || ''}_${task?.consumerId || ''}`;
+    if (lastOpenedKeyRef.current !== openKey) {
+      lastOpenedKeyRef.current = openKey;
+      setConsumerId(nextId);
+      setError(null);
+      setSuccessMessage(null);
+      setResult(null);
+      if (nextId) {
+        handleCheckOutstanding(nextId);
+      }
+    }
+  }, [isOpen, initialId, task, handleCheckOutstanding]);
 
   if (!isOpen) return null;
 
@@ -288,10 +318,18 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
             <div className="relative flex-1 flex items-center">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5" />
               <input
+                id="live-osd-consumer-input"
                 type="text"
+                autoFocus
                 value={consumerId}
                 onChange={e => {
-                  setConsumerId(e.target.value);
+                  const val = e.target.value;
+                  const bengaliDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+                  let normalized = val;
+                  for (let i = 0; i < bengaliDigits.length; i++) {
+                    normalized = normalized.replaceAll(bengaliDigits[i], i.toString());
+                  }
+                  setConsumerId(normalized);
                   setError(null);
                   setSuccessMessage(null);
                 }}
@@ -300,8 +338,8 @@ export const LiveOutstandingModal: React.FC<LiveOutstandingModalProps> = ({
                     handleCheckOutstanding();
                   }
                 }}
-                placeholder="Enter Consumer ID..."
-                className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-300 hover:border-slate-400 focus:border-emerald-600 rounded-xl text-sm font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 transition-all placeholder:text-slate-400"
+                placeholder={lang === 'bn' ? 'কনজিউমার আইডি লিখুন (যেমন: 300419151)...' : 'Enter Consumer ID (e.g. 300419151)...'}
+                className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-300 hover:border-slate-400 focus:border-emerald-600 rounded-xl text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all placeholder:text-slate-400"
               />
               {consumerId && (
                 <button

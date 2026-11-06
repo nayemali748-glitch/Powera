@@ -20,12 +20,15 @@ import {
   PowerOff,
   Calendar,
   Settings,
-  RefreshCw
+  RefreshCw,
+  Sun,
+  Moon
 } from 'lucide-react';
-import { CornerOptionKey, UserSession, ActiveTab } from '../types';
+import { CornerOptionKey, UserSession, ActiveTab, ThemeMode } from '../types';
 import { Language, translations } from '../utils/translations';
 import { cleanNameOnly } from '../utils/entryNormalizer';
 import { formatDateDDMMYYYY, formatTime12Hour } from '../utils/dateTimeFormat';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
   isAdmin: boolean;
@@ -43,6 +46,9 @@ interface HeaderProps {
   onOpenLanguageModal?: () => void;
   forceRefreshState?: 'idle' | 'refreshing' | 'completed' | 'failed';
   onForceSystemRefresh?: () => void;
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
+  onOpenLiveOsdCheck?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -61,6 +67,9 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenLanguageModal,
   forceRefreshState = 'idle',
   onForceSystemRefresh,
+  theme = 'day',
+  onToggleTheme,
+  onOpenLiveOsdCheck,
 }) => {
   const t = translations[currentLanguage] || translations.en;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -98,189 +107,69 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-16 sm:h-20 bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 z-30 shadow-xs">
+    <header className={`h-15 sm:h-18 px-3.5 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 z-30 transition-colors duration-200 ${
+      theme === 'night' 
+        ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
+        : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'
+    }`}>
       {/* Left Title & System Status */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className="md:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
+            className={`p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer ${
+              theme === 'night' 
+                ? 'text-white hover:bg-slate-800' 
+                : 'text-slate-800 hover:bg-slate-100'
+            }`}
             aria-label="Toggle navigation menu"
           >
-            <Menu className="w-5 h-5" />
+            <Menu className="w-5 h-5 stroke-[2.5]" />
           </button>
         )}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-2.5">
           <img 
             src={appLogo} 
             alt="Power of Construction Round Logo" 
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
             referrerPolicy="no-referrer"
           />
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xs sm:text-sm font-bold text-blue-600 leading-none">
-                {t.appName}
+              <h1 className={`text-base sm:text-lg font-black tracking-wide leading-none ${
+                theme === 'night' ? 'text-white' : 'text-[#2563eb]'
+              }`}>
+                POWER
               </h1>
-              <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full text-[9px] font-bold tracking-wide uppercase flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse"></span>
-                Live
+              <span className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-black tracking-wide uppercase flex items-center gap-1.5 shadow-2xs ${
+                theme === 'night'
+                  ? 'bg-emerald-950/70 border border-emerald-500/60 text-emerald-300'
+                  : 'bg-[#dcfce7] border border-[#86efac] text-[#15803d]'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  theme === 'night' ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-600 animate-pulse'
+                }`}></span>
+                LIVE
               </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Center/Right Nav Controls */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        {/* Navigation Tabs (Quick Switch) */}
-        <div className="hidden sm:flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <button
-            id="nav-tab-home"
-            onClick={() => setActiveTab('entry')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'entry'
-                ? 'bg-white text-slate-900 shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Home className="w-3.5 h-3.5 text-amber-500" />
-            <span>Home</span>
-          </button>
-
-          <button
-            id="nav-tab-performance"
-            onClick={() => setActiveTab('performance')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'performance'
-                ? 'bg-blue-600 text-white shadow-xs font-bold'
-                : 'text-blue-700 hover:text-blue-900 hover:bg-blue-50'
-            }`}
-          >
-            <BarChart3 className={`w-3.5 h-3.5 ${activeTab === 'performance' ? 'text-white' : 'text-blue-600'}`} />
-            <span>Dashboard</span>
-          </button>
-
-          <button
-            id="nav-tab-submissions"
-            onClick={() => setActiveTab('my-submissions')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'my-submissions'
-                ? 'bg-white text-slate-900 shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5 text-sky-500" />
-            <span>{t.mySubmissions}</span>
-          </button>
-
-          <button
-            id="nav-tab-work-orders"
-            onClick={() => setActiveTab('work-orders')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'work-orders'
-                ? 'bg-amber-500 text-slate-950 shadow-xs font-bold ring-1 ring-amber-600'
-                : 'text-amber-800 hover:text-amber-950 hover:bg-amber-50'
-            }`}
-            title="ওয়ার্ক অর্ডার ও খাতার নোটিশ বোর্ড"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600" />
-            <span>{t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা'}</span>
-          </button>
-
-          {/* Disconnection Module Direct Tab */}
-          <button
-            id="nav-tab-disconnection"
-            onClick={() => setActiveTab('disconnection')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'disconnection'
-                ? 'bg-rose-600 text-white shadow-xs font-bold ring-1 ring-rose-700'
-                : 'text-rose-700 hover:text-rose-950 hover:bg-rose-50'
-            }`}
-            title="Disconnection Management & Consumer List"
-          >
-            <PowerOff className="w-3.5 h-3.5" />
-            <span>{currentLanguage === 'bn' ? 'ডিসকানেকশন (হোম)' : 'Disconnection'}</span>
-          </button>
-
-          {isAdmin && (
-            <button
-              id="nav-tab-admin"
-              onClick={() => setActiveTab('admin')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'admin'
-                  ? 'bg-slate-900 text-white shadow-xs font-bold'
-                  : 'text-emerald-700 hover:text-emerald-900'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Admin ({totalEntriesCount})</span>
-            </button>
-          )}
-        </div>
-
-        {/* Worker / User Badge */}
-        <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-xs">
-          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-            currentUser?.role === 'admin' 
-              ? 'bg-emerald-100 text-emerald-800' 
-              : currentUser?.role === 'agency'
-                ? 'bg-purple-100 text-purple-800'
-                : 'bg-blue-100 text-blue-800'
-          }`}>
-            {currentUser?.role === 'admin' ? (
-              <ShieldCheck className="w-3.5 h-3.5" />
-            ) : (
-              <UserCheck className="w-3.5 h-3.5" />
-            )}
-          </div>
-          {editingWorker ? (
-            <form onSubmit={handleSaveWorkerName} className="flex items-center gap-1">
-              <input
-                type="text"
-                value={tempWorkerName}
-                onChange={(e) => setTempWorkerName(e.target.value)}
-                className="bg-white text-slate-900 text-xs px-2 py-0.5 rounded border border-blue-500 w-32 focus:outline-none"
-                autoFocus
-                placeholder="আপনার নাম"
-              />
-              <button type="submit" className="text-blue-600 text-xs font-bold hover:underline">
-                OK
-              </button>
-            </form>
-          ) : (
-            <div 
-              onClick={() => {
-                setTempWorkerName(workerName);
-                setEditingWorker(true);
-              }}
-              className="cursor-pointer hover:text-blue-600 flex items-center gap-1.5"
-              title="Click to edit worker name"
-            >
-              <div className="leading-tight">
-                <div className="font-bold text-slate-800 max-w-[120px] truncate">
-                  {cleanNameOnly(currentUser?.name || workerName || 'Worker')}
-                </div>
-                <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                  <span>{currentUser?.designation || (isAdmin ? 'Admin' : currentUser?.role === 'agency' ? 'Agency Partner' : 'Lineman / Field Operator')}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
+      {/* Right Controls: Golden Home Button + 3-Dots Button */}
+      <div className="flex items-center gap-2 sm:gap-2.5">
         {/* Home Button with House Symbol */}
         <button
           id="header-home-btn"
           onClick={() => setActiveTab('entry')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 border cursor-pointer ${
-            activeTab === 'entry'
-              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-600/30 shadow-xs'
-              : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 shadow-xs'
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl text-xs sm:text-sm font-black transition-all active:scale-95 border cursor-pointer shadow-xs ${
+            theme === 'night'
+              ? 'bg-[#f59e0b] hover:bg-[#d97706] text-slate-950 border-amber-500 ring-1 ring-amber-400/30'
+              : 'bg-[#ffbe1a] hover:bg-[#f59e0b] text-slate-950 border-amber-400 ring-1 ring-amber-300/30'
           }`}
           title="Back to Home"
         >
-          <Home className="w-4 h-4 text-slate-950" />
+          <Home className="w-4 h-4 text-slate-950 stroke-[2.5]" />
           <span>Home</span>
         </button>
 
@@ -289,31 +178,115 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="header-tools-menu-btn"
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 transition-all flex items-center justify-center cursor-pointer"
+            className={`p-2 rounded-xl border transition-all flex items-center justify-center cursor-pointer ${
+              theme === 'night' 
+                ? 'bg-[#0f1b33] hover:bg-[#18284d] text-slate-300 hover:text-white border-blue-900/60 shadow-[0_0_10px_rgba(14,165,233,0.15)]' 
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200 shadow-2xs'
+            }`}
             title="Options Menu"
             aria-label="Options menu"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
 
-          {/* Dropdown Menu for Quick Tools & Options (in English & Indian WBSEDCL Standard) */}
+          {/* Dropdown Menu for Quick Tools & Options */}
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-72 sm:w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150 divide-y divide-slate-100">
-              <div className="px-4 py-2.5 bg-slate-50 flex items-center justify-between">
+            <div className={`absolute right-0 mt-2 w-72 sm:w-84 rounded-2xl shadow-2xl border py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150 divide-y ${
+              theme === 'night' 
+                ? 'bg-[#0d172e] border-slate-700 text-white divide-slate-800' 
+                : 'bg-white border-slate-200 text-slate-900 divide-slate-100'
+            }`}>
+              <div className={`px-4 py-2.5 flex items-center justify-between ${
+                theme === 'night' ? 'bg-[#0a1226]' : 'bg-slate-50'
+              }`}>
                 <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-amber-600" />
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  <span className={`text-xs font-black uppercase tracking-wider ${theme === 'night' ? 'text-slate-200' : 'text-slate-800'}`}>
                     POWER • App Settings & Tools
                   </span>
                 </div>
-                <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-mono font-bold">
+                <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-mono font-bold border border-amber-500/30">
                   WBSEDCL
                 </span>
               </div>
 
               <div className="py-1">
+                {/* 1. LIVE OSD & BILL CHECK OPTION */}
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
+                  <button
+                    id="header-menu-live-osd-btn"
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      if (onOpenLiveOsdCheck) onOpenLiveOsdCheck();
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer border bg-emerald-50 hover:bg-emerald-100/80 border-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-600/40 dark:hover:bg-emerald-900/50 shadow-2xs group"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-lg bg-emerald-600 text-white shadow-xs group-hover:scale-105 transition-transform">
+                        <Zap className="w-4 h-4 fill-white" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black tracking-wide text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>{currentLanguage === 'bn' ? 'লাইভ OSD ও বকেয়া চেক' : 'Live OSD & Bill Check'}</span>
+                          <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 rounded text-[9px] font-bold">WBSEDCL</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-300 font-semibold mt-0.5">
+                          {currentLanguage === 'bn' 
+                            ? 'কনজিউমার আইডি দিয়ে লাইভ বকেয়া ও নো-ডিউজ রিপোর্ট' 
+                            : 'Live Outstanding, LPSC Surcharge & No Dues'}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-600 text-white shadow-2xs">
+                      LIVE
+                    </span>
+                  </button>
+                </div>
+
+                {/* DAY / NIGHT THEME SWITCHER OPTION */}
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
+                  <button
+                    id="header-menu-theme-toggle-btn"
+                    type="button"
+                    onClick={() => {
+                      if (onToggleTheme) onToggleTheme();
+                    }}
+                    className={`w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer border ${
+                      theme === 'night'
+                        ? 'bg-[#111c38] hover:bg-[#162447] border-indigo-500/40 text-white'
+                        : 'bg-amber-50 hover:bg-amber-100/80 border-amber-200 text-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-1.5 rounded-lg ${
+                        theme === 'night' ? 'bg-indigo-950 text-indigo-300 border border-indigo-500/40' : 'bg-amber-400 text-slate-950 shadow-xs'
+                      }`}>
+                        {theme === 'night' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                      </div>
+                      <div>
+                        <div className="text-xs font-black tracking-wide">
+                          {currentLanguage === 'bn' ? 'দিন বা রাত মোড (Theme)' : 'Day / Night Mode'}
+                        </div>
+                        <div className={`text-[10px] font-semibold ${theme === 'night' ? 'text-indigo-200' : 'text-slate-500'}`}>
+                          {theme === 'night' 
+                            ? (currentLanguage === 'bn' ? 'রাত মোড সক্রিয় • ট্যাপ করে দিন মোড করুন' : 'Night mode active • tap for Day') 
+                            : (currentLanguage === 'bn' ? 'দিন মোড সক্রিয় • ট্যাপ করে রাত মোড করুন' : 'Day mode active • tap for Night')}
+                        </div>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                      theme === 'night' 
+                        ? 'bg-indigo-900/80 text-amber-300 border-indigo-400/50' 
+                        : 'bg-amber-200/80 text-amber-950 border-amber-300'
+                    }`}>
+                      {theme === 'night' ? '🌙 Night' : '☀️ Day'}
+                    </span>
+                  </button>
+                </div>
+
                 {/* APP SETTINGS: FORCE SYSTEM REFRESH */}
-                <div className="px-3 py-2 border-b border-slate-100">
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1 mb-1.5">
                     App Settings
                   </div>
@@ -351,6 +324,13 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                   </button>
                 </div>
+
+                {/* Install App Option (Inside 3-Dot Options Menu) */}
+                <PWAInstallButton
+                  lang={currentLanguage}
+                  variant="menu-item"
+                  onInstalledClick={() => setMenuOpen(false)}
+                />
 
                 {/* Language Option */}
                 {onOpenLanguageModal && (

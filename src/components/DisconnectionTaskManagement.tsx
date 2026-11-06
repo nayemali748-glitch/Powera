@@ -75,6 +75,7 @@ import { DisconnectionUpload } from './disconnection/DisconnectionUpload';
 import { DisconnectionReport } from './disconnection/DisconnectionReport';
 import { DisconnectionConsumerCard } from './disconnection/DisconnectionConsumerCard';
 import { DisconnectionUpdateModal } from './disconnection/DisconnectionUpdateModal';
+import { LiveOutstandingModal } from './disconnection/LiveOutstandingModal';
 import {
   DisconnectionDailyReportModal,
   downloadDailyDisconnectionReportPdf,
@@ -106,7 +107,15 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   externalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
-  const isAgency = !isAdmin && isAgencyUserSession(currentUser, externalTasks);
+  const isAgency = !isAdmin && (
+    currentUser?.role === 'agency' ||
+    String(currentUser?.role || '').toLowerCase().includes('agency') ||
+    /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+    /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+    Boolean((currentUser as any)?.agencyName) ||
+    /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '') ||
+    isAgencyUserSession(currentUser, externalTasks)
+  );
 
   // Navigation tab state (Workers always view the Consumer List directly)
   const [activeTab, setActiveTabState] = useState<DisconnectionTab>((isAdmin || isAgency) ? initialTab : 'VIEW_LIST');
@@ -133,8 +142,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     }
   }, [initialTab, isAdmin, isAgency]);
 
-  // Core Data States (Initialized synchronously from local cache for 0ms instant rendering)
-  const [tasks, setTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
+  // Core Data States (Initialized synchronously from externalTasks or local cache for 0ms instant rendering)
+  const [tasks, setTasks] = useState<DisconnectionTask[]>(() => {
+    if (Array.isArray(externalTasks) && externalTasks.length > 0) return externalTasks;
+    return getCachedDisconnectionTasksSync();
+  });
   const [stats, setStats] = useState<DisconnectionStats>({
     totalTasks: 0,
     completedTasks: 0,
@@ -165,6 +177,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState<boolean>(false);
   const [dailyReportFromDate, setDailyReportFromDate] = useState<string>('');
   const [dailyReportToDate, setDailyReportToDate] = useState<string>('');
+  const [isStandaloneLiveCheckOpen, setIsStandaloneLiveCheckOpen] = useState<boolean>(false);
+  const [liveCheckModalId, setLiveCheckModalId] = useState<string>('');
 
   // Reset pagination to Page 1 when filters or search change
   useEffect(() => {
@@ -463,19 +477,22 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
   // Initial load when component mounts + background sync + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
-    loadData(false, true);
+    // Only fetch if externalTasks was not provided by parent App
+    if (!Array.isArray(externalTasks) || externalTasks.length === 0) {
+      loadData(false, false);
+    }
     const interval = setInterval(() => {
-      if (!document.hidden && !inFlightRef.current) {
+      if (!document.hidden && !inFlightRef.current && (!externalTasks || externalTasks.length === 0)) {
         loadData(true, false);
       }
-    }, 8000);
+    }, 10000);
     const onGlobalRefresh = () => {
       inFlightRef.current = false;
-      loadData(true);
+      loadData(true, true);
     };
     const onFocusOrVisible = () => {
-      if (!document.hidden && !inFlightRef.current) {
-        loadData(true);
+      if (!document.hidden && !inFlightRef.current && (!externalTasks || externalTasks.length === 0)) {
+        loadData(true, false);
       }
     };
     window.addEventListener('power-app-sheets-refresh', onGlobalRefresh);
@@ -487,7 +504,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [loadData]);
+  }, [loadData, externalTasks]);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
@@ -1128,10 +1145,41 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   className="fixed inset-0 z-40 bg-slate-900/20"
                   onClick={() => setShowHeaderThreeDotMenu(false)}
                 />
-                <div className="fixed right-3 sm:right-6 top-16 sm:top-20 w-[min(88vw,280px)] max-h-[82vh] overflow-y-auto bg-white text-slate-900 border border-slate-200 rounded-2xl shadow-2xl z-50 py-1 animate-in fade-in zoom-in-95 duration-150">
+                <div className="fixed right-3 sm:right-6 top-16 sm:top-20 w-[min(88vw,290px)] max-h-[82vh] overflow-y-auto bg-white text-slate-900 border border-slate-200 rounded-2xl shadow-2xl z-50 py-1 animate-in fade-in zoom-in-95 duration-150">
+                  {/* LIVE WBSEDCL OSD & BILL CHECK ACTION */}
+                  <div className="p-2 border-b border-slate-100 bg-amber-50/70">
+                    <button
+                      type="button"
+                      id="disc-menu-live-osd-btn"
+                      onClick={() => {
+                        setShowHeaderThreeDotMenu(false);
+                        setLiveCheckModalId(searchQuery.trim());
+                        setIsStandaloneLiveCheckOpen(true);
+                      }}
+                      className="w-full px-3 py-2.5 text-left rounded-xl bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black flex items-center justify-between cursor-pointer transition-all shadow-xs border border-amber-400/80 active:scale-98"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-lg bg-slate-950 text-amber-400 shrink-0">
+                          <Zap className="w-4 h-4 fill-amber-400" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-black tracking-tight leading-tight">
+                            ⚡ Live OSD & Bill Check
+                          </div>
+                          <div className="text-[10px] text-slate-900 font-bold leading-tight mt-0.5">
+                            {lang === 'bn' ? 'লাইভ বকেয়া ও নো-ডিউজ চেক' : 'WBSEDCL Live Outstanding'}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[9px] bg-slate-950 text-white font-extrabold px-1.5 py-0.5 rounded uppercase">
+                        Live
+                      </span>
+                    </button>
+                  </div>
+
                   {/* Downloads Section */}
-                  <div className="px-4 py-2.5 border-b border-slate-100">
-                    <span className="text-sm font-bold text-slate-900">Downloads</span>
+                  <div className="px-4 py-2 border-b border-slate-100">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Downloads</span>
                   </div>
                   <div className="py-1">
                     <button
@@ -1140,7 +1188,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         triggerDailyReportPdfDownload();
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <FileText className="w-4 h-4 text-red-500 shrink-0" />
                       <span>Download DC List (PDF)</span>
@@ -1152,7 +1200,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         handleExportDCListCsv('DC_List_Excel');
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                       <span>Download DC List (Excel)</span>
@@ -1164,7 +1212,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         triggerDailyReportPrint();
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Download className="w-4 h-4 text-slate-800 shrink-0" />
                       <span>Daily Report (Print)</span>
@@ -1176,7 +1224,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         handleExportDCListCsv('Disconnection_Report');
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Download className="w-4 h-4 text-blue-600 shrink-0" />
                       <span>Download Report</span>
@@ -1188,7 +1236,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         if (isAdmin) setActiveTab('REPORT');
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Clock className="w-4 h-4 text-blue-600 shrink-0" />
                       <span>History Report</span>
@@ -1196,8 +1244,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   </div>
 
                   {/* Updates Section */}
-                  <div className="px-4 py-2.5 border-y border-slate-100">
-                    <span className="text-sm font-bold text-slate-900">Updates</span>
+                  <div className="px-4 py-2 border-y border-slate-100">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Updates</span>
                   </div>
                   <div className="py-1">
                     <button
@@ -1207,7 +1255,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setSortBy('NEWEST');
                         setActiveTab('VIEW_LIST');
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <List className="w-4 h-4 text-slate-800 shrink-0" />
                       <span>Agency Last Updates</span>
@@ -1219,7 +1267,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                         setShowHeaderThreeDotMenu(false);
                         if (isAdmin) setActiveTab('REPORT');
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
                       <span>Agency Updates Report</span>
@@ -1227,75 +1275,69 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   </div>
 
                   {/* Analysis Section */}
-                  <div className="px-4 py-2.5 border-y border-slate-100">
-                    <span className="text-sm font-bold text-slate-900">Analysis</span>
+                  <div className="px-4 py-2 border-y border-slate-100">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Analysis</span>
                   </div>
                   <div className="py-1">
                     <button
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
-                        if (isAdmin) {
+                        if (isAdmin || isAgency) {
                           setActiveTab('DASHBOARD');
                           setIsDashboardExpanded(true);
                         }
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <BarChart2 className="w-4 h-4 text-blue-600 shrink-0" />
                       <span>Analysis Dashboard</span>
                     </button>
                   </div>
 
-                  {/* Admin Section */}
-                  <div className="px-4 py-2.5 border-y border-slate-100">
-                    <span className="text-sm font-bold text-slate-900">Admin</span>
+                  {/* Admin & Sync Section */}
+                  <div className="px-4 py-2 border-y border-slate-100">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Admin & Operations</span>
                   </div>
                   <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowHeaderThreeDotMenu(false);
-                        if (isAdmin) setActiveTab('UPLOAD');
-                      }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
-                    >
-                      <FileSpreadsheet className="w-4 h-4 text-slate-800 shrink-0" />
-                      <span>Edit DC List</span>
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowHeaderThreeDotMenu(false);
+                          setActiveTab('UPLOAD');
+                        }}
+                        className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-slate-800 shrink-0" />
+                        <span>Edit / Upload DC List</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
+                        try {
+                          window.dispatchEvent(new CustomEvent('power-open-settings'));
+                        } catch {}
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-indigo-700 hover:bg-indigo-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-indigo-700 hover:bg-indigo-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Settings className="w-4 h-4 text-indigo-600 shrink-0" />
-                      <span>Admin Settings</span>
+                      <span>System Settings & Refresh</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
+                        loadData(true, true);
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-emerald-700 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-emerald-700 hover:bg-emerald-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
-                      <Bell className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>Broadcast Push Alert</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowHeaderThreeDotMenu(false);
-                        loadData(true);
-                      }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
-                    >
-                      <RefreshCw className="w-4 h-4 text-slate-800 shrink-0" />
-                      <span>Sync Fresh Data</span>
+                      <RefreshCw className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Sync Fresh Data (Live Google Sheet)</span>
                     </button>
                   </div>
 
@@ -1305,30 +1347,26 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
+                        try {
+                          const isDark = document.documentElement.classList.toggle('dark');
+                          localStorage.setItem('power_theme_mode', isDark ? 'night' : 'day');
+                        } catch {}
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
-                    >
-                      <MessageSquarePlus className="w-4 h-4 text-amber-500 shrink-0" />
-                      <span>My Feedback & Rating</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowHeaderThreeDotMenu(false);
-                      }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <Palette className="w-4 h-4 text-indigo-500 shrink-0" />
-                      <span>Home Card Theme</span>
+                      <span>Day / Night Theme</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
+                        try {
+                          window.dispatchEvent(new CustomEvent('power-open-corner-option', { detail: 'change_password' }));
+                        } catch {}
                       }}
-                      className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
+                      className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
                       <KeyRound className="w-4 h-4 text-slate-800 shrink-0" />
                       <span>Change Password</span>
@@ -1935,6 +1973,22 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                     />
                   </div>
 
+                  {/* Standalone Live OSD & Bill Check Quick Button */}
+                  <button
+                    type="button"
+                    id="disc-quick-live-osd-btn"
+                    onClick={() => {
+                      setLiveCheckModalId(searchQuery.trim());
+                      setIsStandaloneLiveCheckOpen(true);
+                    }}
+                    className="px-3 py-2.5 bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 transition-all shrink-0 border border-amber-300"
+                    title="লাইভ OSD ও বকেয়া চেক (WBSEDCL Live Outstanding & Bill Check)"
+                  >
+                    <Zap className="w-4 h-4 fill-slate-950 text-slate-950" />
+                    <span className="hidden sm:inline">{lang === 'bn' ? 'লাইভ OSD' : 'Live OSD'}</span>
+                    <span className="sm:hidden">OSD</span>
+                  </button>
+
                   {/* Three-Dot Menu Button containing Status Pills, Agency, Sort, Phase & Class */}
                   <div className="relative shrink-0">
                     <button
@@ -2510,6 +2564,19 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         onFromDateChange={setDailyReportFromDate}
         onToDateChange={setDailyReportToDate}
       />
+
+      {/* STANDALONE WBSEDCL LIVE OSD & BILL CHECK MODAL */}
+      {isStandaloneLiveCheckOpen && (
+        <LiveOutstandingModal
+          isOpen={isStandaloneLiveCheckOpen}
+          initialId={liveCheckModalId}
+          onClose={() => {
+            setIsStandaloneLiveCheckOpen(false);
+            setLiveCheckModalId('');
+          }}
+          lang={lang === 'bn' ? 'bn' : 'en'}
+        />
+      )}
     </div>
   );
 };

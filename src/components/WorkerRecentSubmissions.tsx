@@ -92,23 +92,23 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
         </div>
       )}
 
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden space-y-4 p-4 sm:p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+      <div className="bg-white dark:bg-[#0c1428] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs overflow-hidden space-y-4 p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3.5">
           <div>
             <div className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-amber-600" />
-              <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+              <Clock className="w-5 h-5 text-amber-500" />
+              <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white tracking-tight">
                 {t.mySubmissions}
               </h2>
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
               {t.recordsCount} ({displayEntries.length}) • {t.wbsedclStandard}
             </p>
           </div>
 
           <button
             onClick={onNewEntry}
-            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto shadow-xs transition-colors cursor-pointer"
           >
             <Zap className="w-4 h-4 text-amber-400" />
             <span>{t.dataEntry}</span>
@@ -116,9 +116,9 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
         </div>
 
         {/* Sync Reassurance Banner for Worker */}
-        <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-center gap-2.5">
-          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-          <span>
+        <div className="bg-blue-50/80 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 rounded-xl p-3 text-xs text-blue-900 dark:text-blue-200 flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+          <span className="font-medium">
             {lang === 'bn' 
               ? 'আপনার প্রতিটি ডাটা এন্ট্রি সরাসরি এডমিন প্যানেলে রিয়েল-টাইমে পৌঁছে যায় এবং এডমিন বা কন্ট্রোলার তা পর্যবেক্ষণ করতে পারেন।' 
               : 'All your entries are synchronized in real-time to the Admin Panel for review and verification.'}
@@ -126,10 +126,10 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
         </div>
 
         {displayEntries.length === 0 ? (
-          <div className="text-center py-10 text-slate-500 space-y-2">
-            <FileText className="w-8 h-8 mx-auto text-slate-400" />
-            <p className="text-sm font-semibold text-slate-700">{t.noDataFound}</p>
-            <p className="text-xs text-slate-500">{t.clickToOpenForm}</p>
+          <div className="text-center py-10 text-slate-500 dark:text-slate-400 space-y-2">
+            <FileText className="w-8 h-8 mx-auto text-slate-400 dark:text-slate-500" />
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{t.noDataFound}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t.clickToOpenForm}</p>
           </div>
         ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -143,17 +143,17 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
               <div
                 key={`${item.id || 'entry'}-${idx}`}
                 onClick={() => onSelectEntry(item)}
-                className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 hover:border-slate-300 hover:bg-white transition-all cursor-pointer space-y-2.5 group shadow-xs"
+                className="p-3.5 sm:p-4 rounded-xl bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 hover:border-blue-400 hover:bg-white dark:hover:bg-slate-900 transition-all cursor-pointer space-y-2 group shadow-2xs"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-slate-900">{item.id}</span>
+                    <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">{item.id}</span>
                     <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
-                      isNsc ? 'bg-amber-50 text-amber-800 border-amber-200' :
-                      isDisc ? 'bg-rose-50 text-rose-800 border-rose-200' :
-                      isPole ? 'bg-sky-50 text-sky-800 border-sky-200' :
-                      isMeter ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
-                      'bg-indigo-50 text-indigo-800 border-indigo-200'
+                      isNsc ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-700' :
+                      isDisc ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-700' :
+                      isPole ? 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-700' :
+                      isMeter ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700' :
+                      'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-700'
                     }`}>
                       {item.category}
                     </span>
@@ -169,14 +169,14 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
 
                     return (
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 shadow-2xs ${
-                        isApproved ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
-                        isCompleted ? 'bg-blue-50 text-blue-700 border-blue-300' :
-                        isRejected ? 'bg-rose-50 text-rose-700 border-rose-300' :
-                        'bg-amber-50 text-amber-700 border-amber-300'
+                        isApproved ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-700' :
+                        isCompleted ? 'bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-700' :
+                        isRejected ? 'bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-700' :
+                        'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-700'
                       }`}>
-                        {isApproved && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
-                        {isCompleted && <CheckCircle2 className="w-3 h-3 text-blue-600" />}
-                        {isPending && <Clock className="w-3 h-3 text-amber-600 animate-pulse" />}
+                        {isApproved && <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />}
+                        {isCompleted && <CheckCircle2 className="w-3 h-3 text-blue-600 dark:text-blue-400" />}
+                        {isPending && <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400 animate-pulse" />}
                         {isRejected && <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>}
                         <span>
                           {isApproved ? (t.approved || 'Approved') :
@@ -190,30 +190,30 @@ export const WorkerRecentSubmissions: React.FC<WorkerRecentSubmissionsProps> = (
                 </div>
 
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm group-hover:text-blue-700 transition-colors">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                     {item.consumerName || item.dtrName || item.poleNo || 'WBSEDCL Field Operation'}
                   </h3>
-                  <p className="text-xs text-slate-500 line-clamp-1">
+                  <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-1">
                     {item.address || (!isNsc && !isDisc ? item.feederName : '') || item.issueType || item.notes || 'No extra remarks'}
                   </p>
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-500 mt-1">
-                    <Clock className="w-3 h-3 text-amber-600" />
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-500 dark:text-slate-400 mt-1">
+                    <Clock className="w-3 h-3 text-amber-500" />
                     <span>{formatDateDDMMYYYY(item.date)}</span>
                     <span>•</span>
-                    <span className="text-blue-600">{formatTime12Hour(item.date)}</span>
+                    <span className="text-blue-600 dark:text-blue-400">{formatTime12Hour(item.date)}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-200">
+                <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-slate-400" />
                     <span>{cleanNameOnly(item.workerName)}</span>
-                    <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded font-bold ml-1 flex items-center gap-1">
-                      <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
+                    <span className="text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800 px-1.5 py-0.5 rounded font-bold ml-1 flex items-center gap-1">
+                      <ShieldCheck className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400" />
                       এডমিনে সিঙ্কড
                     </span>
                   </div>
-                  <div className="flex items-center gap-1 text-slate-900 font-semibold group-hover:text-blue-700 transition-colors">
+                  <div className="flex items-center gap-1 text-slate-800 dark:text-slate-200 font-semibold group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                     <span>{t.printReceipt}</span>
                     <ArrowRight className="w-3 h-3" />
                   </div>

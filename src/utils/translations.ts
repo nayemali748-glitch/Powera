@@ -16,6 +16,9 @@ export interface Translations {
   adminCenter: string;
   installApp: string;
   language: string;
+  dayNightMode: string;
+  dayMode: string;
+  nightMode: string;
   logout: string;
   login: string;
   signIn: string;
@@ -215,6 +218,9 @@ export const translations: Record<Language, Translations> = {
     adminCenter: 'এডমিন সেন্টার',
     installApp: 'অ্যাপ ইনস্টল করুন (Android/PC)',
     language: 'ভাষা নির্বাচন (Language)',
+    dayNightMode: 'দিন বা রাত মোড (Day / Night)',
+    dayMode: 'দিন মোড (Day)',
+    nightMode: 'রাত মোড (Night)',
     logout: 'লগআউট',
     login: 'লগইন',
     signIn: 'লগইন করুন',
@@ -409,6 +415,9 @@ export const translations: Record<Language, Translations> = {
     adminCenter: 'Admin Center',
     installApp: 'Install App (Android/PC)',
     language: 'Language Settings',
+    dayNightMode: 'Day / Night Mode',
+    dayMode: 'Day Mode',
+    nightMode: 'Night Mode',
     logout: 'Log Out',
     login: 'Login',
     signIn: 'Sign In',
@@ -603,6 +612,9 @@ export const translations: Record<Language, Translations> = {
     adminCenter: 'एडमिन सेंटर',
     installApp: 'ऐप इंस्टॉल करें (Android/PC)',
     language: 'भाषा चुनें (Language)',
+    dayNightMode: 'दिन या रात मोड (Day / Night)',
+    dayMode: 'दिन मोड (Day)',
+    nightMode: 'रात मोड (Night)',
     logout: 'लॉग आउट',
     login: 'लॉगिन',
     signIn: 'साइन इन करें',
@@ -797,6 +809,9 @@ export const translations: Record<Language, Translations> = {
     adminCenter: 'ایڈمن سنٹر',
     installApp: 'ایپ انسٹال کریں (Android/PC)',
     language: 'زبان منتخب کریں (Language)',
+    dayNightMode: 'دن یا رات موڈ (Day / Night)',
+    dayMode: 'دن کا موڈ (Day)',
+    nightMode: 'رات کا موڈ (Night)',
     logout: 'لاگ آؤٹ',
     login: 'لاگ ان',
     signIn: 'سائن ان کریں',

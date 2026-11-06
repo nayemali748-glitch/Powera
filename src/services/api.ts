@@ -47,6 +47,40 @@ const nativeFetch = typeof window !== 'undefined' && typeof window.fetch === 'fu
   ? window.fetch.bind(window)
   : globalThis.fetch.bind(globalThis);
 
+export function getActiveUserSessionSync(): UserSession | null {
+  try {
+    const raw = localStorage.getItem('power_user_session');
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function getEntriesCacheKey(): string {
+  const session = getActiveUserSessionSync();
+  if (session?.spreadsheetId) {
+    return `power_entries_${session.spreadsheetId}`;
+  }
+  return LOCAL_STORAGE_KEY;
+}
+
+export function getDisconnectionCacheKey(): string {
+  const session = getActiveUserSessionSync();
+  if (session?.spreadsheetId) {
+    return `power_disconnection_${session.spreadsheetId}`;
+  }
+  return DISCONNECTION_TASKS_CACHE_KEY;
+}
+
+export function getWorkOrdersCacheKey(): string {
+  const session = getActiveUserSessionSync();
+  if (session?.spreadsheetId) {
+    return `power_workorders_${session.spreadsheetId}`;
+  }
+  return WORK_ORDERS_STORAGE_KEY;
+}
+
 function readCache<T>(key: string, fallback: T): T {
   try {
     if (!hasActiveUserSession() && key !== USERS_CACHE_KEY) {
@@ -67,7 +101,7 @@ function writeCache<T>(key: string, value: T) {
 
 export function getCachedEntriesSync(): PowerEntry[] {
   try {
-    const raw = readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []);
+    const raw = readCache<PowerEntry[]>(getEntriesCacheKey(), []);
     if (!Array.isArray(raw)) return [];
     const cleaned = raw.filter((e: any) => {
       const catUp = String(e?.category || '').toUpperCase().trim();
@@ -82,7 +116,7 @@ export function getCachedEntriesSync(): PowerEntry[] {
 
 export function getCachedWorkOrdersSync(): WorkOrderNotice[] {
   try {
-    const raw = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
+    const raw = readCache<WorkOrderNotice[]>(getWorkOrdersCacheKey(), []);
     return Array.isArray(raw) ? raw : [];
   } catch {
     return [];
@@ -131,6 +165,14 @@ export async function callGasApi<T = any>(
   timeoutMs = 45000
 ): Promise<T> {
   const isBrowser = typeof window !== 'undefined';
+  const session = getActiveUserSessionSync();
+  const effectivePayload = { ...payload };
+  if (session?.spreadsheetId && !effectivePayload.spreadsheetId) {
+    effectivePayload.spreadsheetId = session.spreadsheetId;
+  }
+  if (session?.officeId && !effectivePayload.officeId) {
+    effectivePayload.officeId = session.officeId;
+  }
   let proxyError: Error | null = null;
 
   // 1. In browser environment, attempt the high-performance Express server proxy first
@@ -145,7 +187,7 @@ export async function callGasApi<T = any>(
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, payload, method })
+        body: JSON.stringify({ action, payload: effectivePayload, method })
       });
 
       const text = await res.text();
@@ -338,11 +380,17 @@ export async function fetchEntries(filters?: {
     if (filters?.workerName) query.set('workerName', filters.workerName);
     if (filters?.refresh) query.set('refresh', 'true');
 
+    const session = getActiveUserSessionSync();
+    if (session?.spreadsheetId) query.set('spreadsheetId', session.spreadsheetId);
+    if (session?.officeId) query.set('officeId', session.officeId);
+
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
+    if (session?.officeId) headers['x-office-id'] = session.officeId;
+
     // 1. Primary: Express /api/entries endpoint (Synced with Google Sheets)
     try {
-      const fastRes = await fetch(`/api/entries?${query.toString()}`, {
-        headers: { 'Accept': 'application/json' }
-      });
+      const fastRes = await fetch(`/api/entries?${query.toString()}`, { headers });
       const ct = fastRes.headers.get('content-type') || '';
       if (fastRes.ok && ct.includes('application/json')) {
         const fastData = await fastRes.json();
@@ -371,7 +419,7 @@ export async function fetchEntries(filters?: {
           });
           const uniqueEntries = deduplicateEntries(filteredFast.map((e: any) => normalizeEntry(e)));
           if (!filters || (!filters.category || filters.category === 'ALL')) {
-            writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
+            writeCache(getEntriesCacheKey(), sanitizeEntriesForCache(uniqueEntries));
           }
           return uniqueEntries;
         }
@@ -385,6 +433,33 @@ export async function fetchEntries(filters?: {
     if (filters?.search) params.search = filters.search;
     if (filters?.workerId) params.workerId = filters.workerId;
     if (filters?.workerName) params.workerName = filters.workerName;
+
+    if (session?.isOfficeScoped || session?.officeName || session?.spreadsheetId) {
+      if (!session.spreadsheetId) return [];
+      const officeRes = await callGasApi<any>('entries', { ...params, spreadsheetId: session.spreadsheetId }, 'GET');
+      const rawList = Array.isArray(officeRes?.entries)
+        ? officeRes.entries
+        : (Array.isArray(officeRes?.data) ? officeRes.data : []);
+      const filteredList = rawList.filter((e: any) => {
+        const catUp = String(e?.category || '').toUpperCase().trim();
+        const idUp = String(e?.id || e?.submissionId || '').toUpperCase().trim();
+        if (idUp === 'PWR-367356' || idUp === 'PWR-770566') return false;
+        return (
+          catUp !== 'USERS' &&
+          catUp !== 'USERS_AUTH' &&
+          catUp !== 'WORKORDERS_KHATA' &&
+          catUp !== 'WORK ORDERS' &&
+          catUp !== 'CHAT' &&
+          catUp !== 'CHAT_MESSAGES' &&
+          catUp !== 'SETTINGS' &&
+          catUp !== 'SYSTEM LOGS' &&
+          catUp !== 'DISCONNECTION_HISTORY'
+        );
+      });
+      const uniqueEntries = deduplicateEntries(filteredList.map((e: any) => normalizeEntry(e)));
+      writeCache(getEntriesCacheKey(), sanitizeEntriesForCache(uniqueEntries));
+      return uniqueEntries;
+    }
 
     const data = await callGasApi<any>('entries', params, 'GET');
     const rawList = Array.isArray(data?.entries)
@@ -407,11 +482,11 @@ export async function fetchEntries(filters?: {
     const uniqueEntries = deduplicateEntries(filteredList.map((e: any) => normalizeEntry(e)));
     
     // Save to local cache for instant UI availability
-    writeCache(LOCAL_STORAGE_KEY, sanitizeEntriesForCache(uniqueEntries));
+    writeCache(getEntriesCacheKey(), sanitizeEntriesForCache(uniqueEntries));
     return uniqueEntries;
   } catch (error) {
     console.warn('Direct Google Sheets fetch error, using local cache:', error);
-    let list = deduplicateEntries(readCache<PowerEntry[]>(LOCAL_STORAGE_KEY, []));
+    let list = deduplicateEntries(readCache<PowerEntry[]>(getEntriesCacheKey(), []));
     if (filters?.category && filters.category !== 'ALL') {
       list = list.filter(item => item.category === filters.category);
     }
@@ -1442,6 +1517,8 @@ export async function loginUser(loginId: string, password: string): Promise<User
       const uBadgeAlnum = uBadge.replace(/[^a-z0-9]/g, '');
       const uName = normalizeUniversalText(u.name || (u as any)['Full Name'] || '').trim().toLowerCase();
       const uNameAlnum = uName.replace(/[^a-z0-9]/g, '');
+      const uAgency = normalizeUniversalText((u as any).agencyName || (u as any)['Agency Name'] || (u as any).agency || '').trim().toLowerCase();
+      const uAgencyAlnum = uAgency.replace(/[^a-z0-9]/g, '');
       const uPhoneDigits = normalizeUniversalText(u.phone || '').replace(/\D/g, '');
       const uPhone10 = uPhoneDigits.length >= 10 ? uPhoneDigits.slice(-10) : uPhoneDigits;
 
@@ -1450,6 +1527,9 @@ export async function loginUser(loginId: string, password: string): Promise<User
       if (uInternalId && uInternalId === lowerId) return true;
       if (uBadge && (uBadge === lowerId || (cleanIdAlnum && uBadgeAlnum === cleanIdAlnum))) return true;
       if (uName && (uName === lowerId || (cleanIdAlnum.length >= 3 && uNameAlnum === cleanIdAlnum))) return true;
+      if (uAgency && (uAgency === lowerId || (cleanIdAlnum.length >= 3 && uAgencyAlnum === cleanIdAlnum))) return true;
+      if (cleanIdAlnum.length >= 3 && (uNameAlnum.includes(cleanIdAlnum) || cleanIdAlnum.includes(uNameAlnum))) return true;
+      if (cleanIdAlnum.length >= 3 && uAgencyAlnum && (uAgencyAlnum.includes(cleanIdAlnum) || cleanIdAlnum.includes(uAgencyAlnum))) return true;
       if (cleanPhone10 && uPhone10 && uPhone10 === cleanPhone10) return true;
       if (cleanDigits && cleanDigits.length >= 4 && uPhoneDigits && cleanDigits === uPhoneDigits) return true;
       return false;
@@ -1489,8 +1569,11 @@ export async function loginUser(loginId: string, password: string): Promise<User
     const isRoleAgency =
       !isRoleAdmin &&
       (matchedUser.role === 'agency' ||
+        String(matchedUser.role || '').toLowerCase().includes('agency') ||
         /^agn[-_0-9]/i.test(idNoStr) ||
-        /^agency[-_0-9]/i.test(idNoStr));
+        /^agency[-_0-9]/i.test(idNoStr) ||
+        /agency|এজেন্সি/i.test(matchedUser.designation || '') ||
+        /enterprise|agency|associates|traders|construction/i.test(matchedUser.name || ''));
     const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
 
     resData = {
@@ -1522,9 +1605,23 @@ export async function loginUser(loginId: string, password: string): Promise<User
   }
 
   try {
+    const prevRaw = localStorage.getItem('power_user_session');
+    let prevSpreadsheetId = '';
+    if (prevRaw) {
+      try { prevSpreadsheetId = JSON.parse(prevRaw)?.spreadsheetId || ''; } catch {}
+    }
+    // If logging into a different office or switching between super admin and office account:
+    if (prevSpreadsheetId !== (session.spreadsheetId || '')) {
+      try {
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+        localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
+        localStorage.removeItem(WORK_ORDERS_STORAGE_KEY);
+      } catch {}
+    }
+
     localStorage.setItem('power_user_session', JSON.stringify(session));
     const isSuperAdmin =
-      session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
+      (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin') && !session.isOfficeScoped;
     if (isSuperAdmin) {
       localStorage.setItem('power_is_admin', 'true');
     } else {
@@ -1688,11 +1785,19 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
     let rawList: any[] = [];
     let fetchedSuccessfully = false;
 
+    const session = getActiveUserSessionSync();
+    if (session?.spreadsheetId) params.spreadsheetId = session.spreadsheetId;
+    if (session?.officeId) params.officeId = session.officeId;
+
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
+    if (session?.officeId) headers['x-office-id'] = session.officeId;
+
     // 1. Primary: Express Backend /api/work-orders (synced with Google Sheets WorkOrders_Khata)
     try {
       const q = new URLSearchParams(params).toString();
       const pUrl = q ? `/api/work-orders?${q}` : '/api/work-orders';
-      const res = await fetch(pUrl, { headers: { 'Accept': 'application/json' } });
+      const res = await fetch(pUrl, { headers });
       if (res.ok) {
         const pData = await res.json();
         const arr = Array.isArray(pData) ? pData : (Array.isArray(pData?.workOrders) ? pData.workOrders : (Array.isArray(pData?.data?.workOrders) ? pData.data.workOrders : null));
@@ -1705,6 +1810,9 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
 
     // 2. Fallback: Gas Proxy / Direct GAS 'workorders'
     if (!fetchedSuccessfully) {
+      if (session?.isOfficeScoped || session?.officeName || session?.spreadsheetId) {
+        return [];
+      }
       try {
         const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET');
         if (data && Array.isArray(data.workOrders)) {
@@ -1806,12 +1914,12 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
         uniqueOrders.push(normalizedOrder);
       });
       if (!category || category === 'ALL') {
-        writeCache(WORK_ORDERS_STORAGE_KEY, sanitizeWorkOrdersForCache(uniqueOrders));
+        writeCache(getWorkOrdersCacheKey(), sanitizeWorkOrdersForCache(uniqueOrders));
       }
       return uniqueOrders;
     }
   } catch {}
-  const cached = readCache<WorkOrderNotice[]>(WORK_ORDERS_STORAGE_KEY, []);
+  const cached = readCache<WorkOrderNotice[]>(getWorkOrdersCacheKey(), []);
   if (category && category !== 'ALL') {
     const catUpper = category.toUpperCase().trim();
     return cached.filter(o => {
@@ -2131,7 +2239,7 @@ function purgeAllLocalDisconnectionCacheKeys() {
 
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
-    const raw = readCache<DisconnectionTask[]>(DISCONNECTION_TASKS_CACHE_KEY, []);
+    const raw = readCache<DisconnectionTask[]>(getDisconnectionCacheKey(), []);
     if (Array.isArray(raw) && raw.length > 0) {
       const valid = raw
         .filter((t: any) => isValidDisconnectionTaskOrRow(t))
@@ -2161,7 +2269,7 @@ export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
       }
       return clone;
     });
-    writeCache(DISCONNECTION_TASKS_CACHE_KEY, light);
+    writeCache(getDisconnectionCacheKey(), light);
   } catch {}
 }
 
@@ -2354,6 +2462,7 @@ export async function fetchDisconnectionTasks(params: {
   includeArchived?: boolean;
   refresh?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
+  const session = getActiveUserSessionSync();
   // Step 1: Call Backend API (/api/disconnection-tasks)
   try {
     const query = new URLSearchParams();
@@ -2365,9 +2474,14 @@ export async function fetchDisconnectionTasks(params: {
     if (params.includeArchived) query.set('includeArchived', 'true');
     if (params.refresh) query.set('refresh', 'true');
 
-    const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, {
-      headers: { 'Accept': 'application/json' }
-    });
+    if (session?.spreadsheetId) query.set('spreadsheetId', session.spreadsheetId);
+    if (session?.officeId) query.set('officeId', session.officeId);
+
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
+    if (session?.officeId) headers['x-office-id'] = session.officeId;
+
+    const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, { headers });
     const ct = res.headers.get('content-type') || '';
     if (res.ok && ct.includes('application/json')) {
       const data = await res.json();
@@ -2390,7 +2504,11 @@ export async function fetchDisconnectionTasks(params: {
 
   // Step 2: Direct Google Apps Script Web App fallback (works on static/serverless hosting)
   try {
-    const gasRes = await callGasApi<any>('entries', { category: 'Disconnection' }, 'GET', 25000);
+    const gasPayload: any = { category: 'Disconnection' };
+    if (session?.spreadsheetId) {
+      gasPayload.spreadsheetId = session.spreadsheetId;
+    }
+    const gasRes = await callGasApi<any>('getDisconnectionTasks', gasPayload, 'GET', 25000);
     const rawArr = Array.isArray(gasRes?.entries)
       ? gasRes.entries
       : Array.isArray(gasRes?.data?.entries)
@@ -3099,3 +3217,77 @@ export async function deleteDisconnectionTask(task: DisconnectionTask | { consum
     message: `Consumer #${consumerId || taskId} permanently deleted from Disconnection module and backend sheet.`
   };
 }
+
+export async function registerOfficeAccount(payload: {
+  officeName: string;
+  adminName: string;
+  adminMobile: string;
+  adminUserId: string;
+  adminPassword: string;
+  databaseName: string;
+  spreadsheetLink: string;
+  session?: any;
+}): Promise<{ success: boolean; data?: any; error?: string; message?: string; serviceAccountEmail?: string; spreadsheetId?: string; spreadsheetUrl?: string; needsOfficeSheetSharing?: boolean }> {
+  const resp = await nativeFetch('/api/superadmin/register-office', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await resp.json().catch(() => null);
+  if (!resp.ok || !result?.success) {
+    const err: any = new Error(result?.error || result?.message || `Registration failed with status ${resp.status}`);
+    if (result && typeof result === 'object') {
+      Object.assign(err, result);
+    }
+    throw err;
+  }
+  return result;
+}
+
+export async function fetchOfficeRegistryList(session?: any): Promise<{ success: boolean; offices: any[]; error?: string }> {
+  const resp = await nativeFetch('/api/superadmin/offices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session })
+  });
+  const result = await resp.json().catch(() => null);
+  if (!resp.ok || !result?.success) {
+    throw new Error(result?.error || 'Failed to fetch registered offices');
+  }
+  return result;
+}
+
+export async function checkOfficeRegistryStatus(): Promise<{ success: boolean; configured: boolean; message: string; spreadsheetId: string; keyValid?: boolean }> {
+  const resp = await nativeFetch('/api/superadmin/registry-status', {
+    method: 'GET'
+  });
+  const result = await resp.json().catch(() => null);
+  return result || { success: false, configured: false, message: 'Status endpoint unreachable', spreadsheetId: '' };
+}
+
+export async function configureServiceAccountKey(keyJson: string, session?: any): Promise<{ success: boolean; needsSharing?: boolean; message: string; email?: string; spreadsheetId?: string; spreadsheetUrl?: string }> {
+  const resp = await nativeFetch('/api/superadmin/configure-service-account', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyJson, session })
+  });
+  const result = await resp.json().catch(() => null);
+  if (!resp.ok && !result?.needsSharing) {
+    throw new Error(result?.error || result?.message || `Configuration failed with status ${resp.status}`);
+  }
+  return result;
+}
+
+export async function testRegistryConnection(session?: any): Promise<{ success: boolean; needsSharing?: boolean; message: string; email?: string; spreadsheetId?: string; spreadsheetUrl?: string }> {
+  const resp = await nativeFetch('/api/superadmin/test-registry-connection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session })
+  });
+  const result = await resp.json().catch(() => null);
+  if (!resp.ok && !result?.needsSharing) {
+    throw new Error(result?.error || result?.message || `Connection check failed with status ${resp.status}`);
+  }
+  return result;
+}
+

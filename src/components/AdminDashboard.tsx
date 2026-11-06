@@ -48,8 +48,7 @@ import {
   MessageSquareWarning,
   RotateCcw,
   XCircle,
-  Loader2,
-  Building2
+  Loader2
 } from 'lucide-react';
 import { PowerEntry, CategoryType, StatusType, SyncMode, DisconnectionTask } from '../types';
 import { updateEntry, deleteEntry, clearAllEntries, deleteDisconnectionTask, submitDisconnectionTaskReport } from '../services/api';
@@ -1005,38 +1004,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Admin Top Dashboard Bar */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-6 shadow-sm relative overflow-hidden">
-        <div className="absolute -top-24 -right-24 w-64 h-64 bg-gradient-to-br from-amber-400/10 via-sky-400/5 to-transparent rounded-full blur-2xl pointer-events-none" />
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4 relative">
+      {/* Admin Top Dashboard Bar - Clean White Executive Design */}
+      <div className="bg-white border border-slate-200/90 rounded-3xl p-4 sm:p-6 shadow-sm relative overflow-hidden text-slate-900">
+        {/* Subtle Ambient Background Glows */}
+        <div className="absolute -top-24 -right-24 w-80 h-80 bg-gradient-to-br from-amber-500/5 via-sky-500/5 to-transparent rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-80 h-80 bg-gradient-to-tr from-indigo-500/5 via-purple-500/5 to-transparent rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 relative z-10">
           <div className="flex items-center gap-3.5">
             <div className="relative shrink-0">
-              <div className="absolute -inset-0.5 bg-gradient-to-tr from-amber-500 via-yellow-400 to-orange-500 rounded-full opacity-80 blur-[1px]" />
               <img 
                 src={appLogo} 
                 alt="Power of Construction Round Logo" 
-                className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover shadow-md border-2 border-white p-0.5 bg-white shrink-0"
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
                 referrerPolicy="no-referrer"
               />
-              <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white shadow-xs" title="Live System Online" />
+              <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white shadow-sm" title="Live System Online" />
             </div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 text-amber-400 text-[10px] font-black uppercase tracking-widest shadow-2xs border border-slate-800">
-                  <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black uppercase tracking-widest shadow-2xs">
+                  <Sparkles className="w-2.5 h-2.5 text-amber-600" />
                   <span>WBSEDCL EXECUTIVE SUITE</span>
                 </span>
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/90 shadow-2xs">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Live Master Data</span>
+                  <span>Live Master Cloud</span>
                 </span>
               </div>
               <div className="flex items-baseline gap-2 flex-wrap">
                 <h1 className="text-xl sm:text-2xl font-black tracking-tight flex items-center gap-2 flex-wrap">
-                  <span className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-500 bg-clip-text text-transparent drop-shadow-2xs">
+                  <span className="text-amber-600 drop-shadow-2xs">
                     POWER
                   </span>
-                  <span className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 bg-clip-text text-transparent">
+                  <span className="text-slate-900 font-black">
                     Admin Control Panel
                   </span>
                 </h1>
@@ -1049,14 +1050,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap z-10">
             <button
               id="admin-refresh-btn"
               onClick={onRefresh}
-              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-slate-200 transition-all active:scale-95 cursor-pointer shadow-xs"
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-200 transition-all active:scale-95 cursor-pointer shadow-2xs"
               title="Refresh Data (তথ্য রিফ্রেশ করুন)"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
               <span>Refresh</span>
             </button>
 
@@ -1064,10 +1065,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 id="admin-language-btn"
                 onClick={onOpenLanguageModal}
-                className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-blue-200 transition-all cursor-pointer shadow-xs active:scale-95"
+                className="px-3.5 py-2 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-sky-200 transition-all cursor-pointer shadow-2xs active:scale-95"
                 title="Change Language"
               >
-                <Globe className="w-3.5 h-3.5 text-blue-600" />
+                <Globe className="w-3.5 h-3.5 text-sky-600" />
                 <span className="uppercase text-[11px] font-mono">{lang}</span>
               </button>
             )}
@@ -1076,7 +1077,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 id="admin-clear-all-btn"
                 onClick={handleClearAll}
-                className="px-2.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-rose-200 transition-colors cursor-pointer"
+                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-rose-200 transition-colors cursor-pointer"
                 title="Clear All Data (সকল ডাটা মুছুন)"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600" />
@@ -1088,10 +1089,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 id="admin-module-logout-btn"
                 onClick={onLogout}
-                className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200/80 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer"
+                className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs active:scale-95 cursor-pointer"
                 title="Logout from Admin Session"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-3.5 h-3.5 text-red-600" />
                 <span className="hidden sm:inline">Logout</span>
               </button>
             )}
@@ -1099,13 +1100,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* ORGANIZED ADMIN OPERATIONS & DATA CONTROL HUB (4 Bespoke Executive Modules) */}
-        <div className="mt-4 pt-3">
+        <div className="mt-4 pt-2 relative z-10">
           <div className="flex items-center justify-between mb-3.5">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center shadow-2xs">
-                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+              <div className="w-6 h-6 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center shadow-2xs">
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-800" />
               </div>
-              <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
+              <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-slate-800">
                 {lang === 'bn' ? 'অ্যাডমিন অপারেশন ও ডাটা কন্ট্রোল হাব' : 'Admin Operations & Data Control Hub'}
               </span>
             </div>
@@ -1122,9 +1123,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition-all cursor-pointer shadow-xs active:scale-95 ${
                   pendingReissueTasks.length > 0
-                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-500 shadow-purple-500/25 ring-2 ring-purple-300/60'
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-400 shadow-purple-500/20 ring-2 ring-purple-300 animate-pulse'
                     : showReissueRequestsPanel
-                      ? 'bg-purple-100 text-purple-900 border-purple-300'
+                      ? 'bg-purple-100 text-purple-900 border-purple-400'
                       : 'bg-purple-50 hover:bg-purple-100 text-purple-800 border-purple-200'
                 }`}
                 title="View Worker Reissue Requests (Approve or Reject)"
@@ -1134,15 +1135,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span
                   className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                     pendingReissueTasks.length > 0
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'bg-purple-200/80 text-purple-900'
+                      ? 'bg-amber-400 text-slate-950 font-mono'
+                      : 'bg-purple-200 text-purple-900 font-mono'
                   }`}
                 >
                   {pendingReissueTasks.length}
                 </span>
               </button>
 
-              <span className="text-[10px] text-slate-600 font-extrabold bg-slate-100/90 border border-slate-200/80 px-2.5 py-1 rounded-full hidden md:inline-flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-600 font-extrabold bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-full hidden md:inline-flex items-center gap-1.5">
                 <Activity className="w-3 h-3 text-amber-600" />
                 <span>{lang === 'bn' ? 'আইডি ভল্ট • ক্লাউড সিঙ্ক • এক্সেল রিপোর্ট • ওয়ার্ক অর্ডার' : 'ID Vault • Cloud Sync • Excel Export • Work Orders'}</span>
               </span>
@@ -1158,23 +1159,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 setUserModalTab('create');
                 setIsUserModalOpen(true);
               }}
-              className="text-left p-4 rounded-2xl border border-amber-200/90 bg-gradient-to-br from-amber-50/90 via-white to-orange-50/70 hover:shadow-lg hover:shadow-amber-500/10 hover:border-amber-400 transition-all cursor-pointer group relative overflow-hidden active:scale-[0.99] flex flex-col justify-between"
+              className="text-left p-4 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50/60 via-white to-amber-50/20 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group relative overflow-hidden active:scale-[0.99] flex flex-col justify-between"
               title="Create & manage worker or admin login IDs and passwords"
             >
-              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-amber-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-amber-400/10 group-hover:scale-150 transition-transform pointer-events-none" />
               <div>
                 <div className="flex items-center justify-between mb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm shadow-amber-500/20 flex items-center justify-center group-hover:scale-105 transition-transform">
-                    <Users className="w-4 h-4" />
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-slate-950 shadow-sm flex items-center justify-center group-hover:scale-110 transition-transform font-black">
+                    <Users className="w-4 h-4 text-slate-950" />
                   </div>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-amber-100/90 text-amber-900 border-amber-300 flex items-center gap-1 shadow-2xs">
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-amber-100 text-amber-900 border-amber-300 flex items-center gap-1 shadow-2xs">
                     <KeyRound className="w-2.5 h-2.5 text-amber-700" />
                     <span>{lang === 'bn' ? 'আইডি ও পিন' : 'Manage IDs'}</span>
                   </span>
                 </div>
 
                 <div className="mt-1">
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-amber-700/80 truncate">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-amber-700 truncate">
                     {lang === 'bn' ? '01 • আইডেন্টিটি ও অ্যাক্সেস ভল্ট' : '01 • IDENTITY & ACCESS VAULT'}
                   </p>
                   <div className="flex items-center justify-between gap-1.5 mt-0.5">
@@ -1195,15 +1196,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             {/* 2. Google Sheets Live Cloud Backend */}
-            <div className="text-left p-4 rounded-2xl border border-sky-200/90 bg-gradient-to-br from-sky-50/90 via-white to-blue-50/70 hover:shadow-lg hover:shadow-sky-500/10 hover:border-sky-400 transition-all group relative overflow-hidden flex flex-col justify-between">
-              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-sky-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+            <div className="text-left p-4 rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50/60 via-white to-sky-50/20 hover:border-sky-400 hover:shadow-md transition-all group relative overflow-hidden flex flex-col justify-between">
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-sky-400/10 group-hover:scale-150 transition-transform pointer-events-none" />
               <div>
                 <div className="flex items-center justify-between mb-2.5">
                   <button
                     type="button"
                     onClick={handleSyncToGoogleSheets}
                     disabled={isSyncingSheets}
-                    className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-sm shadow-sky-500/20 flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                    className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-sm flex items-center justify-center group-hover:scale-110 transition-transform cursor-pointer"
                     title="Sync with Google Sheets"
                   >
                     <RefreshCw className={`w-4 h-4 ${isSyncingSheets ? 'animate-spin' : ''}`} />
@@ -1214,14 +1215,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100/90 hover:bg-sky-200 text-sky-900 border-sky-300 flex items-center gap-1 transition-colors shadow-2xs"
+                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100 hover:bg-sky-200 text-sky-900 border-sky-300 flex items-center gap-1 transition-colors shadow-2xs"
                       title="Open Live Google Sheet Spreadsheet"
                     >
                       <span>{lang === 'bn' ? 'শীট খুলুন' : 'Open Sheet'}</span>
-                      <ExternalLink className="w-2.5 h-2.5" />
+                      <ExternalLink className="w-2.5 h-2.5 text-sky-600" />
                     </a>
                   ) : (
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100/90 text-sky-900 border-sky-300 flex items-center gap-1">
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-sky-100 text-sky-900 border-sky-300 flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       <span>Cloud Live</span>
                     </span>
@@ -1236,7 +1237,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="w-full text-left mt-1 cursor-pointer disabled:opacity-60"
                   title="Google Sheets-এ সম্পূর্ণ ডাটাবেস লাইভ ব্যাকআপ ও সেভ করুন"
                 >
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-sky-700/80 truncate">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-sky-700 truncate">
                     {lang === 'bn' ? '02 • গুগল শীটস ক্লাউড ইঞ্জিন' : '02 • GOOGLE SHEETS CLOUD'}
                   </p>
                   <div className="flex items-center justify-between gap-1.5 mt-0.5">
@@ -1258,14 +1259,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* 3. Category Excel Export & Reports */}
             <div className="relative">
-              <div className="w-full h-full text-left p-4 rounded-2xl border border-emerald-200/90 bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/70 hover:shadow-lg hover:shadow-emerald-500/10 hover:border-emerald-400 transition-all group relative overflow-hidden flex flex-col justify-between">
-                <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-emerald-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+              <div className="w-full h-full text-left p-4 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 via-white to-emerald-50/20 hover:border-emerald-400 hover:shadow-md transition-all group relative overflow-hidden flex flex-col justify-between">
+                <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-emerald-400/10 group-hover:scale-150 transition-transform pointer-events-none" />
                 <div>
                   <div className="flex items-center justify-between mb-2.5">
                     <button
                       type="button"
                       onClick={() => handleExportCategoryExcel(selectedCategory)}
-                      className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm shadow-emerald-500/20 flex items-center justify-center group-hover:scale-105 transition-transform cursor-pointer"
+                      className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm flex items-center justify-center group-hover:scale-110 transition-transform cursor-pointer"
                       title="Download Excel / CSV"
                     >
                       <FileSpreadsheet className="w-4 h-4" />
@@ -1273,11 +1274,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowExportMenu(!showExportMenu)}
-                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-emerald-100/90 hover:bg-emerald-200 text-emerald-900 border-emerald-300 flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                      className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-300 flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
                       title="Choose Category to Export"
                     >
                       <span>{selectedCategory === 'ALL' ? `${total} All` : selectedCategory}</span>
-                      <ChevronDown className="w-3 h-3" />
+                      <ChevronDown className="w-3 h-3 text-emerald-700" />
                     </button>
                   </div>
 
@@ -1288,7 +1289,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="w-full text-left mt-1 cursor-pointer"
                     title={`Download ${selectedCategory === 'ALL' ? 'All' : selectedCategory} Excel / CSV Report`}
                   >
-                    <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700/80 truncate">
+                    <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 truncate">
                       {lang === 'bn' ? '03 • এক্সেল ও CSV রিপোর্ট' : '03 • EXCEL & CSV EXPORT'}
                     </p>
                     <div className="flex items-center justify-between gap-1.5 mt-0.5">
@@ -1311,16 +1312,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* Category Export Dropdown */}
               {showExportMenu && (
                 <div 
-                  className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in"
+                  className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in text-slate-900"
                   onClick={() => setShowExportMenu(false)}
                 >
-                  <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100">
+                  <div className="px-2.5 py-1 text-[10px] font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100">
                     {lang === 'bn' ? 'ক্যাটাগরি ভিত্তিক এক্সেল ডাউনলোড' : 'Category-Specific Excel Export'}
                   </div>
                   
                   <button
                     onClick={() => handleExportCategoryExcel('NSC')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-700 hover:text-amber-800 flex items-center justify-between cursor-pointer transition-colors"
                   >
                     <span className="flex items-center gap-1.5 text-amber-700">
                       <Zap className="w-3.5 h-3.5" />
@@ -1331,7 +1332,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => handleExportCategoryExcel('DISCONNECTION')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-rose-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-rose-50 text-xs font-bold text-slate-700 hover:text-rose-800 flex items-center justify-between cursor-pointer transition-colors"
                   >
                     <span className="text-rose-700">2. Disconnection Only ({discCount})</span>
                     <Download className="w-3 h-3 text-slate-400" />
@@ -1339,7 +1340,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => handleExportCategoryExcel('POLE CASE')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-sky-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-sky-50 text-xs font-bold text-slate-700 hover:text-sky-800 flex items-center justify-between cursor-pointer transition-colors"
                   >
                     <span className="text-sky-700">3. Pole Case Only ({poleCount})</span>
                     <Download className="w-3 h-3 text-slate-400" />
@@ -1347,7 +1348,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => handleExportCategoryExcel('METER REPLESMENT')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-emerald-50 text-xs font-bold text-slate-700 hover:text-emerald-800 flex items-center justify-between cursor-pointer transition-colors"
                   >
                     <span className="text-emerald-700">4. Meter Replacement ({meterCount})</span>
                     <Download className="w-3 h-3 text-slate-400" />
@@ -1355,7 +1356,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => handleExportCategoryExcel('DTR REPLESMENT')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-xs font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-700 hover:text-indigo-800 flex items-center justify-between cursor-pointer transition-colors"
                   >
                     <span className="text-indigo-700">5. DTR Replacement ({dtrCount})</span>
                     <Download className="w-3 h-3 text-slate-400" />
@@ -1365,10 +1366,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => handleExportCategoryExcel('ALL')}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold flex items-center justify-between hover:bg-slate-800 cursor-pointer"
+                    className="w-full text-left px-2.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 text-xs font-black flex items-center justify-between shadow-xs cursor-pointer"
                   >
                     <span>Download All 5 Categories ({total})</span>
-                    <Download className="w-3 h-3 text-emerald-400" />
+                    <Download className="w-3 h-3 text-slate-950" />
                   </button>
                 </div>
               )}
@@ -1381,24 +1382,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
               className={`text-left p-4 rounded-2xl border transition-all cursor-pointer group relative overflow-hidden active:scale-[0.99] flex flex-col justify-between ${
                 showWorkOrdersManager
-                  ? 'border-indigo-500 bg-gradient-to-br from-indigo-100 via-indigo-50 to-purple-50 ring-2 ring-indigo-400/70 shadow-lg'
-                  : 'border-indigo-200/90 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/70 hover:shadow-lg hover:shadow-indigo-500/10 hover:border-indigo-400'
+                  ? 'border-indigo-400 bg-gradient-to-br from-indigo-100 via-white to-indigo-50 ring-2 ring-indigo-400/50 shadow-md'
+                  : 'border-indigo-200 bg-gradient-to-br from-indigo-50/60 via-white to-indigo-50/20 hover:border-indigo-400 hover:shadow-md'
               }`}
               title="Upload and manage NSC Work Orders and Khata Slips for field workers"
             >
-              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-indigo-400/10 group-hover:scale-125 transition-transform pointer-events-none" />
+              <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-indigo-400/10 group-hover:scale-150 transition-transform pointer-events-none" />
               <div>
                 <div className="flex items-center justify-between mb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm shadow-indigo-500/20 flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm flex items-center justify-center group-hover:scale-110 transition-transform">
                     <FileImage className="w-4 h-4" />
                   </div>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-indigo-100/90 text-indigo-900 border-indigo-300 shadow-2xs">
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-indigo-100 text-indigo-900 border-indigo-300 shadow-2xs">
                     {showWorkOrdersManager ? (lang === 'bn' ? 'খোলা আছে' : 'Active View') : (lang === 'bn' ? 'নোটিশ বোর্ড' : 'Dispatch Hub')}
                   </span>
                 </div>
 
                 <div className="mt-1">
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700/80 truncate">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700 truncate">
                     {lang === 'bn' ? '04 • ওয়ার্ক অর্ডার ও খাতা' : '04 • NSC WORK ORDERS'}
                   </p>
                   <div className="flex items-center justify-between gap-1.5 mt-0.5">
@@ -1422,7 +1423,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Google Sheets Sync Success Alert */}
         {sheetsSyncMessage && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-xs text-emerald-800 font-bold">
+          <div className="mt-3.5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-900 font-bold shadow-xs relative z-10">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>{sheetsSyncMessage}</span>
@@ -1432,176 +1433,182 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 href={currentSheetUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline text-emerald-700 hover:text-emerald-900 flex items-center gap-1"
+                className="underline text-emerald-700 hover:text-emerald-950 flex items-center gap-1 font-bold"
               >
                 <span>{lang === 'bn' ? 'Google Sheet ওপেন করুন' : 'Open in Google Sheets'}</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
               </a>
             )}
           </div>
         )}
 
-        {/* 5 Requested Category Metric Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 mt-4">
+        {/* 6 Category Metric Cards - Clean White Background */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 mt-4 relative z-10">
+          {/* Card: ALL */}
           <div 
             onClick={() => {
               setSelectedCategory('ALL');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'ALL'
-                ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-800 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-slate-300'
+                ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 text-white border-amber-400 shadow-md ring-2 ring-amber-400/40 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-800 shadow-2xs'
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className={`text-[11px] font-bold uppercase ${selectedCategory === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>Total Entries</span>
+              <span className={`text-[11px] font-extrabold uppercase tracking-wider ${selectedCategory === 'ALL' ? 'text-amber-300' : 'text-slate-500'}`}>Total Entries</span>
               <Layers className={`w-3.5 h-3.5 ${selectedCategory === 'ALL' ? 'text-amber-400' : 'text-slate-400'}`} />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'ALL' ? 'text-amber-400' : 'text-slate-900'}`}>{total}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'ALL' ? 'text-amber-400' : 'text-slate-900'}`}>{total}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>All 5 Categories</span>
+              <span className={`text-[10px] ${selectedCategory === 'ALL' ? 'text-slate-300 font-semibold' : 'text-slate-500'}`}>All 5 Categories</span>
               {selectedCategory === 'ALL' && (
-                <span className="text-[9px] bg-amber-400 text-slate-950 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
 
+          {/* Card: NSC */}
           <div 
             onClick={() => {
               setSelectedCategory('NSC');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'NSC'
-                ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-amber-300'
+                ? 'bg-gradient-to-br from-amber-500 to-amber-600 text-slate-950 border-amber-300 shadow-md ring-2 ring-amber-300 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-amber-50/50 hover:border-amber-300 text-slate-800 shadow-2xs'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-amber-700'}`}>
+            <div className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center justify-between ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-amber-700'}`}>
               <span>1. NSC</span>
               <Zap className="w-3.5 h-3.5 fill-current" />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-slate-900'}`}>{nscCount}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'NSC' ? 'text-slate-950' : 'text-slate-900'}`}>{nscCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'NSC' ? 'text-slate-900 font-semibold' : 'text-slate-500'}`}>New Connection</span>
+              <span className={`text-[10px] ${selectedCategory === 'NSC' ? 'text-slate-950 font-bold' : 'text-slate-500'}`}>New Connection</span>
               {selectedCategory === 'NSC' && (
-                <span className="text-[9px] bg-slate-950 text-amber-400 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-slate-950 text-amber-400 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
 
+          {/* Card: DISCONNECTION */}
           <div 
             onClick={() => {
               setSelectedCategory('DISCONNECTION');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'DISCONNECTION'
-                ? 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-400 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-rose-300'
+                ? 'bg-gradient-to-br from-rose-600 to-rose-700 text-white border-rose-300 shadow-md ring-2 ring-rose-400 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-rose-50/50 hover:border-rose-300 text-slate-800 shadow-2xs'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-700'}`}>
+            <div className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center justify-between ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-700'}`}>
               <span>2. DISCONNECT</span>
               <PowerOff className="w-3.5 h-3.5" />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'DISCONNECTION' ? 'text-white' : 'text-slate-900'}`}>{discCount}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'DISCONNECTION' ? 'text-white' : 'text-slate-900'}`}>{discCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] font-bold ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-700'}`}>
+              <span className={`text-[10px] font-bold ${selectedCategory === 'DISCONNECTION' ? 'text-rose-100' : 'text-rose-600'}`}>
                 {lang === 'bn' ? `মোট লিস্ট: ${discCount}` : `Total List: ${discCount}`}
               </span>
               {selectedCategory === 'DISCONNECTION' && (
-                <span className="text-[9px] bg-white text-rose-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-white text-rose-700 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
 
+          {/* Card: POLE CASE */}
           <div 
             onClick={() => {
               setSelectedCategory('POLE CASE');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'POLE CASE'
-                ? 'bg-sky-600 text-white border-sky-600 shadow-md ring-2 ring-sky-400 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-sky-300'
+                ? 'bg-gradient-to-br from-sky-600 to-cyan-600 text-white border-sky-300 shadow-md ring-2 ring-sky-300 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-sky-50/50 hover:border-sky-300 text-slate-800 shadow-2xs'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'POLE CASE' ? 'text-sky-100' : 'text-sky-700'}`}>
+            <div className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center justify-between ${selectedCategory === 'POLE CASE' ? 'text-sky-100' : 'text-sky-700'}`}>
               <span>3. POLE CASE</span>
               <ShieldAlert className="w-3.5 h-3.5" />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'POLE CASE' ? 'text-white' : 'text-slate-900'}`}>{poleCount}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'POLE CASE' ? 'text-white' : 'text-slate-900'}`}>{poleCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'POLE CASE' ? 'text-sky-100 font-semibold' : 'text-slate-500'}`}>Poles & Lines</span>
+              <span className={`text-[10px] ${selectedCategory === 'POLE CASE' ? 'text-sky-100 font-bold' : 'text-slate-500'}`}>Poles & Lines</span>
               {selectedCategory === 'POLE CASE' && (
-                <span className="text-[9px] bg-white text-sky-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-white text-sky-700 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
 
+          {/* Card: METER REPLESMENT */}
           <div 
             onClick={() => {
               setSelectedCategory('METER REPLESMENT');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'METER REPLESMENT'
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-emerald-300'
+                ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white border-emerald-300 shadow-md ring-2 ring-emerald-300 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-emerald-50/50 hover:border-emerald-300 text-slate-800 shadow-2xs'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100' : 'text-emerald-700'}`}>
+            <div className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center justify-between ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100' : 'text-emerald-700'}`}>
               <span>4. METER REP.</span>
               <RefreshCw className="w-3.5 h-3.5" />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'METER REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{meterCount}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'METER REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{meterCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100 font-semibold' : 'text-slate-500'}`}>Replacement</span>
+              <span className={`text-[10px] ${selectedCategory === 'METER REPLESMENT' ? 'text-emerald-100 font-bold' : 'text-slate-500'}`}>Replacement</span>
               {selectedCategory === 'METER REPLESMENT' && (
-                <span className="text-[9px] bg-white text-emerald-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-white text-emerald-700 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
 
+          {/* Card: DTR REPLESMENT */}
           <div 
             onClick={() => {
               setSelectedCategory('DTR REPLESMENT');
               document.getElementById('admin-category-data-view')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
+            className={`p-3.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.98] relative overflow-hidden ${
               selectedCategory === 'DTR REPLESMENT'
-                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-400 scale-[1.02]'
-                : 'bg-slate-50/80 border-slate-200 hover:bg-white hover:border-indigo-300'
+                ? 'bg-gradient-to-br from-indigo-600 to-violet-600 text-white border-indigo-300 shadow-md ring-2 ring-indigo-300 scale-[1.02]'
+                : 'bg-white border-slate-200 hover:bg-indigo-50/50 hover:border-indigo-300 text-slate-800 shadow-2xs'
             }`}
           >
-            <div className={`text-[11px] font-bold uppercase flex items-center justify-between ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100' : 'text-indigo-700'}`}>
+            <div className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center justify-between ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100' : 'text-indigo-700'}`}>
               <span>5. DTR REP.</span>
               <Activity className="w-3.5 h-3.5" />
             </div>
-            <div className={`text-xl sm:text-2xl font-black mt-1 ${selectedCategory === 'DTR REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{dtrCount}</div>
+            <div className={`text-2xl sm:text-3xl font-black font-mono tabular-nums mt-1 tracking-tight ${selectedCategory === 'DTR REPLESMENT' ? 'text-white' : 'text-slate-900'}`}>{dtrCount}</div>
             <div className="flex items-center justify-between mt-1">
-              <span className={`text-[10px] ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100 font-semibold' : 'text-slate-500'}`}>Transformer</span>
+              <span className={`text-[10px] ${selectedCategory === 'DTR REPLESMENT' ? 'text-indigo-100 font-bold' : 'text-slate-500'}`}>Transformer</span>
               {selectedCategory === 'DTR REPLESMENT' && (
-                <span className="text-[9px] bg-white text-indigo-700 font-bold px-1.5 py-0.2 rounded">Active</span>
+                <span className="text-[9px] bg-white text-indigo-700 font-black px-1.5 py-0.2 rounded shadow-xs">ACTIVE</span>
               )}
             </div>
           </div>
         </div>
 
-        {/* DISCONNECTION MANAGEMENT COMPACT 4-OPTION BAR (Matching 1. NSC / 2. DISCONNECT / 3. POLE CASE style) */}
-        <div className="mt-3 pt-3 border-t border-slate-100">
+        {/* DISCONNECTION MANAGEMENT COMPACT 4-OPTION BAR */}
+        <div className="mt-4 pt-3.5 border-t border-slate-100 relative z-10">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+            <span className="text-[10px] font-black uppercase tracking-wider text-rose-700 flex items-center gap-1.5">
               <PowerOff className="w-3 h-3 text-rose-600" />
               <span>Disconnection Management Quick Options</span>
             </span>
-            <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+            <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">
               Total List: {discCount}
             </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="admin-disconnection-quick-options">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5" id="admin-disconnection-quick-options">
             <button
               type="button"
               onClick={() => {
@@ -1611,60 +1618,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setSelectedCategory('DISCONNECTION');
                 }
               }}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-amber-50 hover:border-amber-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+              className="p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-amber-300 transition-all text-left cursor-pointer active:scale-[0.98] group shadow-2xs"
             >
-              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-amber-700">
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-amber-700 group-hover:text-amber-800">
                 <span className="truncate">1. PERFORMANCE DASHBOARD</span>
                 <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
               </div>
               <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
                 <span>Live Deck & Paid/Discon</span>
-                <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">Open</span>
+                <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded">Open</span>
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('UPLOAD')}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-indigo-50 hover:border-indigo-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+              className="p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-indigo-300 transition-all text-left cursor-pointer active:scale-[0.98] group shadow-2xs"
             >
-              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-indigo-700">
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-indigo-700 group-hover:text-indigo-800">
                 <span className="truncate">2. UPLOAD LIST</span>
                 <UploadCloud className="w-3.5 h-3.5 shrink-0" />
               </div>
               <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
                 <span>Excel / CSV to Sheet</span>
-                <span className="text-[9px] bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.2 rounded">Upload</span>
+                <span className="text-[9px] bg-indigo-100 text-indigo-900 border border-indigo-300 font-bold px-1.5 py-0.2 rounded">Upload</span>
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('REPORT')}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-emerald-50 hover:border-emerald-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+              className="p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-emerald-300 transition-all text-left cursor-pointer active:scale-[0.98] group shadow-2xs"
             >
-              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-emerald-700">
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-emerald-700 group-hover:text-emerald-800">
                 <span className="truncate">3. WORKER-WISE REPORT</span>
                 <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
               </div>
               <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
                 <span>Worker & Agency Stats</span>
-                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">Report</span>
+                <span className="text-[9px] bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold px-1.5 py-0.2 rounded">Report</span>
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => onNavigateToDisconnection && onNavigateToDisconnection('VIEW_LIST')}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-rose-50 hover:border-rose-300 transition-all text-left cursor-pointer active:scale-[0.98]"
+              className="p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-rose-300 transition-all text-left cursor-pointer active:scale-[0.98] group shadow-2xs"
             >
-              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-rose-700">
+              <div className="text-[10px] sm:text-[11px] font-black uppercase flex items-center justify-between text-rose-700 group-hover:text-rose-800">
                 <span className="truncate">4. VIEW LIST</span>
                 <Users className="w-3.5 h-3.5 shrink-0" />
               </div>
               <div className="text-[10px] text-slate-500 font-semibold mt-1 flex items-center justify-between">
                 <span>All Consumers</span>
-                <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.2 rounded">{discCount}</span>
+                <span className="text-[9px] bg-rose-100 text-rose-900 border border-rose-300 font-mono font-bold px-1.5 py-0.2 rounded">{discCount}</span>
               </div>
             </button>
           </div>
@@ -1674,23 +1681,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {(showReissueRequestsPanel || pendingReissueTasks.length > 0) && (
           <div
             id="admin-reissue-requests-inbox"
-            className="mt-3.5 bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-2 border-purple-500/70 rounded-2xl p-4 shadow-lg space-y-3 animate-in fade-in duration-200"
+            className="mt-3.5 bg-gradient-to-br from-purple-50/90 via-white to-indigo-50/80 border-2 border-purple-300 rounded-2xl p-4 shadow-sm space-y-3 animate-in fade-in duration-200 text-slate-900"
           >
-            <div className="flex items-center justify-between gap-2 border-b border-purple-500/30 pb-2.5">
+            <div className="flex items-center justify-between gap-2 border-b border-purple-100 pb-2.5">
               <div className="flex items-center gap-2.5">
-                <span className="p-2 rounded-xl bg-purple-500/20 border border-purple-400/40 text-amber-300">
+                <span className="p-2 rounded-xl bg-purple-100 border border-purple-300 text-purple-800">
                   <MessageSquareWarning className="w-4 h-4" />
                 </span>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="text-xs sm:text-sm font-black text-white tracking-wide">
+                    <h4 className="text-xs sm:text-sm font-black text-slate-900 tracking-wide">
                       📩 Reissue Request's ({pendingReissueTasks.length} Pending)
                     </h4>
-                    <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-[10px] font-black text-amber-300">
+                    <span className="px-2 py-0.5 rounded-full bg-purple-100 border border-purple-300 text-[10px] font-black text-purple-900">
                       SMS INBOX
                     </span>
                   </div>
-                  <p className="text-[11px] font-medium text-purple-200 mt-0.5">
+                  <p className="text-[11px] font-medium text-slate-600 mt-0.5">
                     {lang === 'bn'
                       ? 'কোনো ওয়ার্কার Reissue ক্লিক করলে এখানে SMS আকারে দেখা যাবে — Approve করলে ওয়ার্কার আবার Update Status করতে পারবে, আর Reject করলে ওয়ার্কার দেখতে পাবে "Your Reissue Request Rejected"।'
                       : 'Approve to allow the worker to Update Status again, or Reject to notify "Your Reissue Request Rejected".'}
@@ -1702,7 +1709,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowReissueRequestsPanel(false)}
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white cursor-pointer"
+                  className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 cursor-pointer"
                   title="Close Reissue Request's Panel"
                 >
                   <X className="w-4 h-4" />
@@ -1711,13 +1718,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {pendingReissueTasks.length === 0 ? (
-              <div className="bg-slate-900/80 border border-purple-500/30 rounded-xl p-4 text-center space-y-1">
-                <p className="text-xs font-bold text-purple-200">
+              <div className="bg-white border border-purple-200 rounded-xl p-4 text-center space-y-1 shadow-2xs">
+                <p className="text-xs font-bold text-purple-900">
                   {lang === 'bn'
                     ? 'এই মুহূর্তে কোনো নতুন Reissue Request পেন্ডিং নেই।'
                     : 'No pending Reissue SMS requests right now.'}
                 </p>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-500">
                   {lang === 'bn'
                     ? 'কোনো ফিল্ড ওয়ার্কার ডিসকানেকশন লিস্ট থেকে "Reissue" বাটনে ক্লিক করার সাথে সাথে এখানে SMS চলে আসবে।'
                     : 'Whenever a worker clicks "Reissue" on a consumer card, their SMS request will appear here immediately.'}
@@ -1734,26 +1741,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   return (
                     <div
                       key={`${cId}-${rIdx}`}
-                      className="bg-slate-900/95 border border-purple-400/40 rounded-xl p-3 flex flex-col justify-between gap-2.5 shadow-sm"
+                      className="bg-white border border-purple-200 rounded-xl p-3 flex flex-col justify-between gap-2.5 shadow-xs"
                     >
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-0.5 rounded-md bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase">
+                            <span className="px-2 py-0.5 rounded-md bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black uppercase">
                               📩 {workerDisplay}
                             </span>
                             <span className="text-[10px] text-slate-400 font-semibold">• {lockInfo.requestedAt}</span>
                           </div>
-                          <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-950/80 px-2 py-0.5 rounded border border-purple-500/30">
+                          <span className="text-[10px] font-mono font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
                             ID: #{cId}
                           </span>
                         </div>
 
-                        <p className="text-xs sm:text-sm font-black text-white truncate">
+                        <p className="text-xs sm:text-sm font-black text-slate-900 truncate">
                           {rt.consumerName || (rt as any)['Name'] || 'Consumer'}
                         </p>
 
-                        <div className="bg-purple-950/60 border border-purple-500/30 rounded-lg px-2.5 py-1.5 text-[11px] text-purple-100 italic">
+                        <div className="bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-1.5 text-[11px] text-purple-900 italic">
                           {lang === 'bn'
                             ? `"স্যার, কনজিউমার #${cId} (বর্তমান স্ট্যাটাস: ${rt.disconStatus || rt.taskStatus}) পুনরায় আপডেট করার জন্য Reissue অনুমোদন দিন।"`
                             : `"Sir, please approve Reissue for Consumer #${cId} (Current Status: ${rt.disconStatus || rt.taskStatus}) so I can update status again."`}
@@ -1841,24 +1848,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* DEDICATED CATEGORY DATA SECTION CONTAINER */}
       <div id="admin-category-data-view" className="space-y-4 pt-2">
-        {/* Dynamic Category Hero Banner */}
-        <div className={`p-3.5 sm:p-4 rounded-2xl border transition-all shadow-sm ${
-          selectedCategory === 'NSC' ? 'bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-amber-300' :
-          selectedCategory === 'DISCONNECTION' ? 'bg-gradient-to-r from-rose-500/10 via-rose-500/5 to-transparent border-rose-300' :
-          selectedCategory === 'POLE CASE' ? 'bg-gradient-to-r from-sky-500/10 via-sky-500/5 to-transparent border-sky-300' :
-          selectedCategory === 'METER REPLESMENT' ? 'bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border-emerald-300' :
-          selectedCategory === 'DTR REPLESMENT' ? 'bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-transparent border-indigo-300' :
-          'bg-gradient-to-r from-slate-900/10 via-slate-900/5 to-transparent border-slate-300'
+        {/* Dynamic Category Hero Banner - Executive Styling */}
+        <div className={`p-4 sm:p-5 rounded-3xl border transition-all shadow-md relative overflow-hidden ${
+          selectedCategory === 'NSC' ? 'bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-white border-amber-300' :
+          selectedCategory === 'DISCONNECTION' ? 'bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-white border-rose-300' :
+          selectedCategory === 'POLE CASE' ? 'bg-gradient-to-r from-sky-500/15 via-sky-500/5 to-white border-sky-300' :
+          selectedCategory === 'METER REPLESMENT' ? 'bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-white border-emerald-300' :
+          selectedCategory === 'DTR REPLESMENT' ? 'bg-gradient-to-r from-indigo-500/15 via-indigo-500/5 to-white border-indigo-300' :
+          'bg-gradient-to-r from-slate-900/10 via-slate-900/5 to-white border-slate-300'
         }`}>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
-                selectedCategory === 'NSC' ? 'bg-amber-500 text-slate-950' :
-                selectedCategory === 'DISCONNECTION' ? 'bg-rose-600 text-white' :
-                selectedCategory === 'POLE CASE' ? 'bg-sky-600 text-white' :
-                selectedCategory === 'METER REPLESMENT' ? 'bg-emerald-600 text-white' :
-                selectedCategory === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white' :
-                'bg-slate-900 text-white'
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 relative z-10">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-white shadow-md shrink-0 ${
+                selectedCategory === 'NSC' ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/30' :
+                selectedCategory === 'DISCONNECTION' ? 'bg-gradient-to-br from-rose-600 to-rose-700 text-white shadow-rose-600/30' :
+                selectedCategory === 'POLE CASE' ? 'bg-gradient-to-br from-sky-600 to-cyan-600 text-white shadow-sky-600/30' :
+                selectedCategory === 'METER REPLESMENT' ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-emerald-600/30' :
+                selectedCategory === 'DTR REPLESMENT' ? 'bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-indigo-600/30' :
+                'bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 shadow-slate-900/30'
               }`}>
                 {selectedCategory === 'NSC' && <Zap className="w-5 h-5 fill-current" />}
                 {selectedCategory === 'DISCONNECTION' && <PowerOff className="w-5 h-5" />}
@@ -1878,7 +1885,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {selectedCategory === 'DTR REPLESMENT' && (lang === 'bn' ? '⚡ DTR REPLACEMENT — ট্রান্সফরমার পরিবর্তন ও মেরামত ডাটা' : '⚡ DTR REPLACEMENT — Distribution Transformer Data')}
                     {selectedCategory === 'ALL' && (lang === 'bn' ? '📋 MASTER OVERVIEW — সমস্ত ৫টি ক্যাটাগরির মাস্টার ডাটা' : '📋 MASTER OVERVIEW — All 5 Categories Master Data')}
                   </h2>
-                  <span className={`text-xs font-black px-2.5 py-0.5 rounded-full border shadow-xs ${
+                  <span className={`text-xs font-black font-mono px-2.5 py-0.5 rounded-full border shadow-xs ${
                     selectedCategory === 'NSC' ? 'bg-amber-100 text-amber-900 border-amber-300' :
                     selectedCategory === 'DISCONNECTION' ? 'bg-rose-100 text-rose-900 border-rose-300' :
                     selectedCategory === 'POLE CASE' ? 'bg-sky-100 text-sky-900 border-sky-300' :
@@ -1889,7 +1896,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {selectedCategory === 'DISCONNECTION' ? `${discCount} Total List` : `${filteredEntries.length} Records Found`}
                   </span>
                 </div>
-                <p className="text-xs text-slate-600 mt-0.5">
+                <p className="text-xs text-slate-600 mt-0.5 font-medium">
                   {selectedCategory === 'NSC' && (lang === 'bn' ? 'ওয়ার্ক অর্ডার, কনজিউমার নাম, মোবাইল, মিটার নম্বর, সিকিউরিটি সিল, লোড, ফেজ ও খাতার ফটোর লাইভ রেকর্ড' : 'Live records of work orders, consumers, meter & seal numbers, loads, phases, and khata slips')}
                   {selectedCategory === 'DISCONNECTION' && (lang === 'bn' ? 'কনজিউমার আইডি, মোট বকেয়া টাকা (Arrears), ডিসকানেকশনের কারণ, ফাইনাল রিডিং ও পোল রেকর্ডের লাইভ ডাটা' : 'Live records of consumer IDs, arrear amounts, disconnection reasons, and final meter readings')}
                   {selectedCategory === 'POLE CASE' && (lang === 'bn' ? 'পোল নম্বর, ত্রুটির ধরন, প্রায়োরিটি, লাইনে কাজ ও ব্যবহৃত উপাদানের লাইভ ডাটা' : 'Live records of pole numbers, fault types, breakdown priority, and repair materials used')}
@@ -1904,7 +1911,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
               <button
                 onClick={() => handleExportCategoryExcel(selectedCategory)}
-                className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
                 title={`Export ${selectedCategory} Data to Excel / CSV`}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
@@ -1914,7 +1921,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {selectedCategory === 'NSC' && (
                 <button
                   onClick={() => setShowWorkOrdersManager(!showWorkOrdersManager)}
-                  className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
                   title="Upload or Manage NSC Work Orders & Khata Slips"
                 >
                   <FileImage className="w-3.5 h-3.5" />
@@ -1926,7 +1933,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   id="admin-open-disconnection-btn"
                   onClick={() => onNavigateToDisconnection('VIEW_LIST')}
-                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
                   title="Open Full Disconnection Management"
                 >
                   <PowerOff className="w-3.5 h-3.5" />
@@ -1963,11 +1970,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           />
         )}
 
-        {/* Filter and Search Controls Bar */}
-        <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
+        {/* Filter and Search Controls Bar - Elevated Executive Design */}
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col md:flex-row gap-3 items-center justify-between">
           {/* Quick Option Pill Switcher */}
           <div className="flex items-center gap-1.5 flex-wrap w-full md:w-auto">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider hidden sm:inline mr-1">
+            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider hidden sm:inline mr-1">
               Select Option:
             </span>
             {[
@@ -1981,20 +1988,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 key={tab.id}
                 onClick={() => setSelectedCategory(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                   selectedCategory === tab.id
-                    ? tab.id === 'NSC' ? 'bg-amber-500 text-slate-950 shadow-xs ring-1 ring-amber-400' :
-                      tab.id === 'DISCONNECTION' ? 'bg-rose-600 text-white shadow-xs' :
-                      tab.id === 'POLE CASE' ? 'bg-sky-600 text-white shadow-xs' :
-                      tab.id === 'METER REPLESMENT' ? 'bg-emerald-600 text-white shadow-xs' :
-                      tab.id === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white shadow-xs' :
-                      'bg-slate-900 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                    ? tab.id === 'NSC' ? 'bg-amber-500 text-slate-950 shadow-sm ring-2 ring-amber-400/80 font-black' :
+                      tab.id === 'DISCONNECTION' ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-400/80 font-black' :
+                      tab.id === 'POLE CASE' ? 'bg-sky-600 text-white shadow-sm ring-2 ring-sky-400/80 font-black' :
+                      tab.id === 'METER REPLESMENT' ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400/80 font-black' :
+                      tab.id === 'DTR REPLESMENT' ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/80 font-black' :
+                      'bg-slate-900 text-white shadow-sm ring-2 ring-slate-800 font-black'
+                    : 'bg-slate-100 hover:bg-slate-200/80 text-slate-700'
                 }`}
               >
                 <span>{tab.label}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                  selectedCategory === tab.id ? 'bg-black/20 text-inherit' : 'bg-slate-200 text-slate-700'
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                  selectedCategory === tab.id ? 'bg-black/20 text-inherit' : 'bg-slate-200 text-slate-800'
                 }`}>
                   {tab.count}
                 </span>
@@ -2012,12 +2019,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={`Search in ${selectedCategory}...`}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-7 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition-all font-medium"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -2027,7 +2034,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-slate-900"
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-slate-900 cursor-pointer shadow-2xs"
             >
               <option value="ALL">All Status</option>
               <option value="Approved">Approved</option>

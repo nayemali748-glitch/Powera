@@ -43,8 +43,22 @@ function fetchHttpsBuffer(url: string, headers: Record<string, string> = {}): Pr
   });
 }
 
+function cleanAndNormalizeConsumerId(consumerId: any): string {
+  if (!consumerId) return '';
+  let str = String(consumerId).trim();
+  const bengaliDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  for (let i = 0; i < bengaliDigits.length; i++) {
+    str = str.replaceAll(bengaliDigits[i], i.toString());
+  }
+  return str
+    .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-|TASK-|DISC-|CON-)/i, '')
+    .replace(/\.0+$/, '')
+    .replace(/[, \-_]/g, '')
+    .trim();
+}
+
 async function fetchOfficialWbsedclReportAsync(consumerId: string) {
-  const cleanId = String(consumerId || '').replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+  const cleanId = cleanAndNormalizeConsumerId(consumerId);
   const officialPortalUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/OutstandingReport?consumerId=${cleanId}`;
 
   if (!cleanId) {
@@ -57,16 +71,22 @@ async function fetchOfficialWbsedclReportAsync(consumerId: string) {
   }
 
   try {
-    // Step 1: Handshake with portal to establish NetWeaver session cookies
+    // Step 1: Request portal page (fast 1-hop check)
     const r1 = await fetchHttpsBuffer(officialPortalUrl);
     const rawSetCookie = (r1.headers['set-cookie'] || []) as string[];
     const cookieStr = rawSetCookie.map(c => c.split(';')[0]).join('; ');
+    const html1 = r1.buffer.toString('utf-8');
 
-    // Step 2: Request report with session cookies
-    const r2 = await fetchHttpsBuffer(officialPortalUrl, cookieStr ? { 'Cookie': cookieStr } : {});
-    const html = r2.buffer.toString('utf-8');
+    // Check if r1 already contains openExternalWindow
+    let m = html1.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
 
-    const m = html.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    // If not found in r1, attempt Step 2 with established NetWeaver session cookies
+    if (!m) {
+      const r2 = await fetchHttpsBuffer(officialPortalUrl, cookieStr ? { 'Cookie': cookieStr } : {});
+      const html2 = r2.buffer.toString('utf-8');
+      m = html2.match(/openExternalWindow\([^,]+,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]/);
+    }
+
     if (!m) {
       return {
         success: false,
@@ -80,7 +100,7 @@ async function fetchOfficialWbsedclReportAsync(consumerId: string) {
     let rawLink = m[1];
     rawLink = rawLink.replace(/\\\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
     rawLink = rawLink.replace(/\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)));
-    const pdfUrl = `https://portal.wbsedcl.in/webdynpro/resources/wbsedcl/noduesandoutstandingreport/${rawLink}`;
+    const pdfUrl = new URL(rawLink, officialPortalUrl).href;
 
     // Step 3: Fetch official PDF stream in memory
     const pdfRes = await fetchHttpsBuffer(pdfUrl, {
@@ -229,12 +249,8 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const rawConsumerId = String(body?.consumerId || req.query?.consumerId || body?.id || '').trim();
-    const cleanId = rawConsumerId
-      .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
-      .replace(/\.0+$/, '')
-      .replace(/[, \-_]/g, '')
-      .trim();
+    const rawConsumerId = String(body?.consumerId || req.query?.consumerId || body?.id || body?.taskId || req.query?.id || '').trim();
+    const cleanId = cleanAndNormalizeConsumerId(rawConsumerId);
 
     if (!cleanId) {
       return res.status(400).json({

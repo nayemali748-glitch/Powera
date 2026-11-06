@@ -377,18 +377,18 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
               </span>
             )}
 
-            {/* Live indicator with lightning bolt - clickable for Outstanding & LPSC Check */}
+            {/* Live indicator badge with lightning bolt - clickable for Outstanding & LPSC Check */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setShowLiveCheckModal(true);
               }}
-              className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600 font-semibold text-xs cursor-pointer active:scale-95 transition-transform"
-              title="Click to check Live Outstanding & LPSC"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 font-black text-[11px] border border-amber-300 cursor-pointer active:scale-95 transition-all shadow-2xs"
+              title="ক্লিক করে এই উপভোক্তার লাইভ OSD ও বকেয়া চেক করুন (Live Outstanding & LPSC Check)"
             >
-              <Zap className="w-3.5 h-3.5 fill-blue-500 text-blue-500" />
-              <span>Live</span>
+              <Zap className="w-3 h-3 fill-amber-600 text-amber-600 shrink-0" />
+              <span>{lang === 'bn' ? 'লাইভ OSD' : 'Live OSD'}</span>
             </button>
           </div>
         </div>

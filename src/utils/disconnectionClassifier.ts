@@ -503,7 +503,7 @@ export function doesTaskBelongToAgencyUser(
  * Determines whether the currently logged-in user is an Agency account (or has rows assigned in the Sheet's Agency column).
  */
 export function isAgencyUserSession(
-  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string } | null,
+  user?: { idNo?: string; name?: string; username?: string; role?: string; designation?: string; agencyName?: string } | null,
   allTasks?: DisconnectionTask[]
 ): boolean {
   if (!user) return false;
@@ -511,6 +511,7 @@ export function isAgencyUserSession(
   const idNo = String(user.idNo || '').trim();
   const name = String(user.name || user.username || '').trim();
   const desig = String(user.designation || '').trim();
+  const agencyName = String((user as any).agencyName || (user as any)['Agency Name'] || '').trim();
 
   if (
     role === 'admin' ||
@@ -524,9 +525,12 @@ export function isAgencyUserSession(
 
   if (
     role === 'agency' ||
+    role.includes('agency') ||
     /^(agn|agency)[-_0-9]/i.test(idNo) ||
     /agency|এজেন্সি/i.test(desig) ||
-    /enterprise|agency|associates|traders|construction/i.test(name)
+    Boolean(agencyName) ||
+    /enterprise|agency|associates|traders|construction/i.test(name) ||
+    /enterprise|agency|associates|traders|construction/i.test(agencyName)
   ) {
     return true;
   }

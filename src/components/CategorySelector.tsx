@@ -5,18 +5,19 @@ import {
   TowerControl, 
   Gauge, 
   Activity,
-  CheckCircle2, 
   Layers,
   ChevronRight
 } from 'lucide-react';
-import { CategoryType } from '../types';
+import { CategoryType, ThemeMode } from '../types';
 import { Language, translations } from '../utils/translations';
+import { TransmissionPylonSvg } from './TransmissionPylonSvg';
 
 interface CategorySelectorProps {
   selectedCategory: CategoryType;
   onSelectCategory: (category: CategoryType) => void;
   categoryCounts?: Record<string, number>;
   currentLanguage?: Language;
+  theme?: ThemeMode;
 }
 
 export const CategorySelector: React.FC<CategorySelectorProps> = ({
@@ -24,152 +25,226 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
   onSelectCategory,
   categoryCounts = {},
   currentLanguage = 'en',
+  theme = 'day',
 }) => {
   const t = translations[currentLanguage] || translations.en;
+  const isNight = theme === 'night';
 
   const categories = [
     {
       id: 'NSC' as CategoryType,
       code: '1. NSC',
-      title: t.nscTitle,
-      subtitle: t.nscSubtitle,
-      shortDesc: t.nscShortDesc,
+      title: 'NSC (New Service Connection)',
+      subtitle: currentLanguage === 'bn' ? 'নতুন বিদ্যুৎ সংযোগ ব্যবস্থা' : 'New Electricity Connection Provision',
+      shortDesc: currentLanguage === 'bn' 
+        ? 'কনজিউমার লোড, মিটার ইনস্টলেশন, সিকিউরিটি সিল ও সার্ভিস কেবল এন্ট্রি' 
+        : 'Consumer load, meter installation, security seal & service cable entry',
       icon: Zap,
-      accentColor: 'text-amber-600',
-      lightBg: 'bg-amber-50 text-amber-700',
-      badgeBg: 'bg-amber-100 text-amber-800 border-amber-200',
-      cardHover: 'hover:border-amber-400 hover:shadow-amber-500/10'
+      actionText: currentLanguage === 'bn' ? 'নতুন এন্ট্রি ফর্ম →' : 'New Data Entry →',
     },
     {
       id: 'DISCONNECTION' as CategoryType,
       code: '2. DISCONNECTION',
-      title: t.disconnectionTitle,
-      subtitle: t.disconnectionSubtitle,
-      shortDesc: t.disconnectionShortDesc,
+      title: currentLanguage === 'bn' ? 'Disconnection (বকেয়া লাইন বিচ্ছিন্ন)' : 'DISCONNECTION',
+      subtitle: currentLanguage === 'bn' ? 'বকেয়া বিল আদায় ও লাইন বিচ্ছিন্নকরণ' : 'Service Line Disconnection',
+      shortDesc: currentLanguage === 'bn'
+        ? 'বকেয়া কনজিউমার লিস্ট, ডিসকানেকশন রিপোর্ট, মিটার রিডিং ও ফটো আপলোড'
+        : 'Outstanding arrear default, consumer request & unauthorized load cutoff',
       icon: Scissors,
-      accentColor: 'text-rose-600',
-      lightBg: 'bg-rose-50 text-rose-700',
-      badgeBg: 'bg-rose-100 text-rose-800 border-rose-200',
-      cardHover: 'hover:border-rose-400 hover:shadow-rose-500/10'
+      actionText: currentLanguage === 'bn' ? 'ডিসকানেকশন লিস্ট দেখুন →' : 'Disconnection List →',
     },
     {
       id: 'POLE CASE' as CategoryType,
       code: '3. POLE CASE',
-      title: t.poleCaseTitle,
-      subtitle: t.poleCaseSubtitle,
-      shortDesc: t.poleCaseShortDesc,
+      title: currentLanguage === 'bn' ? 'Pole Case (ভাঙা পোল মেরামতি)' : 'POLE CASE',
+      subtitle: currentLanguage === 'bn' ? 'ভাঙা বা ঝুঁকিপূর্ণ পোল প্রতিস্থাপন' : 'Broken Pole Case & Structure Repair',
+      shortDesc: currentLanguage === 'bn'
+        ? 'পোল নম্বর, অবস্থান, জিপিএস ক্যামেরা ও মেরামতি রিপোর্ট'
+        : 'Pole number, location GPS camera & structural maintenance report',
       icon: TowerControl,
-      accentColor: 'text-sky-600',
-      lightBg: 'bg-sky-50 text-sky-700',
-      badgeBg: 'bg-sky-100 text-sky-800 border-sky-200',
-      cardHover: 'hover:border-sky-400 hover:shadow-sky-500/10'
+      actionText: currentLanguage === 'bn' ? 'পোল মেরামত এন্ট্রি →' : 'Pole Maintenance →',
     },
     {
       id: 'METER REPLESMENT' as CategoryType,
       code: '4. METER REPLESMENT',
-      title: t.meterReplacementTitle,
-      subtitle: t.meterReplacementSubtitle,
-      shortDesc: t.meterReplacementShortDesc,
+      title: currentLanguage === 'bn' ? 'Meter Replacement (মিটার বদল)' : 'METER REPLACEMENT',
+      subtitle: currentLanguage === 'bn' ? 'ত্রুটিযুক্ত মিটার প্রতিস্থাপন' : 'Defective & Burnt Meter Replacement',
+      shortDesc: currentLanguage === 'bn'
+        ? 'পুরাতন ও নতুন মিটার নম্বর, সিল নম্বর ও ফাইনাল রিডিং এন্ট্রি'
+        : 'Old/new meter serial, security seal number & final reading entry',
       icon: Gauge,
-      accentColor: 'text-emerald-600',
-      lightBg: 'bg-emerald-50 text-emerald-700',
-      badgeBg: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-      cardHover: 'hover:border-emerald-400 hover:shadow-emerald-500/10'
+      actionText: currentLanguage === 'bn' ? 'মিটার রিপ্লেসমেন্ট এন্ট্রি →' : 'Meter Replacement →',
     },
     {
       id: 'DTR REPLESMENT' as CategoryType,
       code: '5. DTR REPLESMENT',
-      title: t.dtrReplacementTitle,
-      subtitle: t.dtrReplacementSubtitle,
-      shortDesc: t.dtrReplacementShortDesc,
+      title: currentLanguage === 'bn' ? 'DTR Replacement (ট্রান্সফরমার বদল)' : 'DTR REPLACEMENT',
+      subtitle: currentLanguage === 'bn' ? 'ডিস্ট্রিবিউশন ট্রান্সফরমার মেরামত' : 'Distribution Transformer Replacement',
+      shortDesc: currentLanguage === 'bn'
+        ? 'DTR নাম, কেভিএ ক্ষমতা, অয়েল লেভেল ও রক্ষণাবেক্ষণ এন্ট্রি'
+        : 'DTR name, kVA capacity, oil level check & maintenance report',
       icon: Activity,
-      accentColor: 'text-indigo-600',
-      lightBg: 'bg-indigo-50 text-indigo-700',
-      badgeBg: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-      cardHover: 'hover:border-indigo-400 hover:shadow-indigo-500/10'
+      actionText: currentLanguage === 'bn' ? 'ট্রান্সফরমার এন্ট্রি →' : 'DTR Maintenance →',
     }
   ];
 
   return (
-    <div className="w-full">
+    <div className="w-full space-y-4">
       {/* WORK CATEGORY SELECTION Header (Color-coded Blue) */}
-      <div className="flex items-center justify-between mb-3 bg-blue-50/70 border border-blue-200/80 px-4 py-2.5 rounded-xl">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
+      <div className={`flex items-center justify-between px-4 sm:px-5 py-3 rounded-2xl transition-all duration-200 ${
+        isNight
+          ? 'bg-[#06122c] border border-[#0ea5e9]/80 shadow-[0_0_20px_rgba(14,165,233,0.25)]'
+          : 'bg-[#edf5ff] border border-[#bfdbfe] shadow-2xs'
+      }`}>
+        <div className="flex items-center gap-3">
+          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-xs ${
+            isNight
+              ? 'bg-[#0284c7] text-white shadow-[0_0_10px_rgba(14,165,233,0.5)]'
+              : 'bg-[#2563eb] text-white'
+          }`}>
             <Layers className="w-4 h-4" />
           </div>
-          <h2 className="text-xs sm:text-sm font-black text-blue-700 tracking-wide uppercase">
-            {t.workCategorySelection}
+          <h2 className={`text-xs sm:text-sm font-black tracking-wider uppercase ${
+            isNight ? 'text-white' : 'text-[#1d4ed8]'
+          }`}>
+            WORK CATEGORY SELECTION (5 MODULES)
           </h2>
         </div>
-        <span className="text-xs text-blue-800 bg-white border border-blue-300 px-3 py-1 rounded-full font-bold shadow-2xs hidden sm:inline">
-          {t.clickToOpenForm}
-        </span>
+        <ChevronRight className={`w-5 h-5 shrink-0 ${
+          isNight ? 'text-[#38bdf8]' : 'text-[#2563eb]'
+        }`} />
       </div>
 
       {/* Grid of 5 Category Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 sm:gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4">
         {categories.map((cat, idx) => {
           const Icon = cat.icon;
           const isSelected = selectedCategory === cat.id;
           const count = categoryCounts[cat.id] || 0;
+
+          // Day mode color themes per module matching IMG_7279
+          const dayIconStyle =
+            cat.id === 'NSC'
+              ? 'bg-[#fffbeb] border border-[#fef3c7] text-[#d97706]'
+              : cat.id === 'DISCONNECTION'
+              ? 'bg-[#fff1f2] border border-[#ffe4e6] text-[#e11d48]'
+              : cat.id === 'POLE CASE'
+              ? 'bg-[#ecfeff] border border-[#cffafe] text-[#0891b2]'
+              : cat.id === 'METER REPLESMENT'
+              ? 'bg-[#faf5ff] border border-[#f3e8ff] text-[#9333ea]'
+              : 'bg-[#ecfdf5] border border-[#d1fae5] text-[#059669]';
 
           return (
             <button
               key={`${cat.id}-${idx}`}
               type="button"
               onClick={() => onSelectCategory(cat.id)}
-              className={`text-left p-4 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative cursor-pointer group bg-white shadow-xs ${cat.cardHover} ${
-                isSelected 
-                  ? 'border-blue-600 ring-2 ring-blue-500/20 bg-blue-50/20' 
-                  : 'border-slate-200 hover:border-slate-300'
+              className={`text-left rounded-2xl sm:rounded-3xl p-4.5 sm:p-5.5 transition-all duration-200 flex flex-col justify-between relative overflow-hidden cursor-pointer group ${
+                isNight
+                  ? `bg-[#06122c] border-2 shadow-[0_0_20px_rgba(14,165,233,0.2)] hover:border-[#38bdf8] hover:shadow-[0_0_25px_rgba(14,165,233,0.35)] ${
+                      isSelected ? 'border-[#38bdf8] ring-2 ring-[#0ea5e9]/40' : 'border-[#0ea5e9]/70'
+                    }`
+                  : `bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-md transition-all ${
+                      isSelected
+                        ? 'border-2 border-[#2563eb] shadow-[0_4px_16px_rgba(37,99,235,0.1)]'
+                        : 'border border-slate-200/90 hover:border-slate-300'
+                    }`
               }`}
             >
-              {/* Top Row: Icon + Count Badge */}
-              <div className="flex items-start justify-between mb-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${cat.lightBg} shadow-2xs group-hover:scale-105 transition-transform`}>
-                  <Icon className="w-5 h-5" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${cat.badgeBg}`}>
-                    {cat.id === 'DISCONNECTION'
-                      ? (currentLanguage === 'bn' ? `মোট লিস্ট: ${count}` : `Total List: ${count}`)
-                      : `${count} ${t.recordsCount.split(' ')[0]}`}
-                  </span>
-                </div>
-              </div>
+              {/* Electric Transmission Pylon Watermark in Background */}
+              <TransmissionPylonSvg
+                theme={theme}
+                mode="card"
+                className={`absolute right-0 bottom-0 w-36 h-48 pointer-events-none select-none transition-opacity ${
+                  isNight ? 'opacity-30' : 'opacity-[0.05]'
+                }`}
+              />
 
-              {/* Title & Subtitle */}
-              <div>
-                <div className="flex items-center justify-between gap-1">
-                  <span className="text-[11px] font-mono font-bold text-slate-400">
-                    {cat.code}
-                  </span>
-                  {cat.id === 'DISCONNECTION' && (
-                    <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
-                      {currentLanguage === 'bn' ? `মোট ${count} টি` : `${count} Consumers`}
+              {/* Relative Content Container */}
+              <div className="relative z-10 w-full flex flex-col justify-between h-full space-y-3.5 sm:space-y-4">
+                {/* Top Row: Icon + Count Badges */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                    isNight
+                      ? 'bg-gradient-to-br from-[#fbbf24] to-[#f59e0b] text-slate-950 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
+                      : dayIconStyle
+                  }`}>
+                    <Icon className="w-5.5 h-5.5 sm:w-6 sm:h-6" />
+                  </div>
+
+                  {/* Badges */}
+                  {cat.id === 'DISCONNECTION' ? (
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <span className={`text-[11px] font-black px-3.5 py-0.5 rounded-full shadow-2xs ${
+                        isNight
+                          ? 'bg-[#f43f5e] text-white shadow-[0_0_10px_rgba(244,63,94,0.4)]'
+                          : 'bg-[#ffe4e6] border border-[#fecdd3] text-[#9f1239]'
+                      }`}>
+                        {currentLanguage === 'bn' ? `মোট তালিকা: ${count}` : `Total List: ${count}`}
+                      </span>
+                      <span className={`text-[11px] font-black px-3.5 py-0.5 rounded-full shadow-2xs ${
+                        isNight
+                          ? 'bg-[#f59e0b] text-slate-950 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                          : 'bg-[#ffe4e6] border border-[#fecdd3] text-[#9f1239]'
+                      }`}>
+                        {currentLanguage === 'bn' ? `${count} টি কনজিউমার` : `${count} Consumers`}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className={`text-xs font-black px-3.5 py-1 rounded-full shrink-0 shadow-2xs ${
+                      isNight
+                        ? 'bg-[#f59e0b] text-slate-950 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                        : 'bg-[#fef3c7] border border-[#fde68a] text-[#92400e]'
+                    }`}>
+                      {currentLanguage === 'bn' ? `${count} টি রেকর্ড` : `${count} Recorded`}
                     </span>
                   )}
                 </div>
-                <h3 className="font-extrabold text-sm text-slate-900 mt-0.5 leading-tight group-hover:text-blue-600 transition-colors">
-                  {cat.title}
-                </h3>
-                <p className="text-[11px] font-semibold text-slate-600 mt-1 line-clamp-1">
-                  {cat.subtitle}
-                </p>
-                <p className="text-[10px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
-                  {cat.shortDesc}
-                </p>
-              </div>
 
-              {/* Action Button Indicator */}
-              <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-600 group-hover:text-blue-600">
-                <span className="text-[11px]">
-                  {cat.id === 'DISCONNECTION'
-                    ? (currentLanguage === 'bn' ? `ডিসকানেকশন লিস্ট (${count}) →` : `Disconnection List (${count}) →`)
-                    : `${t.dataEntry} →`}
-                </span>
-                <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                {/* Body: Number, Title, Subtitle, Short Desc */}
+                <div className="space-y-1">
+                  <span className={`text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wider block ${
+                    isNight ? 'text-[#38bdf8]' : 'text-slate-500'
+                  }`}>
+                    {cat.code}
+                  </span>
+
+                  <h3 className={`font-black text-base sm:text-lg leading-tight tracking-tight transition-colors ${
+                    isNight
+                      ? 'text-white group-hover:text-[#38bdf8]'
+                      : 'text-slate-900 group-hover:text-[#2563eb]'
+                  }`}>
+                    {cat.title}
+                  </h3>
+
+                  <p className={`text-xs sm:text-[13px] font-semibold leading-tight pt-0.5 ${
+                    isNight ? 'text-sky-200' : 'text-slate-700'
+                  }`}>
+                    {cat.subtitle}
+                  </p>
+
+                  <p className={`text-xs leading-relaxed pt-1 line-clamp-2 ${
+                    isNight ? 'text-slate-300 font-medium' : 'text-slate-600 font-normal'
+                  }`}>
+                    {cat.shortDesc}
+                  </p>
+                </div>
+
+                {/* Bottom Row: Action Link + Right Chevron */}
+                <div className={`pt-3 border-t flex items-center justify-between text-xs sm:text-[13px] font-black transition-colors ${
+                  isNight
+                    ? 'border-blue-900/60 text-[#38bdf8] group-hover:text-white'
+                    : 'border-slate-100 text-slate-800 group-hover:text-[#2563eb]'
+                }`}>
+                  <span className="flex items-center gap-1 group-hover:underline">
+                    {cat.id === 'DISCONNECTION'
+                      ? (currentLanguage === 'bn' ? `ডিসকানেকশন লিস্ট (${count}) →` : `Disconnection List (${count}) →`)
+                      : cat.actionText}
+                  </span>
+                  <ChevronRight className={`w-4 h-4 transition-transform group-hover:translate-x-1 ${
+                    isNight ? 'text-[#38bdf8]' : 'text-slate-400 group-hover:text-[#2563eb]'
+                  }`} />
+                </div>
               </div>
             </button>
           );

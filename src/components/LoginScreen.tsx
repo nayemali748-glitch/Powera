@@ -30,6 +30,7 @@ import {
   verifyResetPasswordOtp,
 } from '../services/api';
 import { Language } from '../utils/translations';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LoginScreenProps {
   onLogin?: (session: UserSession) => void;
@@ -159,7 +160,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       );
       handleSuccess(session);
     } catch (err: any) {
-      console.error('Login error:', err);
+      console.warn('Login attempt notice:', err?.message || err);
       const msg =
         err.message ||
         (lang === 'bn'
@@ -343,7 +344,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#020917] text-white flex flex-col items-center justify-center relative overflow-x-hidden font-sans select-none">
+    <div className="min-h-screen w-full bg-[#020917] text-white flex flex-col items-center justify-center relative overflow-x-hidden py-4 sm:py-8 px-3 sm:px-4 font-sans select-none">
       {/* Ambient Desktop Surround Backdrop */}
       <div className="fixed inset-0 pointer-events-none z-0 bg-[#020917]">
         <img
@@ -354,8 +355,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         />
       </div>
 
-      {/* Main Portrait Viewport Matching Reference Photo 100% */}
-      <div className="relative z-10 w-full max-w-[440px] min-h-screen flex flex-col justify-between items-center px-5 pt-5 pb-7 overflow-hidden bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)]">
+      {/* Main Portrait Viewport Precision Matching Original Photo */}
+      <div className="relative z-10 w-full max-w-[440px] rounded-[32px] sm:rounded-[36px] flex flex-col justify-between items-center px-5 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
         {/* ================================================================= */}
         {/* BACKGROUND ARTWORK: STORMY SKY, PYLONS, LIGHTNING, NEON WAVES     */}
         {/* ================================================================= */}
@@ -498,13 +499,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         </div>
 
         {/* ================================================================= */}
-        {/* TOP-RIGHT LANGUAGE SELECTOR PILL (🌐 EN ⌄)                        */}
+        {/* TOP BAR: PLAY STORE INSTALL BUTTON & LANGUAGE SELECTOR PILL       */}
         {/* ================================================================= */}
-        <div className="relative z-20 w-full flex justify-end pt-0.5">
+        <div className="relative z-20 w-full flex items-center justify-between pt-0.5 mb-1">
+          <PWAInstallButton lang={lang} variant="login-pill" />
           <button
             type="button"
             onClick={onOpenLanguageModal}
-            className="px-3.5 py-1.5 rounded-full bg-[#04152d]/85 hover:bg-[#082246] text-white border-[1.5px] border-[#00e5ff]/85 shadow-[0_0_14px_rgba(0,229,255,0.38)] flex items-center gap-2 text-[13.5px] font-bold transition-all cursor-pointer backdrop-blur-md"
+            className="px-3.5 py-1.5 rounded-full bg-[#04152d]/85 hover:bg-[#082246] text-white border-[1.5px] border-[#00e5ff]/85 shadow-[0_0_14px_rgba(0,229,255,0.38)] flex items-center gap-1.5 text-[13px] font-bold transition-all cursor-pointer backdrop-blur-md active:scale-95 ml-auto"
             title="Change Language"
           >
             <Globe className="w-[17px] h-[17px] text-[#00e5ff]" />
@@ -516,11 +518,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         {/* ================================================================= */}
         {/* CENTER EMBLEM, TITLE, SUBTITLES & NEON GLASS LOGIN CARD           */}
         {/* ================================================================= */}
-        <div className="relative z-10 w-full flex flex-col items-center my-auto pt-0.5">
+        <div className="relative z-10 w-full flex flex-col items-center my-auto py-2">
           {/* =============================================================== */}
           {/* EXACT CIRCULAR "POWER OF CONSTRUCTION" EMBLEM                   */}
           {/* =============================================================== */}
-          <div className="relative mb-3 flex items-center justify-center">
+          <div className="relative mb-3 flex items-center justify-center shrink-0">
             {/* Top Orange-Gold Neon Aura & Bottom Electric-Cyan Neon Aura */}
             <div
               className="absolute -inset-2.5 rounded-full blur-md opacity-95 pointer-events-none"
@@ -531,7 +533,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             />
 
             {/* Exact Circular Emblem Photo */}
-            <div className="relative w-[138px] h-[138px] sm:w-[144px] sm:h-[144px] rounded-full overflow-hidden shadow-[0_0_32px_rgba(251,191,36,0.55),0_10px_28px_rgba(0,229,255,0.55)] bg-[#041428] flex items-center justify-center">
+            <div className="relative w-[120px] h-[120px] sm:w-[136px] sm:h-[136px] rounded-full overflow-hidden shadow-[0_0_30px_rgba(251,191,36,0.6),0_10px_24px_rgba(0,229,255,0.6)] bg-[#041428] flex items-center justify-center">
               <img
                 src={powerEmblemLogo}
                 alt="POWER OF CONSTRUCTION"
@@ -542,7 +544,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </div>
 
           {/* Main Title: Power of Construction */}
-          <h1 className="text-[30px] sm:text-[33px] font-extrabold tracking-tight leading-none text-center flex items-center justify-center gap-2 whitespace-nowrap mt-0.5">
+          <h1 className="text-[28px] sm:text-[33px] font-black tracking-tight leading-none text-center flex items-center justify-center gap-2 whitespace-nowrap mt-1 shrink-0">
             <span className="text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
               Power of
             </span>
@@ -557,53 +559,36 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </h1>
 
           {/* Subtitle 1: App Developed By Nayem with Flanking Golden Lines */}
-          <div className="w-full flex items-center justify-center gap-3 mt-2.5">
-            <span className="h-[2px] w-14 sm:w-16 bg-gradient-to-r from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
-            <span className="text-[14.5px] sm:text-[15.5px] font-bold text-[#fbbf24] tracking-wide whitespace-nowrap drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
+          <div className="w-full flex items-center justify-center gap-2 mt-2.5 mb-4 shrink-0">
+            <span className="h-[1.5px] w-12 sm:w-16 bg-gradient-to-r from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
+            <span className="text-[13.5px] sm:text-[14.5px] font-bold text-[#fbbf24] tracking-wide whitespace-nowrap drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
               App Developed By Nayem
             </span>
-            <span className="h-[2px] w-14 sm:w-16 bg-gradient-to-l from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
-          </div>
-
-          {/* Subtitle 2: Google Sheets & Apps Script Backend */}
-          <div className="flex items-center justify-center gap-2 mt-2.5 mb-4 text-[13.5px] sm:text-[14px] text-[#d8e2ef] font-normal tracking-wide drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              className="w-[19px] h-[19px] text-[#22c55e] shrink-0"
-              stroke="currentColor"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
-            <span>Google Sheets &amp; Apps Script Backend</span>
+            <span className="h-[1.5px] w-12 sm:w-16 bg-gradient-to-l from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
           </div>
 
           {/* =============================================================== */}
           {/* NEON DUAL GOLD & CYAN BORDERED FROSTED GLASS LOGIN CARD         */}
           {/* =============================================================== */}
-          <div className="w-full relative rounded-[28px] p-[2px] shadow-[0_18px_50px_rgba(0,0,0,0.78),0_0_38px_rgba(0,210,255,0.22)]">
+          <div className="w-full relative rounded-[24px] p-[2px] shadow-[0_16px_40px_rgba(0,0,0,0.78),0_0_24px_rgba(0,210,255,0.2)]">
             {/* Dual Gold (Top-Left & Bottom-Right) + Cyan (Top-Right & Bottom-Left) Border */}
             <div
-              className="absolute inset-0 rounded-[28px] pointer-events-none"
+              className="absolute inset-0 rounded-[24px] pointer-events-none"
               style={{
                 background:
                   'linear-gradient(135deg, #fde047 0%, #f59e0b 16%, #22d3ee 36%, #00e5ff 50%, #38bdf8 68%, #f59e0b 86%, #fde047 100%)',
               }}
             />
             {/* Corner & Bottom-Center Specular Neon Glows Matching Photo */}
-            <div className="absolute -top-1.5 left-4 w-24 h-3 bg-amber-300/90 blur-xs rounded-full pointer-events-none" />
-            <div className="absolute top-6 -left-1.5 w-2.5 h-20 bg-amber-400/80 blur-xs rounded-full pointer-events-none" />
-            <div className="absolute -bottom-1.5 right-4 w-24 h-3 bg-amber-300/90 blur-xs rounded-full pointer-events-none" />
-            <div className="absolute bottom-6 -right-1.5 w-2.5 h-20 bg-amber-400/80 blur-xs rounded-full pointer-events-none" />
-            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-24 h-2.5 bg-cyan-300 blur-xs rounded-full pointer-events-none" />
+            <div className="absolute -top-1.5 left-4 w-20 h-2 bg-amber-300/90 blur-xs rounded-full pointer-events-none" />
+            <div className="absolute top-5 -left-1 w-2 h-16 bg-amber-400/80 blur-xs rounded-full pointer-events-none" />
+            <div className="absolute -bottom-1.5 right-4 w-20 h-2 bg-amber-300/90 blur-xs rounded-full pointer-events-none" />
+            <div className="absolute bottom-5 -right-1 w-2 h-16 bg-amber-400/80 blur-xs rounded-full pointer-events-none" />
+            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-20 h-2 bg-cyan-300 blur-xs rounded-full pointer-events-none" />
 
             {/* Inner Frosted Dark Navy Card */}
             <div
-              className="relative rounded-[26px] px-5 sm:px-6 py-6 space-y-4 backdrop-blur-xl"
+              className="relative rounded-[22px] px-4 sm:px-6 py-5 sm:py-6 space-y-4 backdrop-blur-xl"
               style={{
                 background:
                   'linear-gradient(180deg, rgba(10, 30, 64, 0.86) 0%, rgba(6, 18, 42, 0.92) 100%)',
@@ -625,7 +610,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               )}
 
               {/* =============================================================== */}
-              {/* LOGIN METHOD SELECTOR: (A) User ID + Password/PIN (B) Mobile + OTP */}
+              {/* LOGIN METHOD SELECTOR: (A) User ID (B) Mobile + OTP (C) Office */}
               {/* =============================================================== */}
               <div className="grid grid-cols-2 p-1 bg-[#061833]/90 border border-[#38bdf8]/40 rounded-2xl gap-1 mb-2 text-xs font-bold">
                 <button
@@ -635,14 +620,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     setError(null);
                     setSuccessMsg(null);
                   }}
-                  className={`py-2 px-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                     loginMethod === 'password'
                       ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_12px_rgba(0,210,255,0.45)]'
                       : 'text-slate-300 hover:text-white hover:bg-white/5'
                   }`}
                 >
                   <User className="w-3.5 h-3.5" />
-                  <span>User ID + PIN</span>
+                  <span>{lang === 'bn' ? 'ইউজার আইডি' : 'User ID'}</span>
                 </button>
 
                 <button
@@ -652,14 +637,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     setError(null);
                     setSuccessMsg(null);
                   }}
-                  className={`py-2 px-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                     loginMethod === 'otp'
                       ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_12px_rgba(0,210,255,0.45)]'
                       : 'text-slate-300 hover:text-white hover:bg-white/5'
                   }`}
                 >
                   <Phone className="w-3.5 h-3.5" />
-                  <span>Mobile + OTP</span>
+                  <span>{lang === 'bn' ? 'মোবাইল ওটিপি' : 'Mobile OTP'}</span>
                 </button>
               </div>
 

@@ -136,7 +136,12 @@ export interface UserSession {
   status?: 'active' | 'hold';
   designation: string;
   badgeNo?: string;
+  agencyName?: string;
   loggedInAt: string;
+  officeName?: string;
+  officeId?: string;
+  spreadsheetId?: string;
+  isOfficeScoped?: boolean;
 }
 
 export interface UserAccount {
@@ -350,4 +355,7 @@ export interface DisconnectionStats {
   myCompletionPercentage: number;
   workerPerformance?: WorkerPerformanceStat[];
 }
+
+export type ThemeMode = 'day' | 'night';
+
 

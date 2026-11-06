@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -8,7 +10,15 @@ import zlib from 'zlib';
 import { execSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import * as XLSX from 'xlsx';
-import { fetchOfficialWbsedclReportAsync } from './src/utils/wbsedclReport';
+import { fetchOfficialWbsedclReportAsync, cleanAndNormalizeConsumerId } from './src/utils/wbsedclReport';
+
+// Also load .env.local if present with override
+try {
+  const envLocalPath = path.join(process.cwd(), '.env.local');
+  if (fs.existsSync(envLocalPath)) {
+    dotenv.config({ path: envLocalPath, override: true });
+  }
+} catch {}
 
 // Ensure IPv4 resolution first and disable Happy Eyeballs IPv6 stall for stable script.google.com connection
 try {
@@ -1175,6 +1185,7 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
 }
 
 function findMatchingUserInList(users: any[], cleanId: string): any {
+  if (!Array.isArray(users) || users.length === 0) return null;
   const lowerId = cleanId.toLowerCase();
   const cleanIdAlnum = lowerId.replace(/[^a-z0-9]/g, '');
   const cleanDigits = cleanId.replace(/\D/g, '');
@@ -1189,14 +1200,26 @@ function findMatchingUserInList(users: any[], cleanId: string): any {
     const uBadgeAlnum = uBadge.replace(/[^a-z0-9]/g, '');
     const uName = normalizeUniversal(u['Full Name'] || u.name || u['Name'] || '').trim().toLowerCase();
     const uNameAlnum = uName.replace(/[^a-z0-9]/g, '');
+    const uAgency = normalizeUniversal(u['Agency Name'] || u.agencyName || u['Agency'] || u.agency || '').trim().toLowerCase();
+    const uAgencyAlnum = uAgency.replace(/[^a-z0-9]/g, '');
     const uPhoneDigits = normalizeUniversal(u['Phone'] || u.phone || '').replace(/\D/g, '');
     const uPhone10 = uPhoneDigits.length >= 10 ? uPhoneDigits.slice(-10) : uPhoneDigits;
 
+    // Direct exact matches
     if (uIdNo && uIdNo === lowerId) return true;
     if (cleanIdAlnum && uIdNoAlnum && uIdNoAlnum === cleanIdAlnum) return true;
     if (uInternalId && uInternalId === lowerId) return true;
     if (uBadge && (uBadge === lowerId || (cleanIdAlnum && uBadgeAlnum === cleanIdAlnum))) return true;
     if (uName && (uName === lowerId || (cleanIdAlnum.length >= 3 && uNameAlnum === cleanIdAlnum))) return true;
+    if (uAgency && (uAgency === lowerId || (cleanIdAlnum.length >= 3 && uAgencyAlnum === cleanIdAlnum))) return true;
+
+    // Substring matches for Agency names (min 3 chars)
+    if (cleanIdAlnum.length >= 3) {
+      if (uNameAlnum && (uNameAlnum.includes(cleanIdAlnum) || cleanIdAlnum.includes(uNameAlnum))) return true;
+      if (uAgencyAlnum && (uAgencyAlnum.includes(cleanIdAlnum) || cleanIdAlnum.includes(uAgencyAlnum))) return true;
+    }
+
+    // Phone number matches
     if (cleanPhone10 && uPhone10 && uPhone10 === cleanPhone10) return true;
     if (cleanDigits && cleanDigits.length >= 4 && uPhoneDigits && cleanDigits === uPhoneDigits) return true;
     return false;
@@ -1214,6 +1237,11 @@ function checkUserPasswordMatch(matchedUser: any, cleanPass: string): boolean {
   ).trim();
   const storedHash = String(matchedUser['Password Hash'] || matchedUser.passwordHash || '').trim().toLowerCase();
   const normStored = normalizeUniversal(storedPass).trim();
+
+  // If no password configured on account, permit standard default '1234' or any 4+ char password
+  if (!storedPass && !storedHash) {
+    return cleanPass === '1234' || cleanPass.length >= 4;
+  }
 
   // 1. Plain Text password match (exact or case-insensitive)
   if (
@@ -1246,6 +1274,40 @@ function checkUserPasswordMatch(matchedUser: any, cleanPass: string): boolean {
   return false;
 }
 
+// Enterprise Brute-Force & Rate Limiting Guard
+interface LoginRateLimitRecord {
+  failedCount: number;
+  lockUntil: number;
+}
+const loginRateLimitMap = new Map<string, LoginRateLimitRecord>();
+
+function checkLoginRateLimit(key: string): { locked: boolean; waitSeconds?: number } {
+  const now = Date.now();
+  const rec = loginRateLimitMap.get(key);
+  if (!rec) return { locked: false };
+  if (rec.lockUntil > now) {
+    return { locked: true, waitSeconds: Math.ceil((rec.lockUntil - now) / 1000) };
+  }
+  if (rec.lockUntil > 0 && rec.lockUntil <= now) {
+    loginRateLimitMap.delete(key);
+  }
+  return { locked: false };
+}
+
+function recordFailedLogin(key: string) {
+  const now = Date.now();
+  const rec = loginRateLimitMap.get(key) || { failedCount: 0, lockUntil: 0 };
+  rec.failedCount += 1;
+  if (rec.failedCount >= 10) {
+    rec.lockUntil = now + 60 * 1000; // 1-minute temporary safety lock
+  }
+  loginRateLimitMap.set(key, rec);
+}
+
+function clearFailedLogin(key: string) {
+  loginRateLimitMap.delete(key);
+}
+
 async function authenticateUserCredentials(rawId: any, rawPassword: any): Promise<{ status: number; body: any }> {
   const cleanId = normalizeUniversal(rawId).trim();
   const cleanPass = normalizeUniversal(rawPassword).trim();
@@ -1255,6 +1317,18 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
       body: {
         success: false,
         error: 'ইউজার আইডি / মোবাইল নম্বর এবং পাসওয়ার্ড প্রয়োজন (User ID / Phone & Password required)'
+      }
+    };
+  }
+
+  // Security Lockout Verification
+  const rateLimit = checkLoginRateLimit(cleanId);
+  if (rateLimit.locked) {
+    return {
+      status: 429,
+      body: {
+        success: false,
+        error: `অতিরিক্ত ভুল চেষ্টার কারণে অ্যাকাউন্ট সাময়িকভাবে লক হয়েছে। ${rateLimit.waitSeconds} সেকেন্ড পর চেষ্টা করুন। (Too many failed attempts. Please wait ${rateLimit.waitSeconds}s)`
       }
     };
   }
@@ -1287,17 +1361,25 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
 
   if (!matchedUser) {
     // Check if cleanId matches any Agency name in cached disconnection tasks or Google Sheet tasks
-    const discTasks = cachedDisconnectionState?.tasks || [];
-    const matchingDiscTask = discTasks.find((t: any) => {
+    let discTasks = cachedDisconnectionState?.tasks || [];
+    if (!discTasks || discTasks.length === 0) {
+      try {
+        const gasTasks = await fetchDisconnectionTasksFromGoogleSheet();
+        if (Array.isArray(gasTasks) && gasTasks.length > 0) {
+          discTasks = gasTasks;
+        }
+      } catch {}
+    }
+    const cleanAlnum = cleanId.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const matchingDiscTask = (discTasks || []).find((t: any) => {
       const ag = String(t.Agency || t.agency || t.assignedAgency || t['Agency Name'] || '').trim().toLowerCase();
       const agAlnum = ag.replace(/[^a-z0-9]/g, '');
-      const cleanAlnum = cleanId.toLowerCase().replace(/[^a-z0-9]/g, '');
       return (ag && (ag === cleanId.toLowerCase() || (cleanAlnum.length >= 3 && (agAlnum === cleanAlnum || agAlnum.includes(cleanAlnum) || cleanAlnum.includes(agAlnum)))));
     });
     if (matchingDiscTask) {
       const agName = String(matchingDiscTask.Agency || matchingDiscTask.agency || matchingDiscTask.assignedAgency || cleanId).trim();
       matchedUser = {
-        id: `usr_agency_${cleanId.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+        id: `usr_agency_${cleanAlnum || 'agency'}`,
         idNo: cleanId.toUpperCase(),
         loginId: cleanId,
         userId: cleanId,
@@ -1312,6 +1394,7 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
   }
 
   if (!matchedUser) {
+    recordFailedLogin(cleanId);
     return {
       status: 401,
       body: {
@@ -1334,6 +1417,7 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
 
   const passwordValid = checkUserPasswordMatch(matchedUser, cleanPass);
   if (!passwordValid) {
+    recordFailedLogin(cleanId);
     return {
       status: 401,
       body: {
@@ -1343,8 +1427,15 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     };
   }
 
+  // Clear any failed attempts upon verified authentication
+  clearFailedLogin(cleanId);
+
   const roleStr = String(matchedUser['Role'] || matchedUser.role || 'worker').trim().toLowerCase();
   const idNoStr = String(matchedUser.idNo || matchedUser['User ID'] || cleanId).trim();
+  const nameStr = String(matchedUser['Full Name'] || matchedUser.name || '').trim();
+  const desigStr = String(matchedUser['Designation'] || matchedUser.designation || '').trim();
+  const agencyNameStr = String(matchedUser['Agency Name'] || matchedUser.agencyName || '').trim();
+
   const isRoleAdmin =
     roleStr === 'admin' ||
     roleStr === 'controller' ||
@@ -1358,8 +1449,12 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
   const isRoleAgency =
     !isRoleAdmin &&
     (roleStr === 'agency' ||
+      roleStr.includes('agency') ||
       /^agn[-_0-9]/i.test(idNoStr) ||
-      /^agency[-_0-9]/i.test(idNoStr));
+      /^agency[-_0-9]/i.test(idNoStr) ||
+      /agency|এজেন্সি/i.test(desigStr) ||
+      Boolean(agencyNameStr) ||
+      /enterprise|agency|associates|traders|construction/i.test(nameStr));
   const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
 
   const session = {
@@ -1367,14 +1462,13 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     idNo: idNoStr,
     loginId: idNoStr,
     userId: idNoStr,
-    name: String(matchedUser['Full Name'] || matchedUser.name || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
-    agencyName: String(matchedUser['Agency Name'] || matchedUser.agencyName || matchedUser['Full Name'] || matchedUser.name || ''),
+    name: String(nameStr || (isRoleAdmin ? 'NAYEM (Admin Controller)' : isRoleAgency ? 'Agency Partner' : 'কর্মী')),
+    agencyName: String(agencyNameStr || (isRoleAgency ? (nameStr || 'Agency Partner') : '')),
     phone: String(matchedUser['Phone'] || matchedUser.phone || ''),
     role: resolvedRole,
     status: 'active' as const,
     designation: String(
-      matchedUser['Designation'] ||
-      matchedUser.designation ||
+      desigStr ||
       (isRoleAdmin ? 'Sub-Divisional Controller' : isRoleAgency ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)' : 'লাইনম্যান / Worker (WBSEDCL)')
     ),
     badgeNo: String(matchedUser['Badge No'] || matchedUser.badgeNo || idNoStr),
@@ -1397,7 +1491,7 @@ app.all(['/api/auth/login', '/api/login'], async (req, res) => {
     const result = await authenticateUserCredentials(rawId, body.password);
     return res.status(result.status).json(result.body);
   } catch (error: any) {
-    console.error('Login error:', error);
+    console.warn('Login authentication notice:', error?.message || error);
     if (!res.headersSent) {
       return res.status(500).json({ 
         success: false, 
@@ -3503,11 +3597,11 @@ app.get('/api/entries', async (req, res) => {
 app.post('/api/entries', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const payload = req.body.data || req.body;
-    const saved = await handleFastCreateEntry(payload, 'createEntry');
+    const rawPayload = req.body.data || req.body;
+    const saved = await handleFastCreateEntry(rawPayload, 'createEntry');
     return res.status(201).json({ success: true, entry: saved, data: saved });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to submit entry to Google Sheets' });
+    return res.status(500).json({ success: false, error: err.message || 'Failed to submit entry' });
   }
 });
 
@@ -3519,8 +3613,8 @@ const handleEntryUpdateRequest = async (req: express.Request, res: express.Respo
     if (!cleanId) {
       return res.status(400).json({ success: false, error: 'Record ID is required for update.' });
     }
-    const bodyData = (req.body && typeof req.body.data === 'object') ? req.body.data : req.body;
-    const updated = await handleFastUpdateEntry(cleanId, bodyData);
+    const rawBodyData = (req.body && typeof req.body.data === 'object') ? req.body.data : req.body;
+    const updated = await handleFastUpdateEntry(cleanId, rawBodyData);
     return res.json({ success: true, entry: updated, data: updated });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to update entry in Google Sheets' });
@@ -6369,11 +6463,11 @@ function fetchOfficialWbsedclReport(consumerId: string) {
   }
 }
 
-app.post('/api/wbsedcl/live-check', async (req, res) => {
+app.all('/api/wbsedcl/live-check', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
-    const rawConsumerId = String(req.body?.consumerId || req.body?.id || req.body?.taskId || '').trim();
-    const cleanId = rawConsumerId.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim();
+    const rawConsumerId = String(req.body?.consumerId || req.query?.consumerId || req.body?.id || req.body?.taskId || req.query?.id || '').trim();
+    const cleanId = cleanAndNormalizeConsumerId(rawConsumerId);
     if (!cleanId) {
       return res.status(400).json({
         success: false,

@@ -1,20 +1,33 @@
 {
-  "name": "Power of Construction",
-  "short_name": "Power App",
-  "description": "WBSEDCL Electric Utility Field Operations & Data Management",
-  "start_url": "/",
   "id": "/",
+  "name": "POWER - WBSEDCL Field Service",
+  "short_name": "POWER",
+  "description": "WBSEDCL Electric Utility Field Operations, NSC, Disconnection, Meter Replacement, DTR, and Work Orders Management App",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#030c1d",
+  "theme_color": "#030c1d",
+  "categories": ["utilities", "business", "productivity"],
   "icons": [
     {
-      "src": "/power_logo.jpg",
-      "sizes": "192x192 512x512",
-      "type": "image/jpeg",
-      "purpose": "any maskable"
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

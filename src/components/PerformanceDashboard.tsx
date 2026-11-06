@@ -33,6 +33,7 @@ import {
   getTaskPhase,
   getTaskConnectionClass,
   matchesDisconnectionStatus,
+  isAgencyUserSession,
   PhaseFilterType,
   ClassFilterType,
   StatusFilterType
@@ -223,7 +224,15 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
     setSelectedDiscStatus((prev) => (prev === status ? null : status));
   };
 
-  const isAgency = currentUser?.role === 'agency';
+  const isAgency = Boolean(
+    currentUser?.role === 'agency' ||
+    String(currentUser?.role || '').toLowerCase().includes('agency') ||
+    /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+    /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+    Boolean((currentUser as any)?.agencyName) ||
+    /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '') ||
+    isAgencyUserSession(currentUser, disconnectionTasks)
+  );
 
   // Agency Specific Filter States (Exact match for IMG_6108.jpeg)
   const [agencySelectedAgency, setAgencySelectedAgency] = useState<string>('All');
