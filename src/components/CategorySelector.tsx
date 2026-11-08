@@ -116,7 +116,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
       </div>
 
       {/* Grid of 5 Category Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3.5">
         {categories.map((cat, idx) => {
           const Icon = cat.icon;
           const isSelected = selectedCategory === cat.id;
@@ -139,7 +139,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
               key={`${cat.id}-${idx}`}
               type="button"
               onClick={() => onSelectCategory(cat.id)}
-              className={`text-left rounded-2xl sm:rounded-3xl p-4.5 sm:p-5.5 transition-all duration-200 flex flex-col justify-between relative overflow-hidden cursor-pointer group ${
+              className={`text-left rounded-2xl p-3.5 sm:p-4 transition-all duration-200 flex flex-col justify-between relative overflow-hidden cursor-pointer group ${
                 isNight
                   ? `bg-[#06122c] border-2 shadow-[0_0_20px_rgba(14,165,233,0.2)] hover:border-[#38bdf8] hover:shadow-[0_0_25px_rgba(14,165,233,0.35)] ${
                       isSelected ? 'border-[#38bdf8] ring-2 ring-[#0ea5e9]/40' : 'border-[#0ea5e9]/70'
@@ -155,34 +155,34 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
               <TransmissionPylonSvg
                 theme={theme}
                 mode="card"
-                className={`absolute right-0 bottom-0 w-36 h-48 pointer-events-none select-none transition-opacity ${
+                className={`absolute right-0 bottom-0 w-24 h-32 pointer-events-none select-none transition-opacity ${
                   isNight ? 'opacity-30' : 'opacity-[0.05]'
                 }`}
               />
 
               {/* Relative Content Container */}
-              <div className="relative z-10 w-full flex flex-col justify-between h-full space-y-3.5 sm:space-y-4">
+              <div className="relative z-10 w-full flex flex-col justify-between h-full space-y-2.5 sm:space-y-3">
                 {/* Top Row: Icon + Count Badges */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                  <div className={`w-9.5 h-9.5 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
                     isNight
                       ? 'bg-gradient-to-br from-[#fbbf24] to-[#f59e0b] text-slate-950 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
                       : dayIconStyle
                   }`}>
-                    <Icon className="w-5.5 h-5.5 sm:w-6 sm:h-6" />
+                    <Icon className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                   </div>
 
                   {/* Badges */}
                   {cat.id === 'DISCONNECTION' ? (
-                    <div className="flex flex-col items-end gap-1.5 shrink-0">
-                      <span className={`text-[11px] font-black px-3.5 py-0.5 rounded-full shadow-2xs ${
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className={`text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full shadow-2xs ${
                         isNight
                           ? 'bg-[#f43f5e] text-white shadow-[0_0_10px_rgba(244,63,94,0.4)]'
                           : 'bg-[#ffe4e6] border border-[#fecdd3] text-[#9f1239]'
                       }`}>
                         {currentLanguage === 'bn' ? `মোট তালিকা: ${count}` : `Total List: ${count}`}
                       </span>
-                      <span className={`text-[11px] font-black px-3.5 py-0.5 rounded-full shadow-2xs ${
+                      <span className={`text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full shadow-2xs ${
                         isNight
                           ? 'bg-[#f59e0b] text-slate-950 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
                           : 'bg-[#ffe4e6] border border-[#fecdd3] text-[#9f1239]'
@@ -191,7 +191,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                       </span>
                     </div>
                   ) : (
-                    <span className={`text-xs font-black px-3.5 py-1 rounded-full shrink-0 shadow-2xs ${
+                    <span className={`text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full shrink-0 shadow-2xs ${
                       isNight
                         ? 'bg-[#f59e0b] text-slate-950 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
                         : 'bg-[#fef3c7] border border-[#fde68a] text-[#92400e]'
@@ -202,14 +202,14 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                 </div>
 
                 {/* Body: Number, Title, Subtitle, Short Desc */}
-                <div className="space-y-1">
-                  <span className={`text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wider block ${
+                <div className="space-y-0.5 sm:space-y-1">
+                  <span className={`text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-wider block ${
                     isNight ? 'text-[#38bdf8]' : 'text-slate-500'
                   }`}>
                     {cat.code}
                   </span>
 
-                  <h3 className={`font-black text-base sm:text-lg leading-tight tracking-tight transition-colors ${
+                  <h3 className={`font-black text-sm sm:text-base leading-tight tracking-tight transition-colors ${
                     isNight
                       ? 'text-white group-hover:text-[#38bdf8]'
                       : 'text-slate-900 group-hover:text-[#2563eb]'
@@ -217,13 +217,13 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                     {cat.title}
                   </h3>
 
-                  <p className={`text-xs sm:text-[13px] font-semibold leading-tight pt-0.5 ${
+                  <p className={`text-[11px] sm:text-xs font-semibold leading-tight pt-0.5 ${
                     isNight ? 'text-sky-200' : 'text-slate-700'
                   }`}>
                     {cat.subtitle}
                   </p>
 
-                  <p className={`text-xs leading-relaxed pt-1 line-clamp-2 ${
+                  <p className={`text-[11px] sm:text-xs leading-relaxed pt-0.5 line-clamp-1 sm:line-clamp-2 ${
                     isNight ? 'text-slate-300 font-medium' : 'text-slate-600 font-normal'
                   }`}>
                     {cat.shortDesc}
@@ -231,7 +231,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                 </div>
 
                 {/* Bottom Row: Action Link + Right Chevron */}
-                <div className={`pt-3 border-t flex items-center justify-between text-xs sm:text-[13px] font-black transition-colors ${
+                <div className={`pt-2.5 border-t flex items-center justify-between text-[11px] sm:text-xs font-black transition-colors ${
                   isNight
                     ? 'border-blue-900/60 text-[#38bdf8] group-hover:text-white'
                     : 'border-slate-100 text-slate-800 group-hover:text-[#2563eb]'
@@ -241,7 +241,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                       ? (currentLanguage === 'bn' ? `ডিসকানেকশন লিস্ট (${count}) →` : `Disconnection List (${count}) →`)
                       : cat.actionText}
                   </span>
-                  <ChevronRight className={`w-4 h-4 transition-transform group-hover:translate-x-1 ${
+                  <ChevronRight className={`w-3.5 h-3.5 transition-transform group-hover:translate-x-1 ${
                     isNight ? 'text-[#38bdf8]' : 'text-slate-400 group-hover:text-[#2563eb]'
                   }`} />
                 </div>

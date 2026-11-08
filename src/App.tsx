@@ -1257,7 +1257,7 @@ export default function App() {
       </aside>
 
       {/* MAIN VIEWPORT (Top Header + Scrollable Content) */}
-      <main className={`flex-1 flex flex-col min-w-0 overflow-hidden ${
+      <main className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative ${
         theme === 'night' ? 'bg-[#060a17]' : 'bg-slate-50'
       }`}>
         {/* Top Operations Header */}
@@ -1286,20 +1286,20 @@ export default function App() {
         />
 
         {/* Content Container */}
-        <section className={`flex-1 overflow-y-auto px-3.5 py-4 sm:px-6 sm:py-6 lg:px-8 space-y-5 ${
+        <section className={`flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 ${
           theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
         }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
               {activeTab === 'entry' && (
-                <div className="max-w-4xl mx-auto w-full space-y-4 sm:space-y-5">
+                <div className="space-y-6">
                   {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
                   {activeFormCategory === null ? (
-                    <div className="space-y-4 sm:space-y-5">
+                    <div className="space-y-6">
                       {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
                       <div className="space-y-4">
                         <div 
                           onClick={() => setIsHomeDashboardExpanded(!isHomeDashboardExpanded)}
-                          className={`rounded-2xl sm:rounded-3xl p-4 sm:p-5 lg:p-6 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none ${
+                          className={`rounded-3xl p-5 sm:p-6 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none ${
                             theme === 'night'
                               ? 'bg-gradient-to-r from-[#030d22] via-[#051638] to-[#020b1f] border-2 border-[#0ea5e9] text-white shadow-[0_0_25px_rgba(14,165,233,0.35)] hover:shadow-[0_0_35px_rgba(14,165,233,0.5)]'
                               : 'bg-gradient-to-br from-[#1d2f6f] via-[#142358] to-[#0d163a] text-white shadow-md hover:shadow-lg'
@@ -1320,15 +1320,15 @@ export default function App() {
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
                             {/* Left: Icon, Title, Subtitle, Live Badge */}
                             <div className="flex items-start sm:items-center gap-3.5">
-                              <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
                                 theme === 'night'
                                   ? 'bg-gradient-to-br from-[#0284c7] to-[#1e40af] text-white shadow-[0_0_15px_rgba(14,165,233,0.6)] border border-cyan-400/30'
                                   : 'bg-blue-600/30 border border-blue-400/30 text-blue-400'
                               }`}>
-                                <BarChart3 className="w-5 h-5 sm:w-6 sm:h-6" />
+                                <BarChart3 className="w-6 h-6" />
                               </div>
                               <div>
-                                <h2 className="text-sm sm:text-base lg:text-lg font-black tracking-wide text-white uppercase">
+                                <h2 className="text-base sm:text-lg font-black tracking-wide text-white uppercase">
                                   <span>{t.performanceDashboard}</span>
                                 </h2>
                                 <div className="mt-1">
@@ -1351,7 +1351,7 @@ export default function App() {
 
                             {/* Right: CTA Open / Close Button matching photo */}
                             <div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
-                              <div className={`px-4 sm:px-5 py-2 sm:py-2.5 font-black rounded-xl sm:rounded-2xl text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md cursor-pointer ${
+                              <div className={`px-5 py-2.5 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md cursor-pointer ${
                                 theme === 'night'
                                   ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_15px_rgba(0,180,255,0.6)] hover:brightness-110'
                                   : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-md'

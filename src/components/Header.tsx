@@ -107,17 +107,17 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className={`h-15 sm:h-18 px-3.5 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 z-30 transition-colors duration-200 ${
+    <header className={`h-16 sm:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 sticky top-0 transition-colors duration-200 ${
       theme === 'night' 
         ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
         : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'
     }`}>
       {/* Left Title & System Status */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3">
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className={`p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer ${
+            className={`p-2 rounded-xl transition-all cursor-pointer ${
               theme === 'night' 
                 ? 'text-white hover:bg-slate-800' 
                 : 'text-slate-800 hover:bg-slate-100'
@@ -127,11 +127,11 @@ export const Header: React.FC<HeaderProps> = ({
             <Menu className="w-5 h-5 stroke-[2.5]" />
           </button>
         )}
-        <div className="flex items-center gap-2 sm:gap-2.5">
+        <div className="flex items-center gap-2.5 sm:gap-3">
           <img 
             src={appLogo} 
             alt="Power of Construction Round Logo" 
-            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
+            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
             referrerPolicy="no-referrer"
           />
           <div>
@@ -141,12 +141,12 @@ export const Header: React.FC<HeaderProps> = ({
               }`}>
                 POWER
               </h1>
-              <span className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-black tracking-wide uppercase flex items-center gap-1.5 shadow-2xs ${
+              <span className={`px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-black tracking-wider uppercase flex items-center gap-1 shadow-2xs ${
                 theme === 'night'
                   ? 'bg-emerald-950/70 border border-emerald-500/60 text-emerald-300'
                   : 'bg-[#dcfce7] border border-[#86efac] text-[#15803d]'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${
+                <span className={`w-1.5 h-1.5 rounded-full ${
                   theme === 'night' ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-600 animate-pulse'
                 }`}></span>
                 LIVE
@@ -157,19 +157,19 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right Controls: Golden Home Button + 3-Dots Button */}
-      <div className="flex items-center gap-2 sm:gap-2.5">
+      <div className="flex items-center gap-1.5 sm:gap-2">
         {/* Home Button with House Symbol */}
         <button
           id="header-home-btn"
           onClick={() => setActiveTab('entry')}
-          className={`flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl text-xs sm:text-sm font-black transition-all active:scale-95 border cursor-pointer shadow-xs ${
+          className={`flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all active:scale-95 border cursor-pointer shadow-xs ${
             theme === 'night'
               ? 'bg-[#f59e0b] hover:bg-[#d97706] text-slate-950 border-amber-500 ring-1 ring-amber-400/30'
               : 'bg-[#ffbe1a] hover:bg-[#f59e0b] text-slate-950 border-amber-400 ring-1 ring-amber-300/30'
           }`}
           title="Back to Home"
         >
-          <Home className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+          <Home className="w-3.5 h-3.5 text-slate-950 stroke-[2.2]" />
           <span>Home</span>
         </button>
 
@@ -178,7 +178,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="header-tools-menu-btn"
             onClick={() => setMenuOpen(!menuOpen)}
-            className={`p-2 rounded-xl border transition-all flex items-center justify-center cursor-pointer ${
+            className={`p-1.5 sm:p-2 rounded-xl border transition-all flex items-center justify-center cursor-pointer ${
               theme === 'night' 
                 ? 'bg-[#0f1b33] hover:bg-[#18284d] text-slate-300 hover:text-white border-blue-900/60 shadow-[0_0_10px_rgba(14,165,233,0.15)]' 
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200 shadow-2xs'
@@ -186,7 +186,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Options Menu"
             aria-label="Options menu"
           >
-            <MoreVertical className="w-4 h-4" />
+            <MoreVertical className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </button>
 
           {/* Dropdown Menu for Quick Tools & Options */}
