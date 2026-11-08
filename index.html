@@ -2,8 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no" />
     <script>
+      // Native Android App Touch & Gesture Lock: prevent pinch zoom & double-tap zoom
+      document.addEventListener('gesturestart', function (e) { e.preventDefault(); }, false);
+      document.addEventListener('gesturechange', function (e) { e.preventDefault(); }, false);
+      document.addEventListener('gestureend', function (e) { e.preventDefault(); }, false);
+      document.addEventListener('dblclick', function (e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener('touchmove', function (e) {
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
       window.addEventListener('error', function (e) {
         if (!e) return;
         var msg = String(e.message || '');

@@ -697,7 +697,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-screen w-screen overflow-hidden font-sans antialiased ${
+    <div className={`flex h-full h-[100dvh] w-full overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
@@ -1286,7 +1286,7 @@ export default function App() {
         />
 
         {/* Content Container */}
-        <section className={`flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 ${
+        <section className={`flex-1 min-h-0 overflow-y-auto overscroll-none touch-pan-y select-none p-4 sm:p-6 lg:p-8 space-y-6 ${
           theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
         }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
