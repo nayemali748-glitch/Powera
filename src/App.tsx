@@ -748,16 +748,25 @@ export default function App() {
 
   // Ensure top of Home Screen & content viewport is always visible on mount or navigation
   useEffect(() => {
-    if (mainScrollRef.current) {
-      mainScrollRef.current.scrollTop = 0;
-    }
-    try {
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-    } catch {
-      // ignore
-    }
+    const resetTop = () => {
+      if (mainScrollRef.current) {
+        mainScrollRef.current.scrollTop = 0;
+      }
+      try {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      } catch {
+        // ignore
+      }
+    };
+    resetTop();
+    const t1 = setTimeout(resetTop, 80);
+    const t2 = setTimeout(resetTop, 250);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [activeTab, activeFormCategory, currentUser]);
 
   // If user is not logged in with ID & Password, display LoginScreen
@@ -772,7 +781,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-full w-full min-h-0 overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
+    <div className={`fixed inset-0 flex h-full w-full min-h-0 overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
