@@ -211,38 +211,6 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
 
               <div className="py-1">
-                {/* 1. LIVE OSD & BILL CHECK OPTION */}
-                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
-                  <button
-                    id="header-menu-live-osd-btn"
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      if (onOpenLiveOsdCheck) onOpenLiveOsdCheck();
-                    }}
-                    className="w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer border bg-emerald-50 hover:bg-emerald-100/80 border-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-600/40 dark:hover:bg-emerald-900/50 shadow-2xs group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="p-2 rounded-lg bg-emerald-600 text-white shadow-xs group-hover:scale-105 transition-transform">
-                        <Zap className="w-4 h-4 fill-white" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-black tracking-wide text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>{currentLanguage === 'bn' ? 'লাইভ OSD ও বকেয়া চেক' : 'Live OSD & Bill Check'}</span>
-                          <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 rounded text-[9px] font-bold">WBSEDCL</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-300 font-semibold mt-0.5">
-                          {currentLanguage === 'bn' 
-                            ? 'কনজিউমার আইডি দিয়ে লাইভ বকেয়া ও নো-ডিউজ রিপোর্ট' 
-                            : 'Live Outstanding, LPSC Surcharge & No Dues'}
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-600 text-white shadow-2xs">
-                      LIVE
-                    </span>
-                  </button>
-                </div>
 
                 {/* DAY / NIGHT THEME SWITCHER OPTION */}
                 <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">

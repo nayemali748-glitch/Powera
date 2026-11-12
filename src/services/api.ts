@@ -58,26 +58,14 @@ export function getActiveUserSessionSync(): UserSession | null {
 }
 
 export function getEntriesCacheKey(): string {
-  const session = getActiveUserSessionSync();
-  if (session?.spreadsheetId) {
-    return `power_entries_${session.spreadsheetId}`;
-  }
   return LOCAL_STORAGE_KEY;
 }
 
 export function getDisconnectionCacheKey(): string {
-  const session = getActiveUserSessionSync();
-  if (session?.spreadsheetId) {
-    return `power_disconnection_${session.spreadsheetId}`;
-  }
   return DISCONNECTION_TASKS_CACHE_KEY;
 }
 
 export function getWorkOrdersCacheKey(): string {
-  const session = getActiveUserSessionSync();
-  if (session?.spreadsheetId) {
-    return `power_workorders_${session.spreadsheetId}`;
-  }
   return WORK_ORDERS_STORAGE_KEY;
 }
 
@@ -167,12 +155,6 @@ export async function callGasApi<T = any>(
   const isBrowser = typeof window !== 'undefined';
   const session = getActiveUserSessionSync();
   const effectivePayload = { ...payload };
-  if (session?.spreadsheetId && !effectivePayload.spreadsheetId) {
-    effectivePayload.spreadsheetId = session.spreadsheetId;
-  }
-  if (session?.officeId && !effectivePayload.officeId) {
-    effectivePayload.officeId = session.officeId;
-  }
   let proxyError: Error | null = null;
 
   // 1. In browser environment, attempt the high-performance Express server proxy first
@@ -380,13 +362,7 @@ export async function fetchEntries(filters?: {
     if (filters?.workerName) query.set('workerName', filters.workerName);
     if (filters?.refresh) query.set('refresh', 'true');
 
-    const session = getActiveUserSessionSync();
-    if (session?.spreadsheetId) query.set('spreadsheetId', session.spreadsheetId);
-    if (session?.officeId) query.set('officeId', session.officeId);
-
     const headers: Record<string, string> = { 'Accept': 'application/json' };
-    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
-    if (session?.officeId) headers['x-office-id'] = session.officeId;
 
     // 1. Primary: Express /api/entries endpoint (Synced with Google Sheets)
     try {
@@ -434,32 +410,7 @@ export async function fetchEntries(filters?: {
     if (filters?.workerId) params.workerId = filters.workerId;
     if (filters?.workerName) params.workerName = filters.workerName;
 
-    if (session?.isOfficeScoped || session?.officeName || session?.spreadsheetId) {
-      if (!session.spreadsheetId) return [];
-      const officeRes = await callGasApi<any>('entries', { ...params, spreadsheetId: session.spreadsheetId }, 'GET');
-      const rawList = Array.isArray(officeRes?.entries)
-        ? officeRes.entries
-        : (Array.isArray(officeRes?.data) ? officeRes.data : []);
-      const filteredList = rawList.filter((e: any) => {
-        const catUp = String(e?.category || '').toUpperCase().trim();
-        const idUp = String(e?.id || e?.submissionId || '').toUpperCase().trim();
-        if (idUp === 'PWR-367356' || idUp === 'PWR-770566') return false;
-        return (
-          catUp !== 'USERS' &&
-          catUp !== 'USERS_AUTH' &&
-          catUp !== 'WORKORDERS_KHATA' &&
-          catUp !== 'WORK ORDERS' &&
-          catUp !== 'CHAT' &&
-          catUp !== 'CHAT_MESSAGES' &&
-          catUp !== 'SETTINGS' &&
-          catUp !== 'SYSTEM LOGS' &&
-          catUp !== 'DISCONNECTION_HISTORY'
-        );
-      });
-      const uniqueEntries = deduplicateEntries(filteredList.map((e: any) => normalizeEntry(e)));
-      writeCache(getEntriesCacheKey(), sanitizeEntriesForCache(uniqueEntries));
-      return uniqueEntries;
-    }
+
 
     const data = await callGasApi<any>('entries', params, 'GET');
     const rawList = Array.isArray(data?.entries)
@@ -590,6 +541,13 @@ export async function createEntry(
             updatedAt: nowIso
           };
           directPayload.reading = String(directPayload.initialReading || '000000').trim();
+          directPayload.meterSealNo = String(directPayload.meterSealNo || directPayload.sealNo || '').trim();
+          directPayload.premisesAddress = String(directPayload.premisesAddress || directPayload.address || '').trim();
+          directPayload.initialMeterReading = directPayload.reading;
+          directPayload.volumeNo = String(directPayload.volumeNo || '').trim();
+          directPayload.pageNo = String(directPayload.pageNo || '').trim();
+          directPayload.inspectionAgency = String(directPayload.inspectionAgency || directPayload.inspectionAgencyName || '').trim();
+          directPayload.technicalNotes = nscMeta.notes;
           directPayload.substation = nscMeta.cccName;
           directPayload.feederName = `NSC_META::${JSON.stringify(nscMeta)}`;
           directPayload.remarks = nscMeta.notes;
@@ -1606,23 +1564,9 @@ export async function loginUser(loginId: string, password: string): Promise<User
 
   try {
     const prevRaw = localStorage.getItem('power_user_session');
-    let prevSpreadsheetId = '';
-    if (prevRaw) {
-      try { prevSpreadsheetId = JSON.parse(prevRaw)?.spreadsheetId || ''; } catch {}
-    }
-    // If logging into a different office or switching between super admin and office account:
-    if (prevSpreadsheetId !== (session.spreadsheetId || '')) {
-      try {
-        localStorage.removeItem(LOCAL_STORAGE_KEY);
-        localStorage.removeItem(DISCONNECTION_TASKS_CACHE_KEY);
-        localStorage.removeItem(WORK_ORDERS_STORAGE_KEY);
-      } catch {}
-    }
-
     localStorage.setItem('power_user_session', JSON.stringify(session));
-    const isSuperAdmin =
-      (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin') && !session.isOfficeScoped;
-    if (isSuperAdmin) {
+    const isAdminUser = session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'admin';
+    if (isAdminUser) {
       localStorage.setItem('power_is_admin', 'true');
     } else {
       localStorage.removeItem('power_is_admin');
@@ -1785,13 +1729,7 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
     let rawList: any[] = [];
     let fetchedSuccessfully = false;
 
-    const session = getActiveUserSessionSync();
-    if (session?.spreadsheetId) params.spreadsheetId = session.spreadsheetId;
-    if (session?.officeId) params.officeId = session.officeId;
-
     const headers: Record<string, string> = { 'Accept': 'application/json' };
-    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
-    if (session?.officeId) headers['x-office-id'] = session.officeId;
 
     // 1. Primary: Express Backend /api/work-orders (synced with Google Sheets WorkOrders_Khata)
     try {
@@ -1810,9 +1748,6 @@ export async function fetchWorkOrders(category?: string, forceRefresh = false): 
 
     // 2. Fallback: Gas Proxy / Direct GAS 'workorders'
     if (!fetchedSuccessfully) {
-      if (session?.isOfficeScoped || session?.officeName || session?.spreadsheetId) {
-        return [];
-      }
       try {
         const data = await callGasApi<{ success: boolean; workOrders: WorkOrderNotice[] }>('workorders', params, 'GET');
         if (data && Array.isArray(data.workOrders)) {
@@ -2474,12 +2409,7 @@ export async function fetchDisconnectionTasks(params: {
     if (params.includeArchived) query.set('includeArchived', 'true');
     if (params.refresh) query.set('refresh', 'true');
 
-    if (session?.spreadsheetId) query.set('spreadsheetId', session.spreadsheetId);
-    if (session?.officeId) query.set('officeId', session.officeId);
-
     const headers: Record<string, string> = { 'Accept': 'application/json' };
-    if (session?.spreadsheetId) headers['x-spreadsheet-id'] = session.spreadsheetId;
-    if (session?.officeId) headers['x-office-id'] = session.officeId;
 
     const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, { headers });
     const ct = res.headers.get('content-type') || '';
@@ -2505,9 +2435,6 @@ export async function fetchDisconnectionTasks(params: {
   // Step 2: Direct Google Apps Script Web App fallback (works on static/serverless hosting)
   try {
     const gasPayload: any = { category: 'Disconnection' };
-    if (session?.spreadsheetId) {
-      gasPayload.spreadsheetId = session.spreadsheetId;
-    }
     const gasRes = await callGasApi<any>('getDisconnectionTasks', gasPayload, 'GET', 25000);
     const rawArr = Array.isArray(gasRes?.entries)
       ? gasRes.entries
@@ -2934,7 +2861,7 @@ export async function submitDisconnectionTaskReport(report: {
   // Try Express backend /api/disconnection-tasks/report
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), 30000);
     const res = await fetch('/api/disconnection-tasks/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2964,22 +2891,94 @@ export async function submitDisconnectionTaskReport(report: {
     }
   } catch {}
 
-  // Non-blocking in-place Google Sheets update fallback (NEVER append/submit duplicate records)
+  // In-place Google Sheets update fallback (preserves original master columns while updating status, remark, and report fields)
   const syncToGasFallback = async () => {
+    const orig = existingCachedTask || {};
+    const origName = String(orig['Name'] ?? orig.consumerName ?? report.consumerName ?? '').trim();
+    const origAddress = String(orig['Address'] ?? orig.consumerAddress ?? (report as any)['Address'] ?? '').trim();
+    const origOffCode = String(orig['off_code'] ?? orig.offCode ?? orig.area ?? (report as any)['off_code'] ?? '').trim();
+    const origMru = String(orig['MRU'] ?? orig.mru ?? orig.mruSection ?? (report as any)['MRU'] ?? '').trim();
+    const origBaseClass = String(orig['Base Class'] ?? orig.baseClass ?? (report as any)['Base Class'] ?? '').trim();
+    const origClass = String(orig['Class'] ?? orig.classType ?? (report as any)['Class'] ?? '').trim();
+    const origDevice = String(orig['Device'] ?? orig.device ?? orig.deviceType ?? (report as any)['Device'] ?? '').trim();
+    const origDueDateRange = String(orig['O/S Duedate Range'] ?? orig.dueDateRange ?? (report as any)['O/S Duedate Range'] ?? '').trim();
+    const origD2NetOs = String(orig['D2 Net O/S'] ?? orig.outstandingDue ?? (report as any)['D2 Net O/S'] ?? '').trim();
+    const origMobile = String(orig['Mobile'] ?? orig.phoneNumber ?? (report as any)['Mobile'] ?? '').trim();
+    const origAgency = String(orig['Agency'] ?? orig.agency ?? orig.assignedAgency ?? (report as any)['Agency'] ?? '').trim();
+    const origGovNonGov = String(orig['Gov/Non-Gov'] ?? orig.govNonGov ?? (report as any)['Gov/Non-Gov'] ?? '').trim();
+
+    const statusOnlyPayload: Record<string, any> = {
+      id: discId,
+      submissionId: discId,
+      consumerId: cId,
+      'Consumer Id': cId,
+      category: 'Disconnection',
+      ...(origName ? { 'Name': origName, consumerName: origName } : {}),
+      ...(origAddress ? { 'Address': origAddress, consumerAddress: origAddress } : {}),
+      ...(origOffCode ? { off_code: origOffCode, offCode: origOffCode } : {}),
+      ...(origMru ? { MRU: origMru, mru: origMru } : {}),
+      ...(origBaseClass ? { 'Base Class': origBaseClass, baseClass: origBaseClass } : {}),
+      ...(origClass ? { 'Class': origClass, class: origClass, classType: origClass } : {}),
+      ...(origDevice ? { 'Device': origDevice, device: origDevice, deviceType: origDevice } : {}),
+      ...(origDueDateRange ? { 'O/S Duedate Range': origDueDateRange, dueDateRange: origDueDateRange } : {}),
+      ...(origD2NetOs ? { 'D2 Net O/S': origD2NetOs, d2NetOs: origD2NetOs, outstandingDue: origD2NetOs } : {}),
+      ...(origMobile ? { 'Mobile': origMobile, phoneNumber: origMobile } : {}),
+      ...(origAgency ? { 'Agency': origAgency, agency: origAgency, assignedAgency: origAgency } : {}),
+      ...(origGovNonGov ? { 'Gov/Non-Gov': origGovNonGov, govNonGov: origGovNonGov } : {}),
+      taskStatus: newStatus,
+      disconStatus: newStatus,
+      status: newStatus,
+      'Discon Status': newStatus,
+      'Status': newStatus,
+      workerRemarks: remarksStr,
+      workerReport: remarksStr,
+      notes: remarksStr,
+      'Notes': remarksStr,
+      remarks: remarksStr,
+      'Remark': remarksStr,
+      'Remarks': remarksStr,
+      paymentStatus: effectivePaymentStatus,
+      'Payment Status': effectivePaymentStatus,
+      lastUpdated: nowIso,
+      'Last Updated': nowIso,
+      updatedAt: nowIso,
+      _isNewInsert: false
+    };
+    if (effectiveDisconDate) {
+      statusOnlyPayload.disconDate = effectiveDisconDate;
+      statusOnlyPayload['Discon Date'] = effectiveDisconDate;
+    }
+    if (effectiveReading) {
+      statusOnlyPayload.reading = effectiveReading;
+      statusOnlyPayload['Reading'] = effectiveReading;
+    }
+    if (effectivePaidAmount) {
+      statusOnlyPayload.paidAmount = effectivePaidAmount;
+      statusOnlyPayload['Paid Amount'] = effectivePaidAmount;
+    }
+    if (effectivePaidDate) {
+      statusOnlyPayload.paidDate = effectivePaidDate;
+      statusOnlyPayload['Paid Date'] = effectivePaidDate;
+    }
+    if (effectivePaidType) {
+      statusOnlyPayload.paidType = effectivePaidType;
+      statusOnlyPayload['Paid Type'] = effectivePaidType;
+    }
+    if (effectiveGisPole) {
+      statusOnlyPayload.gisPole = effectiveGisPole;
+      statusOnlyPayload['Gis Pole'] = effectiveGisPole;
+    }
     try {
-      const res = await callGasApi<any>('submitDisconnectionReport', { ...payload, _isNewInsert: false }, 'POST');
-      if (res && res.success !== false) {
-        return res;
-      }
-    } catch {}
-    try {
-      const upRes = await callGasApi<any>('updateEntry', { ...payload, data: payload, category: 'Disconnection', id: cId, _isNewInsert: false }, 'POST');
-      if (upRes && upRes.success !== false && upRes.updated !== false) {
+      const upRes = await callGasApi<any>('updateEntry', {
+        ...statusOnlyPayload,
+        data: statusOnlyPayload
+      }, 'POST');
+      if (upRes && upRes.success !== false) {
         return upRes;
       }
     } catch {}
     try {
-      const discRes = await callGasApi<any>('updateDisconnection', { ...payload, _isNewInsert: false }, 'POST');
+      const discRes = await callGasApi<any>('updateDisconnection', statusOnlyPayload, 'POST');
       if (discRes && discRes.success !== false) {
         return discRes;
       }
@@ -2987,10 +2986,9 @@ export async function submitDisconnectionTaskReport(report: {
     return null;
   };
 
-  // Race the fallback sync with a 2.5s budget so the UI never hangs or shows an error
   await Promise.race([
     syncToGasFallback(),
-    new Promise(resolve => setTimeout(resolve, 2500))
+    new Promise(resolve => setTimeout(resolve, 6000))
   ]);
 
   return {

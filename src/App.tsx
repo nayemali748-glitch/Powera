@@ -65,14 +65,10 @@ import {
 } from 'lucide-react';
 
 /**
- * Formats Date as HH:MM:SS for Last synced indicator
+ * Formats Date as 12-hour hh:mm:ss AM/PM for Last synced indicator
  */
 function formatTimeHHMMSS(date: Date | null): string {
-  const d = date || new Date();
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
+  return formatTime12Hour(date || new Date(), true);
 }
 
 /**
@@ -304,11 +300,44 @@ export default function App() {
 
   const inFlightRef = useRef(false);
   const lastOrdersHashRef = useRef<string>('');
+  const recentDiscUpdatesRef = useRef<Map<string, { task: DisconnectionTask; timestamp: number }>>(new Map());
   const [syncMode, setSyncMode] = useState<SyncMode>('auto');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   const [isSyncing, setIsSyncing] = useState(false);
   const [forceRefreshState, setForceRefreshState] = useState<'idle' | 'refreshing' | 'completed' | 'failed'>('idle');
   const [disconnectionInitialTab, setDisconnectionInitialTab] = useState<'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST'>('VIEW_LIST');
+
+  // Keep App-level disconnectionTasks synced immediately whenever DisconnectionTaskManagement updates a consumer
+  useEffect(() => {
+    const normKey = (t: any) =>
+      String(t?.consumerId || t?.['Consumer Id'] || t?.taskId || '')
+        .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+        .replace(/\.0+$/, '')
+        .replace(/[, \-_]/g, '')
+        .trim()
+        .toLowerCase();
+
+    const onTaskUpdated = (e: Event) => {
+      const updated = (e as CustomEvent<DisconnectionTask>)?.detail;
+      if (!updated) return;
+      const k = normKey(updated);
+      if (k) {
+        recentDiscUpdatesRef.current.set(k, { task: updated, timestamp: Date.now() });
+      }
+      setDisconnectionTasks((prev) => {
+        const next = prev.map((t) => {
+          const tk = normKey(t);
+          const match = (k && tk === k) || (t.taskId && updated.taskId && t.taskId === updated.taskId);
+          return match ? { ...t, ...updated } : t;
+        });
+        lastDataHashRef.current = `${computeJsonChangeHash(entries)}_disc:${computeJsonChangeHash(next)}`;
+        return next;
+      });
+    };
+
+    window.addEventListener('power-disconnection-task-updated', onTaskUpdated);
+    return () => window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
+  }, [entries]);
 
   const loadData = async (silent: boolean | unknown = false, forceRefresh = false, throwOnError = false) => {
     if (!currentUser) return;
@@ -334,11 +363,42 @@ export default function App() {
         const idUp = String(e?.id || '').toUpperCase().trim();
         return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
       });
-      const validDiscTasks: DisconnectionTask[] = Array.isArray(discRes)
+      const rawValidDiscTasks: DisconnectionTask[] = Array.isArray(discRes)
         ? discRes
         : Array.isArray((discRes as any)?.tasks)
           ? (discRes as any).tasks
           : [];
+
+      const validDiscTasks: DisconnectionTask[] = rawValidDiscTasks.map((t) => {
+        const k = String(t?.consumerId || (t as any)?.['Consumer Id'] || t?.taskId || '')
+          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+          .replace(/\.0+$/, '')
+          .replace(/[, \-_]/g, '')
+          .trim()
+          .toLowerCase();
+        const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
+        if (rec && Date.now() - rec.timestamp < 60000) {
+          const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
+          const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
+          const inRem = String(t.workerRemarks || t.notes || '').trim();
+          const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
+          if (inSt !== locSt || inRem !== locRem) {
+            return {
+              ...t,
+              taskStatus: rec.task.taskStatus,
+              disconStatus: rec.task.disconStatus,
+              'Discon Status': rec.task['Discon Status'],
+              workerRemarks: rec.task.workerRemarks,
+              workerReport: rec.task.workerReport,
+              notes: rec.task.notes,
+              Notes: rec.task.Notes,
+              updatedAt: rec.task.updatedAt || t.updatedAt,
+              statusHistory: rec.task.statusHistory || t.statusHistory
+            };
+          }
+        }
+        return t;
+      });
 
       const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
 
@@ -668,11 +728,11 @@ export default function App() {
     return isAgencyUserSession(currentUser, disconnectionTasks);
   }, [isAdmin, currentUser, disconnectionTasks]);
 
-  const userVisibleDisconnectionTasks = (isAdmin || currentUser?.isOfficeScoped)
+  const userVisibleDisconnectionTasks = isAdmin
     ? disconnectionTasks
     : filterDisconnectionTasksForUser(disconnectionTasks, currentUser);
 
-  const userVisibleEntries = (isAdmin || currentUser?.isOfficeScoped)
+  const userVisibleEntries = isAdmin
     ? entries
     : filterEntriesForUser(entries, currentUser);
 
@@ -745,31 +805,7 @@ export default function App() {
           </button>
         </div>
 
-        {/* Office Identity Badge in Sidebar */}
-        {currentUser?.officeName && (
-          <div className={`px-4 py-2 border-b flex items-center justify-between gap-2 text-xs ${
-            theme === 'night' ? 'bg-emerald-950/30 border-slate-800' : 'bg-emerald-50/80 border-slate-200'
-          }`}>
-            <div className="truncate">
-              <div className="font-bold text-emerald-700 dark:text-emerald-300 truncate">
-                🏢 {currentUser.officeName}
-              </div>
-              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                {currentUser.databaseName || 'Office Database'}
-              </div>
-            </div>
-            {currentUser.spreadsheetLink && (
-              <a
-                href={currentUser.spreadsheetLink}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline shrink-0"
-              >
-                Sheet ↗
-              </a>
-            )}
-          </div>
-        )}
+
 
         {/* Navigation Sections */}
         <div className="px-4 py-3">

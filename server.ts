@@ -163,6 +163,9 @@ function normalizeServerEntry(entry: any): any {
 
   raw.workOrderNo = raw.workOrderNo || raw['Work Order No'] || raw['Work Order Number'] || '';
   raw.workOrderDate = raw.workOrderDate || raw['Work Order Date'] || '';
+  raw.volumeNo = raw.volumeNo || raw['Volume No'] || '';
+  raw.pageNo = raw.pageNo || raw['Page No'] || '';
+  raw.volumePageNo = raw.volumePageNo || raw['Volume & Page No'] || raw['Volume Page No'] || ((raw.volumeNo || raw.pageNo) ? `V-${raw.volumeNo} P-${raw.pageNo}`.trim() : '');
   raw.workOrderNoticeId = raw.workOrderNoticeId || raw['Work Order Notice ID'] || '';
   raw.workOrderNoticeTitle = raw.workOrderNoticeTitle || raw['Work Order Notice Title'] || '';
   raw.workOrderNoticeDate = raw.workOrderNoticeDate || raw['Work Order Notice Date'] || '';
@@ -173,7 +176,8 @@ function normalizeServerEntry(entry: any): any {
   raw.consumerName = raw.consumerName || raw['Name'] || raw['Consumer Name'] || raw['Customer Name'] || '';
   raw.fatherName = raw.fatherName || raw['Father Name'] || raw['Father / Husband Name'] || '';
   raw.mobile = raw.mobile || raw['Mobile Number'] || raw['Mobile No'] || raw['Mobile'] || '';
-  raw.address = raw.address || raw['Address'] || '';
+  raw.address = raw.premisesAddress || raw.address || raw['Address'] || '';
+  raw.premisesAddress = raw.address;
 
   raw.appliedLoad = raw.appliedLoad || raw['Applied Load'] || '';
   raw.phase = raw.phase || raw['Supply Phase'] || raw['Phase'] || (raw.category === 'DISCONNECTION' ? raw['BClass/Phase'] : '') || '';
@@ -184,10 +188,15 @@ function normalizeServerEntry(entry: any): any {
 
   raw.meterNo = raw.meterNo || raw['Meter'] || raw['Meter No'] || raw['Meter Number'] || '';
   raw.meterMake = raw.meterMake || raw['Meter Make'] || '';
-  raw.initialReading = raw.initialReading || raw['Initial Reading'] || raw['Reading'] || raw.reading || '';
-  raw.sealNo = raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
+  raw.initialReading = raw.initialMeterReading || raw.initialReading || raw['Initial Reading'] || raw['Reading'] || raw.reading || '';
+  raw.initialMeterReading = raw.initialReading;
+  raw.sealNo = raw.meterSealNo || raw.sealNo || raw['Meter Seal No'] || raw['Seal No'] || '';
+  raw.meterSealNo = raw.sealNo;
   raw.meterInstallDate = raw.meterInstallDate || raw['Meter Install Date'] || '';
-  raw.inspectionAgencyName = raw.inspectionAgencyName || raw['Inspection Agency Name'] || '';
+  raw.inspectionAgencyName = raw.inspectionAgency || raw.inspectionAgencyName || raw['Inspection Agency'] || raw['Inspection Agency Name'] || '';
+  raw.inspectionAgency = raw.inspectionAgencyName;
+  raw.notes = raw.technicalNotes || raw.notes || raw['Notes'] || '';
+  raw.technicalNotes = raw.notes;
 
   // Meter Replacement fields
   raw.oldMeterNo = raw.oldMeterNo || raw['Old Meter No'] || '';
@@ -2985,6 +2994,15 @@ const ISOLATED_FIELD_MODULES = ['NSC', 'Broken', 'Meter Replacement', 'DTR Repla
 const moduleEntriesCacheMap = new Map<string, { entries: any[]; timestamp: number }>();
 
 function buildNscSheetPayloadFields(payload: any): Record<string, any> {
+  const rawVolumeNo = String(payload.volumeNo || payload['Volume No'] || '').trim();
+  const rawPageNo = String(payload.pageNo || payload['Page No'] || '').trim();
+  const rawVolumePageNo = String(
+    payload.volumePageNo ||
+    payload['Volume & Page No'] ||
+    payload['Volume Page No'] ||
+    ((rawVolumeNo || rawPageNo) ? `V-${rawVolumeNo} P-${rawPageNo}`.trim() : '')
+  ).trim();
+
   const nscMeta = {
     applicationNo: String(payload.applicationNo || payload['Application No'] || '').trim(),
     fatherName: String(payload.fatherName || payload['Father Name'] || '').trim(),
@@ -3001,6 +3019,9 @@ function buildNscSheetPayloadFields(payload: any): Record<string, any> {
     earthResistance: String(payload.earthResistance || payload['Earth Resistance'] || '').trim(),
     workOrderNo: String(payload.workOrderNo || payload['Work Order No'] || '').trim(),
     workOrderDate: String(payload.workOrderDate || payload['Work Order Date'] || '').trim(),
+    volumePageNo: rawVolumePageNo,
+    volumeNo: rawVolumeNo,
+    pageNo: rawPageNo,
     workOrderNoticeId: String(payload.workOrderNoticeId || '').trim(),
     workOrderNoticeTitle: String(payload.workOrderNoticeTitle || '').trim(),
     workOrderNoticeDate: String(payload.workOrderNoticeDate || '').trim(),
@@ -3025,10 +3046,18 @@ function buildNscSheetPayloadFields(payload: any): Record<string, any> {
     nscMeta.appliedLoad ? `Load: ${nscMeta.appliedLoad}` : '',
     nscMeta.phase ? `Phase: ${nscMeta.phase}` : '',
     nscMeta.tariffCategory ? `Tariff: ${nscMeta.tariffCategory}` : '',
-    nscMeta.workOrderNo ? `WO: ${nscMeta.workOrderNo}` : ''
+    nscMeta.workOrderNo ? `WO: ${nscMeta.workOrderNo}` : '',
+    nscMeta.workOrderDate ? `WO Date: ${nscMeta.workOrderDate}` : '',
+    nscMeta.volumePageNo ? `Vol/Page: ${nscMeta.volumePageNo}` : ''
   ].filter(Boolean).join(' | ');
 
   const initReadingVal = String(payload.initialReading || payload.reading || payload['Reading'] || '000000').trim();
+  const cIdVal = String(payload.consumerId || payload['Consumer ID'] || payload['Consumer Id'] || '').trim();
+  const cNameVal = String(payload.consumerName || payload['Consumer Name'] || '').trim();
+  const mNoVal = String(payload.meterNo || payload['Meter No'] || '').trim();
+  const mobVal = String(payload.mobile || payload['Mobile'] || '').trim();
+  const addrVal = String(payload.address || payload['Address'] || '').trim();
+  const workerVal = String(payload.workerName || payload['Worker Name'] || nscMeta.submittedBy || '').trim();
 
   return {
     ...nscMeta,
@@ -3036,11 +3065,64 @@ function buildNscSheetPayloadFields(payload: any): Record<string, any> {
     reading: initReadingVal,
     Reading: initReadingVal,
     initialReading: initReadingVal,
+    // Exact 16 Required NSC Form Columns
+    meterNo: mNoVal,
+    meterSealNo: nscMeta.sealNo,
+    consumerName: cNameVal,
+    premisesAddress: addrVal,
+    initialMeterReading: initReadingVal,
+    workOrderNo: nscMeta.workOrderNo,
+    workOrderDate: nscMeta.workOrderDate,
+    volumeNo: nscMeta.volumeNo,
+    pageNo: nscMeta.pageNo,
+    applicationNo: nscMeta.applicationNo,
+    consumerId: cIdVal,
+    meterInstallDate: nscMeta.meterInstallDate,
+    inspectionAgency: nscMeta.inspectionAgencyName,
+    locationGps: nscMeta.locationGps,
+    photoUrl: String(payload.photoUrl || '').trim(),
+    technicalNotes: nscMeta.notes,
+    notes: nscMeta.notes,
+    workerName: workerVal,
+    workerId: String(payload.workerId || payload['Worker ID'] || '').trim(),
     substation: nscMeta.cccName || String(payload.substation || '').trim(),
     feederName: `NSC_META::${JSON.stringify(nscMeta)}`,
     problemType: 'New Service Connection (NSC)',
     workDescription: descParts,
-    remarks: nscMeta.notes
+    remarks: nscMeta.notes,
+    // Explicit Sheet Column Header Aliases so GAS maps every NSC form field cleanly
+    'Work Order No': nscMeta.workOrderNo,
+    'Work Order Date': nscMeta.workOrderDate,
+    'Volume & Page No': nscMeta.volumePageNo,
+    'Volume Page No': nscMeta.volumePageNo,
+    'Volume No': nscMeta.volumeNo,
+    'Page No': nscMeta.pageNo,
+    'Application No': nscMeta.applicationNo,
+    'Consumer ID': cIdVal,
+    'Consumer Id': cIdVal,
+    'Consumer Name': cNameVal,
+    'Father Name': nscMeta.fatherName,
+    'Meter No': mNoVal,
+    'Meter Seal No': nscMeta.sealNo,
+    'Seal No': nscMeta.sealNo,
+    'Initial Reading': initReadingVal,
+    'Meter Install Date': nscMeta.meterInstallDate,
+    'Agency Name': nscMeta.agencyName,
+    'CCC Name': nscMeta.cccName,
+    'Inspection Agency': nscMeta.inspectionAgencyName,
+    'Inspection Agency Name': nscMeta.inspectionAgencyName,
+    'Applied Load': nscMeta.appliedLoad,
+    'Supply Phase': nscMeta.phase,
+    'Tariff Category': nscMeta.tariffCategory,
+    'Service Cable Length': nscMeta.serviceCableLength,
+    'Earth Resistance': nscMeta.earthResistance,
+    'Meter Make': nscMeta.meterMake,
+    'Mobile': mobVal,
+    'Address': addrVal,
+    'Worker Name': workerVal,
+    'GPS Location': nscMeta.locationGps,
+    'Photo Evidence': String(payload.photoUrl || '').trim(),
+    'Notes': nscMeta.notes
   };
 }
 
@@ -3177,6 +3259,28 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
     ...(existingMatch || {}),
     ...payload
   };
+
+  // Offload large base64 data URLs to instant stored-images URLs so GAS payload is tiny (<2KB) and saves in ~1-2s
+  const offloadBase64ForSheet = (val: any, hint: string): string => {
+    const s = String(val || '').trim();
+    if (!s.startsWith('data:')) return s;
+    const imgHash = crypto.createHash('sha1').update(s).digest('hex').slice(0, 16);
+    const cachedUrl = uploadedPhotoLinksMap.get(imgHash);
+    if (cachedUrl && cachedUrl.startsWith('http')) return cachedUrl;
+    const safeHint = String(hint || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const imgKey = `${safeHint}_${imgHash}`;
+    largeImagesMap.set(imgKey, s);
+    saveLargeImagesToDisk();
+    return `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+  };
+
+  if (mergedBase.photoUrl) {
+    mergedBase.photoUrl = offloadBase64ForSheet(mergedBase.photoUrl, `${payload.id}_photo`);
+  }
+  if (mergedBase.workOrderPhoto) {
+    mergedBase.workOrderPhoto = offloadBase64ForSheet(mergedBase.workOrderPhoto, `${payload.id}_wo`);
+  }
+
   const nscSpecific = canonicalTab === 'NSC' ? buildNscSheetPayloadFields(mergedBase) : {};
 
   const sheetPayload = {
@@ -3215,9 +3319,12 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
 
-  // Persist to Google Sheets in background write queue so UI save is instantaneous
+  // Persist to Google Sheets
   const isUpdatingExisting = Boolean(existingMatch);
-  enqueueGasWrite(async () => {
+  let gasRejected = false;
+  let gasErrorMsg = '';
+
+  const runGasSave = async () => {
     try {
       let gasRes: any;
       if (canonicalTab === 'Disconnection') {
@@ -3226,16 +3333,16 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
       } else if (isUpdatingExisting) {
         gasRes = await callGoogleAppsScript(
           'updateEntry',
-          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload },
           'POST',
-          25000
+          20000
         );
       } else {
         gasRes = await callGoogleAppsScript(
           'createEntry',
-          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload },
           'POST',
-          25000
+          20000
         );
       }
       if (gasRes && gasRes.success !== false) {
@@ -3244,13 +3351,37 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
           ov._syncedToSheet = true;
           saveEntriesOverlayToDisk();
         }
+      } else {
+        gasRejected = true;
+        gasErrorMsg = String(gasRes?.error?.message || gasRes?.error || 'Google Sheets rejected the write');
       }
-    } catch (err) {
+    } catch (err: any) {
+      gasErrorMsg = String(err?.message || err || 'Google Sheets write error');
       console.warn(`[Entries Background Sync] create/update notice for ${payload.id}:`, err);
     } finally {
       gasCache.clear();
     }
-  }).catch(() => {});
+  };
+
+  if (canonicalTab === 'NSC') {
+    // Run directly (not blocked behind unrelated queue jobs) with a fast 4.5s window so Save never hangs
+    const directPromise = runGasSave();
+    await Promise.race([
+      directPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, 4500))
+    ]);
+    if (gasRejected) {
+      localEntriesOverlayMap.delete(overlayKey);
+      saveEntriesOverlayToDisk();
+      throw new Error(gasErrorMsg || 'Failed to save in Google Sheet NSC tab.');
+    }
+  } else {
+    const writePromise = enqueueGasWrite(runGasSave);
+    await Promise.race([
+      writePromise.catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, 4500))
+    ]);
+  }
 
   gasCache.clear();
   return normalized;
@@ -4929,20 +5060,12 @@ function isValidDisconnectionConsumerRow(e: any): boolean {
 
   const rawCId = String(
     e['Consumer Id'] ?? e['Consumer ID'] ?? e.consumerId ?? e.accountNumber ?? e['Consumer No'] ?? ''
-  ).trim();
+  ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
   const isInvalidId =
     !rawCId ||
-    /^(PWR-DIS-|TASK-DISC-|DISC[-_]|SUB-|ROW-|SL\s*\d+|ID$|N\/A$|null$|undefined$|none$|-+$)/i.test(rawCId);
+    rawCId.length < 3 ||
+    /^(DISC[-_]|SUB-|ROW-|SL\s*\d+|ID$|N\/A$|null$|undefined$|none$|-+$)/i.test(rawCId);
   if (isInvalidId) return false;
-
-  const rawName = String(
-    e['Name'] ?? e.Name ?? e['Consumer Name'] ?? e.consumerName ?? e.name ?? ''
-  ).trim();
-  const isInvalidName =
-    !rawName ||
-    rawName.length < 2 ||
-    /^(Worker|Consumer|Consumer\s*\(.*\)|Unnamed(\s+Consumer)?|Unknown(\s+Consumer)?|Demo.*|Sample.*|Test.*|N\/A|null|undefined|none|-+)$/i.test(rawName);
-  if (isInvalidName) return false;
 
   return true;
 }
@@ -5216,25 +5339,52 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
   const rawCId = String(
     taskOrRow.consumerId ?? taskOrRow['Consumer Id'] ?? taskOrRow['Consumer ID'] ?? taskOrRow.accountNumber ?? ''
   ).replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '').trim();
-  if (!rawCId) return false;
+  if (!rawCId || rawCId.length < 3) return false;
 
   const cIdKey = rawCId.toLowerCase();
-  const existingCached =
+  let existingCached =
     cachedDisconnectionState?.tasks?.find(
       (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
     ) ||
     localDisconnectionOverlayMap.get(cIdKey) ||
     {};
 
+  // If cache does not have the original sheet master columns (Base Class / Class / Device), fetch live row from GAS so we never lose them
+  if (!existingCached || (!existingCached['Base Class'] && !existingCached.baseClass && !existingCached['Class'] && !existingCached.classType)) {
+    try {
+      const liveRes = await callGoogleAppsScript('getDisconnectionTasks', {}, 'GET', 15000);
+      const liveRows = Array.isArray(liveRes?.entries)
+        ? liveRes.entries
+        : Array.isArray(liveRes?.tasks)
+        ? liveRes.tasks
+        : Array.isArray(liveRes?.data?.entries)
+        ? liveRes.data.entries
+        : Array.isArray(liveRes?.data?.tasks)
+        ? liveRes.data.tasks
+        : [];
+      const foundLive = liveRows.find(
+        (t: any) => String(t['Consumer Id'] || t.consumerId || '').trim().toLowerCase() === cIdKey
+      );
+      if (foundLive) {
+        existingCached = { ...foundLive, ...existingCached };
+      }
+    } catch {}
+  }
+
   const mergedSource = {
     ...existingCached,
     ...taskOrRow,
     consumerId: rawCId,
     'Consumer Id': rawCId,
-    Name: taskOrRow.Name || taskOrRow['Name'] || taskOrRow.consumerName || existingCached.Name || existingCached['Name'] || existingCached.consumerName || ''
+    Name: existingCached['Name'] || existingCached.Name || existingCached.consumerName || taskOrRow.Name || taskOrRow['Name'] || taskOrRow.consumerName || `Consumer ${rawCId}`
   };
 
-  if (!isValidDisconnectionConsumerRow(mergedSource)) return false;
+  const rawStatus = String(
+    mergedSource['Discon Status'] || mergedSource.disconStatus || mergedSource.taskStatus || mergedSource.status || ''
+  ).trim().toUpperCase();
+  if (rawStatus === 'DELETED' || rawStatus === '[DELETED_BY_ADMIN]') {
+    return false;
+  }
 
   const rawImgVal = String(mergedSource.photoDataUrl || mergedSource.photoUrl || mergedSource['Image'] || mergedSource.image || '').trim();
   if (rawImgVal && (rawImgVal.startsWith('data:') || rawImgVal.includes('/api/stored-images/'))) {
@@ -5260,25 +5410,166 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
   }
 
   const full33 = buildComplete33ColumnPayload(mergedSource);
-  const cId = String(full33.consumerId || full33['Consumer Id'] || '').trim();
+  const cId = String(full33.consumerId || full33['Consumer Id'] || rawCId).trim();
   if (!cId) return false;
   const discId = `PWR-DIS-${cId}`;
   const nowIso = new Date().toISOString();
+  const targetSheetId = GOOGLE_SHEET_ID;
 
-  const safeBaseClass = full33['Base Class'] || existingCached['Base Class'] || existingCached.baseClass || ' ';
-  const safeClass = full33['Class'] || existingCached['Class'] || existingCached.classType || ' ';
-  const safeDevice = full33['Device'] || existingCached['Device'] || existingCached.deviceType || ' ';
-  const safeNotes = full33['Notes'] || ' ';
+  if (taskOrRow._onlyUpdateStatusAndRemark && !taskOrRow._isNewInsert) {
+    const statusVal = String(
+      taskOrRow['Discon Status'] ?? taskOrRow.disconStatus ?? taskOrRow.taskStatus ?? taskOrRow.status ?? full33['Discon Status'] ?? 'PENDING'
+    ).trim().toUpperCase();
+    const notesVal = String(
+      taskOrRow['Notes'] ?? taskOrRow.notes ?? taskOrRow.workerRemarks ?? taskOrRow.workerReport ?? taskOrRow['Remark'] ?? full33['Notes'] ?? ''
+    ).trim();
+    const paymentStatusVal = statusVal === 'PAID' ? 'PAID' : 'PENDING';
+
+    // Preserve ALL original consumer master columns from existingCached so GAS never overwrites them with defaults ("Domestic", "I", etc.)
+    const origMaster = existingCached && typeof existingCached === 'object' ? existingCached : {};
+    const origName = String(origMaster['Name'] ?? origMaster.Name ?? origMaster.consumerName ?? full33['Name'] ?? '').trim();
+    const origAddress = String(origMaster['Address'] ?? origMaster.consumerAddress ?? origMaster.address ?? full33['Address'] ?? '').trim();
+    const origOffCode = String(origMaster['off_code'] ?? origMaster.offCode ?? origMaster.area ?? full33['off_code'] ?? '').trim();
+    const origMru = String(origMaster['MRU'] ?? origMaster.mru ?? origMaster.mruSection ?? full33['MRU'] ?? '').trim();
+    const origBaseClass = String(origMaster['Base Class'] ?? origMaster.baseClass ?? full33['Base Class'] ?? '').trim();
+    const origClass = String(origMaster['Class'] ?? origMaster.classType ?? origMaster.class ?? full33['Class'] ?? '').trim();
+    const origDevice = String(origMaster['Device'] ?? origMaster.device ?? origMaster.deviceType ?? full33['Device'] ?? '').trim();
+    const origDueDateRange = String(origMaster['O/S Duedate Range'] ?? origMaster['O/S Due date Range'] ?? origMaster.dueDateRange ?? full33['O/S Duedate Range'] ?? '').trim();
+    const origD2NetOs = String(origMaster['D2 Net O/S'] ?? origMaster.outstandingDue ?? origMaster.arrearAmount ?? full33['D2 Net O/S'] ?? '').trim();
+    const origMobile = String(origMaster['Mobile'] ?? origMaster['Mobile Number'] ?? origMaster.phoneNumber ?? origMaster.mobile ?? full33['Mobile'] ?? '').trim();
+    const origNumber = String(origMaster['Number'] ?? origMaster.number ?? origMaster['Meter'] ?? full33['Number'] ?? '').trim();
+    const origAgency = String(origMaster['Agency'] ?? origMaster.Agency ?? origMaster.agency ?? origMaster.assignedAgency ?? full33['Agency'] ?? '').trim();
+    const origNatureOfConn = String(origMaster['Nature of Conn'] ?? origMaster.natureOfConn ?? full33['Nature of Conn'] ?? '').trim();
+    const origGovNonGov = String(origMaster['Gov/Non-Gov'] ?? origMaster.govNonGov ?? full33['Gov/Non-Gov'] ?? '').trim();
+    const origUploadDate = String(origMaster['Upload Date'] ?? origMaster.uploadDate ?? origMaster.createdAt ?? full33['Upload Date'] ?? '').trim();
+
+    const statusOnlyPayload: Record<string, any> = {
+      id: discId,
+      submissionId: discId,
+      consumerId: cId,
+      'Consumer Id': cId,
+      category: 'Disconnection',
+      spreadsheetId: targetSheetId,
+      // Preserved original master columns
+      'Name': origName,
+      consumerName: origName,
+      name: origName,
+      'Address': origAddress,
+      consumerAddress: origAddress,
+      address: origAddress,
+      off_code: origOffCode,
+      offCode: origOffCode,
+      MRU: origMru,
+      mru: origMru,
+      mruSection: origMru,
+      'Base Class': origBaseClass,
+      baseClass: origBaseClass,
+      'Class': origClass,
+      class: origClass,
+      classType: origClass,
+      consumerClass: origClass,
+      'Device': origDevice,
+      device: origDevice,
+      deviceType: origDevice,
+      'O/S Duedate Range': origDueDateRange,
+      'O/S Due date Range': origDueDateRange,
+      dueDateRange: origDueDateRange,
+      'D2 Net O/S': origD2NetOs,
+      d2NetOs: origD2NetOs,
+      outstandingDue: origD2NetOs,
+      'Mobile': origMobile,
+      'Mobile Number': origMobile,
+      mobile: origMobile,
+      phoneNumber: origMobile,
+      'Number': origNumber,
+      number: origNumber,
+      'Agency': origAgency,
+      agency: origAgency,
+      assignedAgency: origAgency,
+      'Nature of Conn': origNatureOfConn,
+      natureOfConn: origNatureOfConn,
+      'Gov/Non-Gov': origGovNonGov,
+      govNonGov: origGovNonGov,
+      'Upload Date': origUploadDate,
+      uploadDate: origUploadDate,
+      // Updated status & remark fields
+      taskStatus: statusVal,
+      disconStatus: statusVal,
+      status: statusVal,
+      'Discon Status': statusVal,
+      'Status': statusVal,
+      notes: notesVal,
+      'Notes': notesVal,
+      'Remark': notesVal,
+      'Remarks': notesVal,
+      workerRemarks: notesVal,
+      workerReport: notesVal,
+      paymentStatus: paymentStatusVal,
+      'Payment Status': paymentStatusVal,
+      lastUpdated: nowIso,
+      'Last Updated': nowIso,
+      updatedAt: nowIso
+    };
+
+    const setIfPresent = (keys: string[], val: any) => {
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        const str = String(val).trim();
+        for (const k of keys) statusOnlyPayload[k] = str;
+      }
+    };
+
+    setIfPresent(['disconDate', 'Discon Date', 'reportDate'], taskOrRow['Discon Date'] ?? taskOrRow.disconDate ?? taskOrRow.reportDate);
+    setIfPresent(['reading', 'Reading', 'meterReading'], taskOrRow['Reading'] ?? taskOrRow.reading ?? taskOrRow.meterReading);
+    setIfPresent(['paidAmount', 'Paid Amount'], taskOrRow['Paid Amount'] ?? taskOrRow.paidAmount);
+    setIfPresent(['paidDate', 'Paid Date', 'paymentDate'], taskOrRow['Paid Date'] ?? taskOrRow.paidDate ?? taskOrRow.paymentDate);
+    setIfPresent(['paidType', 'Paid Type', 'paymentReference'], taskOrRow['Paid Type'] ?? taskOrRow.paidType ?? taskOrRow.paymentReference);
+    setIfPresent(['outstandingAfter', 'Outstanding After'], taskOrRow['Outstanding After'] ?? taskOrRow.outstandingAfter);
+    setIfPresent(['nextPaymentDate', 'Next Payment Date'], taskOrRow['Next Payment Date'] ?? taskOrRow.nextPaymentDate);
+    setIfPresent(['paymentSource', 'Payment Source'], taskOrRow['Payment Source'] ?? taskOrRow.paymentSource);
+    setIfPresent(['gisPole', 'Gis Pole', 'poleNo'], taskOrRow['Gis Pole'] ?? taskOrRow.gisPole ?? taskOrRow.poleNo);
+    setIfPresent(['priority', 'Priority'], taskOrRow['Priority'] ?? taskOrRow.priority);
+
+    const imgUrlVal = String(mergedSource.photoUrl || mergedSource.imageUrl || mergedSource['Image'] || mergedSource.image || '').trim();
+    if (imgUrlVal && !imgUrlVal.startsWith('data:')) {
+      statusOnlyPayload.photoUrl = imgUrlVal;
+      statusOnlyPayload.imageUrl = imgUrlVal;
+      statusOnlyPayload.image = imgUrlVal;
+      statusOnlyPayload['Image'] = imgUrlVal;
+    }
+
+    try {
+      const upRes = await callGoogleAppsScript(
+        'updateEntry',
+        {
+          ...statusOnlyPayload,
+          data: statusOnlyPayload
+        },
+        'POST',
+        25000
+      );
+      if (upRes && upRes.success !== false) {
+        return true;
+      }
+    } catch (err) {
+      console.warn(`[Disconnection Sheet Sync] Status-only updateEntry error for ${cId}:`, err);
+    }
+    return false;
+  }
+
+  const safeBaseClass = full33['Base Class'] || existingCached['Base Class'] || existingCached.baseClass || '';
+  const safeClass = full33['Class'] || existingCached['Class'] || existingCached.classType || '';
+  const safeDevice = full33['Device'] || existingCached['Device'] || existingCached.deviceType || '';
+  const safeNotes = full33['Notes'] || '';
   const cleanedAgencyVal = String(full33['Agency'] || existingCached['Agency'] || existingCached.assignedAgency || '')
     .replace(/\s*\(ID:[^)]+\)/gi, '')
     .trim();
-  const safeAgency = cleanedAgencyVal || ' ';
-  const targetSheetId = GOOGLE_SHEET_ID;
+  const safeAgency = cleanedAgencyVal || '';
 
   const gasPayload = {
     ...full33,
     id: discId,
     submissionId: discId,
+    category: 'Disconnection',
     spreadsheetId: targetSheetId,
     baseClass: safeBaseClass,
     'Base Class': safeBaseClass,
@@ -5319,37 +5610,29 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     } catch {}
   }
 
-  // 1. Primary in-place Disconnection row update (strictly updates matching Consumer Id row in Disconnection sheet)
-  try {
-    const discRes = await callGoogleAppsScript(
-      'submitDisconnectionReport',
-      { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, ...gasPayload, data: gasPayload, _isNewInsert: false },
-      'POST',
-      25000
-    );
-    if (discRes && discRes.success !== false) {
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] submitDisconnectionReport notice for ${cId}:`, err);
-  }
-
-  // 2. Secondary in-place updateEntry fallback
+  // Primary: in-place Google Sheets update via 'updateEntry' on 'Disconnection' tab
   try {
     const upRes = await callGoogleAppsScript(
       'updateEntry',
-      { id: discId, submissionId: discId, consumerId: cId, 'Consumer Id': cId, category: 'Disconnection', ...gasPayload, data: gasPayload },
+      {
+        id: discId,
+        submissionId: discId,
+        consumerId: cId,
+        'Consumer Id': cId,
+        category: 'Disconnection',
+        ...gasPayload,
+        data: gasPayload
+      },
       'POST',
       25000
     );
-    if (upRes && upRes.success === true) {
+    if (upRes && upRes.success !== false) {
       return true;
     }
   } catch (err) {
-    console.warn(`[Disconnection Sheet Sync] updateEntry notice for ${cId}:`, err);
+    console.warn(`[Disconnection Sheet Sync] updateEntry error for ${cId}:`, err);
   }
 
-  // Strictly do NOT call createEntry for existing tasks — prevents duplicate rows at bottom of sheet!
   return false;
 }
 
@@ -6297,9 +6580,13 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
   }
 
-  // Persist to Google Sheet Disconnection tab in background queue so UI never blocks or errors on transient GAS busy states
-  enqueueGasWrite(async () => {
-    const ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
+  // Persist to Google Sheet Disconnection tab via write queue and wait up to 12s for confirmation
+  const writePromise = enqueueGasWrite(async () => {
+    let ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
+    if (!ok) {
+      await new Promise(r => setTimeout(r, 800));
+      ok = await syncSingleDisconnectionRowToSheet(updatedTaskObj);
+    }
     if (ok && normCIdKey) {
       localDisconnectionOverlayMap.delete(normCIdKey);
       saveDiscOverlayToDisk();
@@ -6308,7 +6595,13 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     return ok;
   }).catch((err) => {
     console.warn(`[Disconnection Report Sync] Background sync notice for ${cId}:`, err);
+    return false;
   });
+
+  await Promise.race([
+    writePromise,
+    new Promise(resolve => setTimeout(resolve, 12000))
+  ]);
 
   const responseTask = { ...updatedTaskObj };
   delete responseTask.photoDataUrl;

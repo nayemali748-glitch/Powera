@@ -98,14 +98,22 @@ const USERS_HEADERS = [
 ];
 
 const NSC_HEADERS = [
-  'Submission ID', 'Record ID', 'Category', 'Status', 'Date', 'Created At', 'Updated At',
-  'Worker ID', 'Worker Name', 'Role', 'Submitted By', 'Worker Phone',
-  'Agency Name', 'CCC Name', 'Substation', 'Feeder Name',
-  'Work Order No', 'Work Order Date', 'Work Order Notice ID', 'Work Order Notice Title', 'Work Order Notice Date', 'Work Order Photo',
-  'Application No', 'Consumer ID', 'Consumer Name', 'Father Name', 'Mobile No', 'Address',
-  'Applied Load', 'Supply Phase', 'Tariff Category', 'Service Cable Length', 'Pole No', 'Earth Resistance',
-  'Meter No', 'Meter Make', 'Initial Reading', 'Meter Seal No', 'Meter Install Date', 'Inspection Agency Name',
-  'GPS Location', 'Photo Evidence', 'Notes'
+  'meterNo',
+  'meterSealNo',
+  'consumerName',
+  'premisesAddress',
+  'initialMeterReading',
+  'workOrderNo',
+  'workOrderDate',
+  'volumeNo',
+  'pageNo',
+  'applicationNo',
+  'consumerId',
+  'meterInstallDate',
+  'inspectionAgency',
+  'locationGps',
+  'photoUrl',
+  'technicalNotes'
 ];
 
 const DISCONNECTION_HEADERS = [
@@ -730,16 +738,31 @@ function extractFieldValue(dataObj, headerName) {
   if (targetNorm === 'mobileno' || targetNorm === 'phone') return dataObj.mobile || dataObj.phone || '';
   if (targetNorm === 'address') return dataObj.address || '';
   if (targetNorm === 'meterno') return dataObj.meterNo || '';
-  if (targetNorm === 'initialreading') return dataObj.initialReading || '';
-  if (targetNorm === 'metersealno') return dataObj.sealNo || dataObj.newMeterSealNo || '';
+  if (targetNorm === 'initialreading' || targetNorm === 'initialmeterreading') return dataObj.initialMeterReading || dataObj.initialReading || dataObj.reading || '';
+  if (targetNorm === 'metersealno' || targetNorm === 'sealno') return dataObj.meterSealNo || dataObj.sealNo || dataObj.newMeterSealNo || '';
+  if (targetNorm === 'premisesaddress' || targetNorm === 'address') return dataObj.premisesAddress || dataObj.address || '';
   if (targetNorm === 'appliedload') return dataObj.appliedLoad || '';
   if (targetNorm === 'supplyphase') return dataObj.phase || '';
   if (targetNorm === 'tariffcategory') return dataObj.tariffCategory || '';
   if (targetNorm === 'servicecablelength') return dataObj.serviceCableLength || '';
   if (targetNorm === 'poleno') return dataObj.poleNo || '';
   if (targetNorm === 'earthresistance') return dataObj.earthResistance || '';
-  if (targetNorm === 'workorderno') return dataObj.workOrderNo || '';
-  if (targetNorm === 'workorderdate') return dataObj.workOrderDate || '';
+  if (targetNorm === 'workorderno') return dataObj.workOrderNo || dataObj['Work Order No'] || '';
+  if (targetNorm === 'workorderdate') return dataObj.workOrderDate || dataObj['Work Order Date'] || '';
+  if (targetNorm === 'volumepageno') return dataObj.volumePageNo || dataObj['Volume & Page No'] || dataObj['Volume Page No'] || '';
+  if (targetNorm === 'volumeno') return dataObj.volumeNo || dataObj['Volume No'] || '';
+  if (targetNorm === 'pageno') return dataObj.pageNo || dataObj['Page No'] || '';
+  if (targetNorm === 'meterinstalldate') return dataObj.meterInstallDate || dataObj['Meter Install Date'] || '';
+  if (targetNorm === 'inspectionagency' || targetNorm === 'inspectionagencyname') return dataObj.inspectionAgency || dataObj.inspectionAgencyName || dataObj['Inspection Agency'] || dataObj['Inspection Agency Name'] || '';
+  if (targetNorm === 'technicalnotes' || targetNorm === 'notes') return dataObj.technicalNotes || dataObj.notes || '';
+  if (targetNorm === 'workordernoticeid') return dataObj.workOrderNoticeId || dataObj['Work Order Notice ID'] || '';
+  if (targetNorm === 'workordernoticetitle') return dataObj.workOrderNoticeTitle || dataObj['Work Order Notice Title'] || '';
+  if (targetNorm === 'workordernoticedate') return dataObj.workOrderNoticeDate || dataObj['Work Order Notice Date'] || '';
+  if (targetNorm === 'workorderphoto') return dataObj.workOrderPhoto || dataObj['Work Order Photo'] || '';
+  if (targetNorm === 'agencyname') return dataObj.agencyName || dataObj['Agency Name'] || '';
+  if (targetNorm === 'cccname') return dataObj.cccName || dataObj['CCC Name'] || '';
+  if (targetNorm === 'metermake') return dataObj.meterMake || dataObj['Meter Make'] || '';
+  if (targetNorm === 'applicationno') return dataObj.applicationNo || dataObj['Application No'] || '';
   if (targetNorm === 'arrearamount') return dataObj.arrearAmount || '';
   if (targetNorm === 'reason') return dataObj.reason || dataObj.replacementReason || '';
   if (targetNorm === 'finalreading') return dataObj.finalReading || '';
@@ -817,6 +840,15 @@ function appendSheetRecord(sheetName, recordObj) {
   let headers = [];
   if (lastCol > 0) {
     headers = s.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+    if (sheetName === 'NSC') {
+      const existingNorms = {};
+      headers.forEach(function(h) { existingNorms[normHeader(h)] = true; });
+      const missingHeaders = NSC_HEADERS.filter(function(h) { return !existingNorms[normHeader(h)]; });
+      if (missingHeaders.length > 0) {
+        s.getRange(1, headers.length + 1, 1, missingHeaders.length).setValues([missingHeaders]);
+        headers = headers.concat(missingHeaders);
+      }
+    }
   } else {
     headers = getHeadersForSheet(sheetName);
     s.getRange(1, 1, 1, headers.length).setValues([headers]);

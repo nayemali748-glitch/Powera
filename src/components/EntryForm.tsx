@@ -514,7 +514,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({
       entryPayload.consumerName = consumerName.trim();
       entryPayload.fatherName = fatherName.trim();
       entryPayload.applicationNo = applicationNo.trim();
-      entryPayload.workerName = (worker.trim() || String(currentUser?.name || currentUser?.username || 'Staff')).trim();
+      entryPayload.workerName = (nscWorkerName.trim() || worker.trim() || String(currentUser?.name || currentUser?.username || 'Staff')).trim();
       entryPayload.agencyName = agencyName.trim();
       entryPayload.cccName = cccName.trim();
       entryPayload.substation = cccName.trim() || substation.trim();
@@ -1284,6 +1284,22 @@ export const EntryForm: React.FC<EntryFormProps> = ({
                   value={meterInstallDate}
                   onChange={(e) => setMeterInstallDate(e.target.value)}
                   className="w-full px-3 py-2 bg-white border-2 border-fuchsia-300 rounded-lg text-fuchsia-900 font-bold focus:ring-2 focus:ring-fuchsia-500 focus:outline-none"
+                />
+              </div>
+
+              {/* 16. Inspection Agency -> CYAN CARD */}
+              <div className="bg-cyan-50/80 border-2 border-cyan-300 rounded-xl p-3.5 shadow-xs hover:border-cyan-400 transition-colors">
+                <label className="block font-black text-cyan-950 mb-1.5 text-xs flex items-center justify-between">
+                  <span>{lang === 'bn' ? 'ইন্সপেকশন এজেন্সি (Inspection Agency)' : 'Inspection Agency'}</span>
+                  <span className="text-[9px] bg-cyan-600 text-white px-1.5 py-0.5 rounded font-bold font-mono">Agency</span>
+                </label>
+                <input
+                  id="input-inspection-agency"
+                  type="text"
+                  value={inspectionAgencyName}
+                  onChange={(e) => setInspectionAgencyName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border-2 border-cyan-300 rounded-lg text-cyan-900 font-bold focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+                  placeholder={lang === 'bn' ? 'Inspection Agency নাম লিখুন' : 'Enter Inspection Agency Name'}
                 />
               </div>
             </div>

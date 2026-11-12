@@ -432,7 +432,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
                   const cleanObs = cleanDisconnectionNotes(t.workerReport || t.workerRemarks || '');
 
                   return (
-                    <tr key={t.taskId || idx} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={`${t.taskId || t.consumerId || idx}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-3">
                         <span className="px-2.5 py-1 bg-amber-500/10 text-amber-900 border border-amber-300 rounded-md font-mono text-xs font-black select-all whitespace-nowrap">
                           {serialText}

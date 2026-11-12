@@ -247,6 +247,47 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const inFlightRef = useRef(false);
   const deletedConsumerIdsRef = useRef<Set<string>>(new Set());
   const localReissueDecisionsRef = useRef<Map<string, { action: 'APPROVED' | 'REJECTED' | 'REQUEST' | 'CLEAR'; notes: string; timestamp: number }>>(new Map());
+  const localRecentUpdatesRef = useRef<Map<string, { task: DisconnectionTask; timestamp: number }>>(new Map());
+
+  const normalizeDiscKey = useCallback((item: Partial<DisconnectionTask> | any): string => {
+    return String(item?.consumerId || item?.['Consumer Id'] || item?.taskId || '')
+      .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+      .replace(/\.0+$/, '')
+      .replace(/[, \-_]/g, '')
+      .trim()
+      .toLowerCase();
+  }, []);
+
+  const applyLocalRecentUpdate = useCallback((item: DisconnectionTask): DisconnectionTask => {
+    const k = normalizeDiscKey(item);
+    if (!k) return item;
+    const rec = localRecentUpdatesRef.current.get(k);
+    if (!rec) return item;
+    if (Date.now() - rec.timestamp > 60000) {
+      localRecentUpdatesRef.current.delete(k);
+      return item;
+    }
+    const incomingSt = String(item.taskStatus || item.disconStatus || (item as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
+    const localSt = String(rec.task.taskStatus || rec.task.disconStatus || (rec.task as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
+    const incomingNotes = String(item.workerRemarks || item.notes || '').trim();
+    const localNotes = String(rec.task.workerRemarks || rec.task.notes || '').trim();
+    // If incoming already matches our local update, keep incoming; otherwise preserve our just-saved status & remarks
+    if (incomingSt === localSt && incomingNotes === localNotes) {
+      return item;
+    }
+    return {
+      ...item,
+      taskStatus: rec.task.taskStatus,
+      disconStatus: rec.task.disconStatus,
+      'Discon Status': rec.task['Discon Status'],
+      workerRemarks: rec.task.workerRemarks,
+      workerReport: rec.task.workerReport,
+      notes: rec.task.notes,
+      Notes: rec.task.Notes,
+      updatedAt: rec.task.updatedAt || item.updatedAt,
+      statusHistory: rec.task.statusHistory || item.statusHistory
+    };
+  }, [normalizeDiscKey]);
 
   const applyLocalReissueDecision = useCallback((item: DisconnectionTask): DisconnectionTask => {
     const cId = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '').replace(/^TASK-DISC-/i, '').trim().toLowerCase();
@@ -322,17 +363,20 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
             return true;
           })
-          .map((item, idx) => applyLocalReissueDecision({
-            ...item,
-            serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-          }));
+          .map((item, idx) =>
+            applyLocalRecentUpdate(
+              applyLocalReissueDecision({
+                ...item,
+                serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+              })
+            )
+          );
 
         // Strict in-memory deduplication by normalized consumer ID
         const seenIncoming = new Set<string>();
         const dedupedIncoming: DisconnectionTask[] = [];
         for (const item of cleanIncoming) {
-          const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
-            .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+          const k = normalizeDiscKey(item);
           if (k) {
             if (seenIncoming.has(k)) continue;
             seenIncoming.add(k);
@@ -402,17 +446,20 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
           return true;
         })
-        .map((item, idx) => applyLocalReissueDecision({
-          ...item,
-          serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-        }));
+        .map((item, idx) =>
+          applyLocalRecentUpdate(
+            applyLocalReissueDecision({
+              ...item,
+              serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+            })
+          )
+        );
 
       // Strict in-memory deduplication
       const seenExt = new Set<string>();
       const dedupedIncoming: DisconnectionTask[] = [];
       for (const item of cleanIncoming) {
-        const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
-          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        const k = normalizeDiscKey(item);
         if (k) {
           if (seenExt.has(k)) continue;
           seenExt.add(k);
@@ -450,7 +497,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         return hasChanged ? dedupedIncoming : prev;
       });
     }
-  }, [externalTasks, applyLocalReissueDecision]);
+  }, [externalTasks, applyLocalReissueDecision, applyLocalRecentUpdate, normalizeDiscKey]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {
@@ -528,13 +575,26 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       });
     }
 
+    const normKey = normalizeDiscKey(updatedTask);
+    if (normKey) {
+      localRecentUpdatesRef.current.set(normKey, {
+        task: updatedTask,
+        timestamp: Date.now()
+      });
+    }
+
+    // Notify parent App.tsx immediately so 10-sec polling / externalTasks never reverts this update
+    try {
+      window.dispatchEvent(new CustomEvent('power-disconnection-task-updated', { detail: updatedTask }));
+    } catch {
+      // ignore
+    }
+
     setTasks(prev => {
-      const normUpdatedKey = String(updatedTask.consumerId || (updatedTask as any)['Consumer Id'] || updatedTask.taskId || '')
-        .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+      const normUpdatedKey = normalizeDiscKey(updatedTask);
 
       const next = prev.map(t => {
-        const normTKey = String(t.consumerId || (t as any)['Consumer Id'] || t.taskId || '')
-          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        const normTKey = normalizeDiscKey(t);
 
         const isMatch = (normUpdatedKey && normTKey === normUpdatedKey) ||
           (t.taskId && updatedTask.taskId && t.taskId === updatedTask.taskId);
@@ -563,8 +623,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       const seen = new Set<string>();
       const deduped: DisconnectionTask[] = [];
       for (const item of next) {
-        const k = String(item.consumerId || (item as any)['Consumer Id'] || item.taskId || '')
-          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').replace(/\.0+$/, '').replace(/[, \-_]/g, '').trim().toLowerCase();
+        const k = normalizeDiscKey(item);
         if (k) {
           if (seen.has(k)) continue;
           seen.add(k);
@@ -995,8 +1054,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         if (dateB !== dateA) return dateB - dateA;
       }
 
-      // Default / tie-breaker: High to Low (Outstanding Dues)
-      return amtB - amtA;
+      // Default / tie-breaker: High to Low (Outstanding Dues), then deterministic Consumer ID
+      if (amtB !== amtA) return amtB - amtA;
+      return String(a.consumerId || a.taskId || '').localeCompare(String(b.consumerId || b.taskId || ''), undefined, { numeric: true });
     });
   }, [userScopedTasks, statusFilter, phaseFilter, classFilter, agencyFilter, searchQuery, sortBy, workerOnlyFilter, isAdmin, currentUser]);
 
@@ -1146,36 +1206,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                   onClick={() => setShowHeaderThreeDotMenu(false)}
                 />
                 <div className="fixed right-3 sm:right-6 top-16 sm:top-20 w-[min(88vw,290px)] max-h-[82vh] overflow-y-auto bg-white text-slate-900 border border-slate-200 rounded-2xl shadow-2xl z-50 py-1 animate-in fade-in zoom-in-95 duration-150">
-                  {/* LIVE WBSEDCL OSD & BILL CHECK ACTION */}
-                  <div className="p-2 border-b border-slate-100 bg-amber-50/70">
-                    <button
-                      type="button"
-                      id="disc-menu-live-osd-btn"
-                      onClick={() => {
-                        setShowHeaderThreeDotMenu(false);
-                        setLiveCheckModalId(searchQuery.trim());
-                        setIsStandaloneLiveCheckOpen(true);
-                      }}
-                      className="w-full px-3 py-2.5 text-left rounded-xl bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black flex items-center justify-between cursor-pointer transition-all shadow-xs border border-amber-400/80 active:scale-98"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-1.5 rounded-lg bg-slate-950 text-amber-400 shrink-0">
-                          <Zap className="w-4 h-4 fill-amber-400" />
-                        </div>
-                        <div>
-                          <div className="text-xs font-black tracking-tight leading-tight">
-                            ⚡ Live OSD & Bill Check
-                          </div>
-                          <div className="text-[10px] text-slate-900 font-bold leading-tight mt-0.5">
-                            {lang === 'bn' ? 'লাইভ বকেয়া ও নো-ডিউজ চেক' : 'WBSEDCL Live Outstanding'}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-[9px] bg-slate-950 text-white font-extrabold px-1.5 py-0.5 rounded uppercase">
-                        Live
-                      </span>
-                    </button>
-                  </div>
 
                   {/* Downloads Section */}
                   <div className="px-4 py-2 border-b border-slate-100">
@@ -1660,11 +1690,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-            {pendingReissueTasks.map(reqTask => {
+            {pendingReissueTasks.map((reqTask, idx) => {
               const lockInfo = getReissueLockState(reqTask);
               return (
                 <div
-                  key={reqTask.taskId || reqTask.consumerId}
+                  key={`${reqTask.taskId || reqTask.consumerId || idx}-${idx}`}
                   className="bg-slate-900/90 border border-purple-500/40 rounded-xl p-3 flex items-center justify-between gap-3"
                 >
                   <div className="min-w-0 space-y-0.5">
@@ -2437,9 +2467,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
                   {/* Paginated Consumer Card Grid (20 per page) */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {paginatedTasks.map(task => (
+                    {paginatedTasks.map((task, idx) => (
                       <DisconnectionConsumerCard
-                        key={task.taskId || task.consumerId}
+                        key={`${task.taskId || task.consumerId || idx}-${idx}`}
                         task={task}
                         onUpdateStatus={handleOpenUpdateModal}
                         onRequestReissue={handleRequestReissue}

@@ -1428,12 +1428,12 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-80 overflow-y-auto pr-1">
-                {activeDeckConsumers.slice(0, 90).map((c) => {
+                {activeDeckConsumers.slice(0, 90).map((c, idx) => {
                   const ph = getTaskPhase(c);
                   const cl = getTaskConnectionClass(c);
                   return (
                     <div
-                      key={c.id || c.consumerId}
+                      key={`${c.id || c.consumerId || idx}-${idx}`}
                       onClick={() => onSelectCategory('DISCONNECTION')}
                       className="p-3 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/70 hover:bg-white transition-all cursor-pointer space-y-1.5"
                     >

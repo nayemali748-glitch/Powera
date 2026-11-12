@@ -5,12 +5,15 @@
 html, body, #root {
   height: 100%;
   width: 100%;
+  max-width: 100vw;
   margin: 0;
   padding: 0;
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-overscroll-behavior: none;
-  touch-action: pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
@@ -21,9 +24,16 @@ html, body, #root {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-input, textarea, [contenteditable="true"] {
+input, select, textarea, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
+  touch-action: manipulation;
+}
+
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
 }
 
 html.dark {
