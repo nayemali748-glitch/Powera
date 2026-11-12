@@ -781,7 +781,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex min-h-screen w-full select-none font-sans antialiased ${
+    <div className={`flex min-h-screen w-full font-sans antialiased ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
@@ -1358,12 +1358,12 @@ export default function App() {
                   {activeFormCategory === null ? (
                     <div className="space-y-6">
                       {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
-                      <div className="space-y-4">
+                      <div className="space-y-3">
                         <div 
                           onClick={() => setIsHomeDashboardExpanded(!isHomeDashboardExpanded)}
-                          className={`rounded-3xl p-5 sm:p-6 transition-all duration-300 cursor-pointer group relative overflow-hidden select-none ${
+                          className={`rounded-2xl p-3.5 sm:p-5 transition-all duration-300 cursor-pointer group relative overflow-hidden ${
                             theme === 'night'
-                              ? 'bg-gradient-to-r from-[#030d22] via-[#051638] to-[#020b1f] border-2 border-[#0ea5e9] text-white shadow-[0_0_25px_rgba(14,165,233,0.35)] hover:shadow-[0_0_35px_rgba(14,165,233,0.5)]'
+                              ? 'bg-gradient-to-r from-[#030d22] via-[#051638] to-[#020b1f] border-2 border-[#0ea5e9] text-white shadow-[0_0_20px_rgba(14,165,233,0.3)] hover:shadow-[0_0_30px_rgba(14,165,233,0.45)]'
                               : 'bg-gradient-to-br from-[#1d2f6f] via-[#142358] to-[#0d163a] text-white shadow-md hover:shadow-lg'
                           }`}
                           role="button"
@@ -1375,55 +1375,55 @@ export default function App() {
                             <TransmissionPylonSvg
                               theme={theme}
                               mode="banner"
-                              className="absolute right-0 top-0 bottom-0 w-64 sm:w-84 h-full pointer-events-none select-none"
+                              className="absolute right-0 top-0 bottom-0 w-48 sm:w-80 h-full pointer-events-none opacity-40 sm:opacity-70"
                             />
                           )}
                           
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+                          <div className="flex items-center justify-between gap-3 relative z-10">
                             {/* Left: Icon, Title, Subtitle, Live Badge */}
-                            <div className="flex items-start sm:items-center gap-3.5">
-                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                            <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+                              <div className={`w-9 h-9 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
                                 theme === 'night'
-                                  ? 'bg-gradient-to-br from-[#0284c7] to-[#1e40af] text-white shadow-[0_0_15px_rgba(14,165,233,0.6)] border border-cyan-400/30'
+                                  ? 'bg-gradient-to-br from-[#0284c7] to-[#1e40af] text-white shadow-[0_0_12px_rgba(14,165,233,0.5)] border border-cyan-400/30'
                                   : 'bg-blue-600/30 border border-blue-400/30 text-blue-400'
                               }`}>
-                                <BarChart3 className="w-6 h-6" />
+                                <BarChart3 className="w-4.5 h-4.5 sm:w-5.5 sm:h-5.5" />
                               </div>
-                              <div>
-                                <h2 className="text-base sm:text-lg font-black tracking-wide text-white uppercase">
-                                  <span>{t.performanceDashboard}</span>
-                                </h2>
-                                <div className="mt-1">
-                                  <span className="bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5 shadow-2xs">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h2 className="text-xs sm:text-base font-black tracking-wide text-white uppercase truncate">
+                                    <span>{t.performanceDashboard}</span>
+                                  </h2>
+                                  <span className="bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 text-[9px] sm:text-[10px] font-black px-2 py-0.2 rounded-full inline-flex items-center gap-1 shadow-2xs">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                    LIVE METRICS
+                                    LIVE
                                   </span>
                                 </div>
-                                <p className="text-xs text-slate-200/90 font-medium mt-1 line-clamp-1">
+                                <p className="text-[11px] sm:text-xs text-slate-300 font-medium truncate mt-0.5">
                                   {isHomeDashboardExpanded
                                     ? (currentLanguage === 'bn' 
-                                        ? 'ক্লিক করে ড্যাশবোর্ড সংক্ষেপ বা বন্ধ করুন' 
-                                        : 'Click to collapse performance dashboard')
+                                        ? 'ক্লিক করে ড্যাশবোর্ড বন্ধ করুন' 
+                                        : 'Click to collapse dashboard')
                                     : (currentLanguage === 'bn' 
-                                        ? 'ক্লিক করুন — রিয়েল-টাইম পারফরম্যান্স দেখুন...' 
-                                        : 'Click to open real-time performance...')}
+                                        ? 'ক্লিক করে পারফরম্যান্স দেখুন...' 
+                                        : 'Click to open performance...')}
                                 </p>
                               </div>
                             </div>
 
                             {/* Right: CTA Open / Close Button matching photo */}
-                            <div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
-                              <div className={`px-5 py-2.5 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md cursor-pointer ${
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className={`px-3 py-1.5 sm:px-4 sm:py-2 font-bold rounded-lg sm:rounded-xl text-[11px] sm:text-xs flex items-center gap-1.5 transition-all shadow-md cursor-pointer ${
                                 theme === 'night'
-                                  ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_15px_rgba(0,180,255,0.6)] hover:brightness-110'
+                                  ? 'bg-gradient-to-r from-[#00d2ff] to-[#0072ff] text-white shadow-[0_0_12px_rgba(0,180,255,0.5)] hover:brightness-110'
                                   : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-md'
                               }`}>
                                 <span>
                                   {isHomeDashboardExpanded
-                                    ? (currentLanguage === 'bn' ? 'ড্যাশবোর্ড বন্ধ করুন' : 'Close Dashboard')
-                                    : (currentLanguage === 'bn' ? 'ড্যাশবোর্ড খুলুন' : 'Open Dashboard')}
+                                    ? (currentLanguage === 'bn' ? 'বন্ধ করুন' : 'Close')
+                                    : (currentLanguage === 'bn' ? 'খুলুন' : 'Open')}
                                 </span>
-                                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isHomeDashboardExpanded ? 'rotate-180' : ''}`} />
+                                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isHomeDashboardExpanded ? 'rotate-180' : ''}`} />
                               </div>
                             </div>
                           </div>

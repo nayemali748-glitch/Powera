@@ -107,11 +107,13 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className={`h-16 sm:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 sticky top-0 transition-colors duration-200 ${
-      theme === 'night' 
-        ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
-        : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'
-    }`}>
+    <header 
+      style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 8px)' }}
+      className={`min-h-16 sm:min-h-20 pb-2 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 sticky top-0 transition-colors duration-200 ${
+        theme === 'night' 
+          ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
+          : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'
+      }`}>
       {/* Left Title & System Status */}
       <div className="flex items-center gap-2.5 sm:gap-3">
         {onToggleSidebar && (
