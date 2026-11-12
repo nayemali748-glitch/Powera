@@ -107,19 +107,21 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header 
-      style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 8px)' }}
-      className={`min-h-16 sm:min-h-20 pb-2 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 sticky top-0 transition-colors duration-200 ${
-        theme === 'night' 
-          ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
+    <header
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+      className={`shrink-0 w-full z-30 transition-colors duration-200 ${
+        theme === 'night'
+          ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md'
           : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'
-      }`}>
+      }`}
+    >
+      <div className="h-14 sm:h-16 px-3 sm:px-6 lg:px-8 flex items-center justify-between w-full">
       {/* Left Title & System Status */}
-      <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className={`p-2 rounded-xl transition-all cursor-pointer ${
+            className={`p-2 rounded-xl transition-all cursor-pointer shrink-0 ${
               theme === 'night' 
                 ? 'text-white hover:bg-slate-800' 
                 : 'text-slate-800 hover:bg-slate-100'
@@ -129,21 +131,21 @@ export const Header: React.FC<HeaderProps> = ({
             <Menu className="w-5 h-5 stroke-[2.5]" />
           </button>
         )}
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <img 
             src={appLogo} 
             alt="Power of Construction Round Logo" 
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border-2 border-amber-400 p-0.5 bg-white shrink-0 ring-2 ring-slate-100"
             referrerPolicy="no-referrer"
           />
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className={`text-base sm:text-lg font-black tracking-wide leading-none ${
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h1 className={`text-sm sm:text-lg font-black tracking-wide leading-none ${
                 theme === 'night' ? 'text-white' : 'text-[#2563eb]'
               }`}>
                 POWER
               </h1>
-              <span className={`px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-black tracking-wider uppercase flex items-center gap-1 shadow-2xs ${
+              <span className={`px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-black tracking-wider uppercase flex items-center gap-1 shadow-2xs shrink-0 ${
                 theme === 'night'
                   ? 'bg-emerald-950/70 border border-emerald-500/60 text-emerald-300'
                   : 'bg-[#dcfce7] border border-[#86efac] text-[#15803d]'
@@ -159,7 +161,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right Controls: Golden Home Button + 3-Dots Button */}
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         {/* Home Button with House Symbol */}
         <button
           id="header-home-btn"
@@ -454,6 +456,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
         </div>
+      </div>
       </div>
     </header>
   );

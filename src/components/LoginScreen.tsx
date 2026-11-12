@@ -344,7 +344,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#020917] text-white flex flex-col items-center justify-center relative overflow-x-hidden py-4 sm:py-8 px-3 sm:px-4 font-sans select-none">
+    <div
+      style={{
+        paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)',
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)',
+      }}
+      className="fixed inset-0 h-dvh w-full bg-[#020917] text-white flex flex-col items-center overflow-y-auto overflow-x-hidden overscroll-y-contain px-3 sm:px-4 font-sans select-none"
+    >
       {/* Ambient Desktop Surround Backdrop */}
       <div className="fixed inset-0 pointer-events-none z-0 bg-[#020917]">
         <img
@@ -356,7 +362,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       </div>
 
       {/* Main Portrait Viewport Precision Matching Original Photo */}
-      <div className="relative z-10 w-full max-w-[440px] rounded-[32px] sm:rounded-[36px] flex flex-col justify-between items-center px-5 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
+      <div className="relative z-10 my-auto w-full max-w-[440px] shrink-0 rounded-[32px] sm:rounded-[36px] flex flex-col justify-between items-center px-5 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
         {/* ================================================================= */}
         {/* BACKGROUND ARTWORK: STORMY SKY, PYLONS, LIGHTNING, NEON WAVES     */}
         {/* ================================================================= */}

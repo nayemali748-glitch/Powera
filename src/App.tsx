@@ -781,7 +781,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex min-h-screen w-full font-sans antialiased ${
+    <div className={`fixed inset-0 flex h-dvh w-full overflow-hidden font-sans antialiased ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
@@ -793,11 +793,17 @@ export default function App() {
       )}
 
       {/* LEFT NAVIGATION SIDEBAR */}
-      <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 flex flex-col transition-transform duration-200 ease-in-out md:static md:translate-x-0
-        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-        ${theme === 'night' ? 'bg-[#0b1226] border-r border-slate-800 text-slate-100 shadow-2xl md:shadow-none' : 'bg-white border-r border-slate-200 text-slate-800 shadow-sm md:shadow-none'}
-      `}>
+      <aside
+        style={{
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        }}
+        className={`
+          fixed inset-y-0 left-0 z-50 w-64 h-full flex flex-col transition-transform duration-200 ease-in-out md:static md:translate-x-0
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          ${theme === 'night' ? 'bg-[#0b1226] border-r border-slate-800 text-slate-100 shadow-2xl md:shadow-none' : 'bg-white border-r border-slate-200 text-slate-800 shadow-sm md:shadow-none'}
+        `}
+      >
         {/* Brand Header with Round Logo */}
         <div className={`p-4 border-b flex items-center justify-between ${
           theme === 'night' ? 'border-slate-800 bg-[#0a1022]' : 'border-slate-200 bg-slate-50/70'
@@ -1317,7 +1323,7 @@ export default function App() {
       </aside>
 
       {/* MAIN VIEWPORT (Top Header + Scrollable Content) */}
-      <main className={`flex-1 flex flex-col min-w-0 relative ${
+      <main className={`flex-1 flex flex-col min-w-0 h-full overflow-hidden relative ${
         theme === 'night' ? 'bg-[#060a17]' : 'bg-slate-50'
       }`}>
         {/* Top Operations Header */}
@@ -1348,15 +1354,16 @@ export default function App() {
         {/* Content Container */}
         <section
           ref={mainScrollRef}
-          className={`flex-1 p-4 sm:p-6 lg:p-8 space-y-6 ${
+          style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 24px)' }}
+          className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 ${
           theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
         }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
               {activeTab === 'entry' && (
-                <div className="space-y-6">
+                <div className="space-y-4 sm:space-y-5">
                   {/* If no form is currently opened inside, show the 5 Categories and Worker Overview */}
                   {activeFormCategory === null ? (
-                    <div className="space-y-6">
+                    <div className="space-y-3.5 sm:space-y-5">
                       {/* CLICKABLE PERFORMANCE DASHBOARD OPTION (ANIMATED ACCORDION TOGGLE) */}
                       <div className="space-y-3">
                         <div 
@@ -1680,7 +1687,7 @@ export default function App() {
                               currentUser={currentUser}
                               onSelectEntry={(entry) => setPreviewEntry(entry)}
                               onNewEntry={isAgencyUser ? undefined : () => {
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                                mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
                               }}
                               lang={currentLanguage}
                             />
