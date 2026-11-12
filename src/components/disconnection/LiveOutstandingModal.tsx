@@ -18,7 +18,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
-import { cleanAndNormalizeConsumerId } from '../../utils/wbsedclReport';
+import { cleanAndNormalizeConsumerId } from '../../utils/consumerId';
 
 interface LiveOutstandingModalProps {
   task?: DisconnectionTask | null;

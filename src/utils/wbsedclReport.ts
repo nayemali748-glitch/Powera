@@ -1,5 +1,8 @@
 import https from 'https';
 import zlib from 'zlib';
+import { cleanAndNormalizeConsumerId } from './consumerId';
+
+export { cleanAndNormalizeConsumerId };
 
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -69,20 +72,6 @@ function fetchHttpsBuffer(url: string, headers: Record<string, string> = {}): Pr
     });
     req.end();
   });
-}
-
-export function cleanAndNormalizeConsumerId(consumerId: any): string {
-  if (!consumerId) return '';
-  let str = String(consumerId).trim();
-  const bengaliDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
-  for (let i = 0; i < bengaliDigits.length; i++) {
-    str = str.replaceAll(bengaliDigits[i], i.toString());
-  }
-  return str
-    .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-|TASK-|DISC-|CON-)/i, '')
-    .replace(/\.0+$/, '')
-    .replace(/[, \-_]/g, '')
-    .trim();
 }
 
 /**

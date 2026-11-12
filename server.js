@@ -13,6 +13,19 @@ import * as XLSX from "xlsx";
 // src/utils/wbsedclReport.ts
 import https from "https";
 import zlib from "zlib";
+
+// src/utils/consumerId.ts
+function cleanAndNormalizeConsumerId(consumerId) {
+  if (!consumerId) return "";
+  let str = String(consumerId).trim();
+  const bengaliDigits = ["\u09E6", "\u09E7", "\u09E8", "\u09E9", "\u09EA", "\u09EB", "\u09EC", "\u09ED", "\u09EE", "\u09EF"];
+  for (let i = 0; i < bengaliDigits.length; i++) {
+    str = str.replaceAll(bengaliDigits[i], i.toString());
+  }
+  return str.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-|TASK-|DISC-|CON-)/i, "").replace(/\.0+$/, "").replace(/[, \-_]/g, "").trim();
+}
+
+// src/utils/wbsedclReport.ts
 var BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 function fetchHttpsBuffer(url, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -57,15 +70,6 @@ function fetchHttpsBuffer(url, headers = {}) {
     });
     req.end();
   });
-}
-function cleanAndNormalizeConsumerId(consumerId) {
-  if (!consumerId) return "";
-  let str = String(consumerId).trim();
-  const bengaliDigits = ["\u09E6", "\u09E7", "\u09E8", "\u09E9", "\u09EA", "\u09EB", "\u09EC", "\u09ED", "\u09EE", "\u09EF"];
-  for (let i = 0; i < bengaliDigits.length; i++) {
-    str = str.replaceAll(bengaliDigits[i], i.toString());
-  }
-  return str.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-|TASK-|DISC-|CON-)/i, "").replace(/\.0+$/, "").replace(/[, \-_]/g, "").trim();
 }
 async function fetchOfficialWbsedclReportAsync(consumerId) {
   const cleanId = cleanAndNormalizeConsumerId(consumerId);
@@ -209,7 +213,7 @@ var GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1-3LtAbXZU6klisRe
 var BROWSER_USER_AGENT2 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var gasCache = /* @__PURE__ */ new Map();
 var inFlightRequests = /* @__PURE__ */ new Map();
-var CACHE_TTL_MS = 6e4;
+var CACHE_TTL_MS = 2500;
 var READ_ACTIONS = /* @__PURE__ */ new Set(["entries", "workorders", "stats", "users", "health", "chat", "logs", "disconnectiontasks", "getDisconnectionTasks"]);
 var submissionIdMap = /* @__PURE__ */ new Map();
 var inFlightSubmissions = /* @__PURE__ */ new Map();
@@ -304,6 +308,9 @@ function normalizeServerEntry(entry) {
   raw.feederName = raw.feederName || raw["Feeder Name"] || "";
   raw.workOrderNo = raw.workOrderNo || raw["Work Order No"] || raw["Work Order Number"] || "";
   raw.workOrderDate = raw.workOrderDate || raw["Work Order Date"] || "";
+  raw.volumeNo = raw.volumeNo || raw["Volume No"] || "";
+  raw.pageNo = raw.pageNo || raw["Page No"] || "";
+  raw.volumePageNo = raw.volumePageNo || raw["Volume & Page No"] || raw["Volume Page No"] || (raw.volumeNo || raw.pageNo ? `V-${raw.volumeNo} P-${raw.pageNo}`.trim() : "");
   raw.workOrderNoticeId = raw.workOrderNoticeId || raw["Work Order Notice ID"] || "";
   raw.workOrderNoticeTitle = raw.workOrderNoticeTitle || raw["Work Order Notice Title"] || "";
   raw.workOrderNoticeDate = raw.workOrderNoticeDate || raw["Work Order Notice Date"] || "";
@@ -313,7 +320,8 @@ function normalizeServerEntry(entry) {
   raw.consumerName = raw.consumerName || raw["Name"] || raw["Consumer Name"] || raw["Customer Name"] || "";
   raw.fatherName = raw.fatherName || raw["Father Name"] || raw["Father / Husband Name"] || "";
   raw.mobile = raw.mobile || raw["Mobile Number"] || raw["Mobile No"] || raw["Mobile"] || "";
-  raw.address = raw.address || raw["Address"] || "";
+  raw.address = raw.premisesAddress || raw.address || raw["Address"] || "";
+  raw.premisesAddress = raw.address;
   raw.appliedLoad = raw.appliedLoad || raw["Applied Load"] || "";
   raw.phase = raw.phase || raw["Supply Phase"] || raw["Phase"] || (raw.category === "DISCONNECTION" ? raw["BClass/Phase"] : "") || "";
   raw.tariffCategory = raw.tariffCategory || raw["Tariff Category"] || (raw.category === "DISCONNECTION" ? raw["Class"] : "") || "";
@@ -322,10 +330,15 @@ function normalizeServerEntry(entry) {
   raw.earthResistance = raw.earthResistance || raw["Earth Resistance"] || "";
   raw.meterNo = raw.meterNo || raw["Meter"] || raw["Meter No"] || raw["Meter Number"] || "";
   raw.meterMake = raw.meterMake || raw["Meter Make"] || "";
-  raw.initialReading = raw.initialReading || raw["Initial Reading"] || raw["Reading"] || raw.reading || "";
-  raw.sealNo = raw.sealNo || raw["Meter Seal No"] || raw["Seal No"] || "";
+  raw.initialReading = raw.initialMeterReading || raw.initialReading || raw["Initial Reading"] || raw["Reading"] || raw.reading || "";
+  raw.initialMeterReading = raw.initialReading;
+  raw.sealNo = raw.meterSealNo || raw.sealNo || raw["Meter Seal No"] || raw["Seal No"] || "";
+  raw.meterSealNo = raw.sealNo;
   raw.meterInstallDate = raw.meterInstallDate || raw["Meter Install Date"] || "";
-  raw.inspectionAgencyName = raw.inspectionAgencyName || raw["Inspection Agency Name"] || "";
+  raw.inspectionAgencyName = raw.inspectionAgency || raw.inspectionAgencyName || raw["Inspection Agency"] || raw["Inspection Agency Name"] || "";
+  raw.inspectionAgency = raw.inspectionAgencyName;
+  raw.notes = raw.technicalNotes || raw.notes || raw["Notes"] || "";
+  raw.technicalNotes = raw.notes;
   raw.oldMeterNo = raw.oldMeterNo || raw["Old Meter No"] || "";
   raw.replacementReason = raw.replacementReason || raw["Replacement Reason"] || "";
   raw.newMeterNo = raw.newMeterNo || raw["New Meter No"] || "";
@@ -2726,6 +2739,26 @@ function buildNscSheetPayloadFields(payload) {
     reading: initReadingVal,
     Reading: initReadingVal,
     initialReading: initReadingVal,
+    // Exact 16 Required NSC Form Columns
+    meterNo: mNoVal,
+    meterSealNo: nscMeta.sealNo,
+    consumerName: cNameVal,
+    premisesAddress: addrVal,
+    initialMeterReading: initReadingVal,
+    workOrderNo: nscMeta.workOrderNo,
+    workOrderDate: nscMeta.workOrderDate,
+    volumeNo: nscMeta.volumeNo,
+    pageNo: nscMeta.pageNo,
+    applicationNo: nscMeta.applicationNo,
+    consumerId: cIdVal,
+    meterInstallDate: nscMeta.meterInstallDate,
+    inspectionAgency: nscMeta.inspectionAgencyName,
+    locationGps: nscMeta.locationGps,
+    photoUrl: String(payload.photoUrl || "").trim(),
+    technicalNotes: nscMeta.notes,
+    notes: nscMeta.notes,
+    workerName: workerVal,
+    workerId: String(payload.workerId || payload["Worker ID"] || "").trim(),
     substation: nscMeta.cccName || String(payload.substation || "").trim(),
     feederName: `NSC_META::${JSON.stringify(nscMeta)}`,
     problemType: "New Service Connection (NSC)",
@@ -2750,6 +2783,7 @@ function buildNscSheetPayloadFields(payload) {
     "Meter Install Date": nscMeta.meterInstallDate,
     "Agency Name": nscMeta.agencyName,
     "CCC Name": nscMeta.cccName,
+    "Inspection Agency": nscMeta.inspectionAgencyName,
     "Inspection Agency Name": nscMeta.inspectionAgencyName,
     "Applied Load": nscMeta.appliedLoad,
     "Supply Phase": nscMeta.phase,
@@ -2760,6 +2794,8 @@ function buildNscSheetPayloadFields(payload) {
     "Mobile": mobVal,
     "Address": addrVal,
     "Worker Name": workerVal,
+    "GPS Location": nscMeta.locationGps,
+    "Photo Evidence": String(payload.photoUrl || "").trim(),
     "Notes": nscMeta.notes
   };
 }
@@ -2767,7 +2803,7 @@ async function fetchIsolatedModuleEntriesFromSheet(sheetTabName, forceRefresh = 
   const canonicalTab = toSheetTabCategory(sheetTabName);
   const expectedFrontendCat = toFrontendCategory(canonicalTab);
   const cached = moduleEntriesCacheMap.get(canonicalTab);
-  if (!forceRefresh && cached && Date.now() - cached.timestamp < 3e4) {
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < 4e3) {
     return mergeEntriesWithOverlay(cached.entries).filter((e) => e.category === expectedFrontendCat);
   }
   if (forceRefresh) {
@@ -2881,6 +2917,24 @@ async function handleFastCreateEntry(rawPayload, actionName = "createEntry") {
     ...existingMatch || {},
     ...payload
   };
+  const offloadBase64ForSheet = (val, hint) => {
+    const s = String(val || "").trim();
+    if (!s.startsWith("data:")) return s;
+    const imgHash = crypto.createHash("sha1").update(s).digest("hex").slice(0, 16);
+    const cachedUrl = uploadedPhotoLinksMap.get(imgHash);
+    if (cachedUrl && cachedUrl.startsWith("http")) return cachedUrl;
+    const safeHint = String(hint || "photo").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+    const imgKey = `${safeHint}_${imgHash}`;
+    largeImagesMap.set(imgKey, s);
+    saveLargeImagesToDisk();
+    return `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+  };
+  if (mergedBase.photoUrl) {
+    mergedBase.photoUrl = offloadBase64ForSheet(mergedBase.photoUrl, `${payload.id}_photo`);
+  }
+  if (mergedBase.workOrderPhoto) {
+    mergedBase.workOrderPhoto = offloadBase64ForSheet(mergedBase.workOrderPhoto, `${payload.id}_wo`);
+  }
   const nscSpecific = canonicalTab === "NSC" ? buildNscSheetPayloadFields(mergedBase) : {};
   const sheetPayload = {
     ...mergedBase,
@@ -2920,7 +2974,9 @@ async function handleFastCreateEntry(rawPayload, actionName = "createEntry") {
     }
   }
   const isUpdatingExisting = Boolean(existingMatch);
-  const writePromise = enqueueGasWrite(async () => {
+  let gasRejected = false;
+  let gasErrorMsg = "";
+  const runGasSave = async () => {
     try {
       let gasRes;
       if (canonicalTab === "Disconnection") {
@@ -2929,16 +2985,16 @@ async function handleFastCreateEntry(rawPayload, actionName = "createEntry") {
       } else if (isUpdatingExisting) {
         gasRes = await callGoogleAppsScript(
           "updateEntry",
-          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload },
           "POST",
-          25e3
+          2e4
         );
       } else {
         gasRes = await callGoogleAppsScript(
           "createEntry",
-          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload, data: sheetPayload },
+          { id: payload.id, submissionId: payload.submissionId, category: canonicalTab, ...sheetPayload },
           "POST",
-          25e3
+          2e4
         );
       }
       if (gasRes && gasRes.success !== false) {
@@ -2947,18 +3003,36 @@ async function handleFastCreateEntry(rawPayload, actionName = "createEntry") {
           ov._syncedToSheet = true;
           saveEntriesOverlayToDisk();
         }
+      } else {
+        gasRejected = true;
+        gasErrorMsg = String(gasRes?.error?.message || gasRes?.error || "Google Sheets rejected the write");
       }
     } catch (err) {
+      gasErrorMsg = String(err?.message || err || "Google Sheets write error");
       console.warn(`[Entries Background Sync] create/update notice for ${payload.id}:`, err);
     } finally {
       gasCache.clear();
     }
-  }).catch(() => {
-  });
-  await Promise.race([
-    writePromise,
-    new Promise((resolve) => setTimeout(resolve, 1e4))
-  ]);
+  };
+  if (canonicalTab === "NSC") {
+    const directPromise = runGasSave();
+    await Promise.race([
+      directPromise,
+      new Promise((resolve) => setTimeout(resolve, 4500))
+    ]);
+    if (gasRejected) {
+      localEntriesOverlayMap.delete(overlayKey);
+      saveEntriesOverlayToDisk();
+      throw new Error(gasErrorMsg || "Failed to save in Google Sheet NSC tab.");
+    }
+  } else {
+    const writePromise = enqueueGasWrite(runGasSave);
+    await Promise.race([
+      writePromise.catch(() => {
+      }),
+      new Promise((resolve) => setTimeout(resolve, 4500))
+    ]);
+  }
   gasCache.clear();
   return normalized;
 }
@@ -3142,12 +3216,13 @@ function mergeEntriesWithOverlay(sheetEntries) {
       continue;
     }
     const existing = resultMap.get(k);
-    const isRecent = !ov._localUpdatedAt || now - Number(ov._localUpdatedAt) < 864e5;
+    const ageMs = ov._localUpdatedAt ? now - Number(ov._localUpdatedAt) : Infinity;
+    const isFreshPending = ageMs < 45e3;
     if (existing) {
-      if (!ov._syncedToSheet || isRecent) {
+      if (!ov._syncedToSheet || ageMs < 15e3) {
         resultMap.set(k, normalizeServerEntry({ ...existing, ...ov }));
       }
-    } else if (!ov._syncedToSheet || isRecent) {
+    } else if (!ov._syncedToSheet && isFreshPending) {
       resultMap.set(k, normalizeServerEntry(ov));
     }
   }
@@ -3183,57 +3258,35 @@ async function getFastMergedEntries(query = {}, forceRefresh = false) {
   if (query?.category && String(query.category).toUpperCase().trim() !== "ALL") {
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === "Disconnection") {
-      if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-        if (forceRefresh) refreshDisconnectionFromSheetInBackground();
-        return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(
-          (t) => normalizeServerEntry({ ...t, category: "DISCONNECTION" })
-        );
+      const isStale = !cachedDisconnectionState || Date.now() - cachedDisconnectionState.timestamp > 4e3;
+      if (forceRefresh || isStale) {
+        const tasks = await fetchDisconnectionTasksFromGoogleSheet();
+        return tasks.map((t) => normalizeServerEntry({ ...t, category: "DISCONNECTION" }));
       }
-      const tasks = await fetchDisconnectionTasksFromGoogleSheet();
-      return tasks.map((t) => normalizeServerEntry({ ...t, category: "DISCONNECTION" }));
+      return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(
+        (t) => normalizeServerEntry({ ...t, category: "DISCONNECTION" })
+      );
     }
     const modCached = moduleEntriesCacheMap.get(canonicalTab);
-    if (modCached && Array.isArray(modCached.entries)) {
-      if (forceRefresh || Date.now() - modCached.timestamp >= 45e3) {
-        fetchIsolatedModuleEntriesFromSheet(canonicalTab, true).catch(() => {
-        });
-      }
+    if (!forceRefresh && modCached && Array.isArray(modCached.entries) && Date.now() - modCached.timestamp < 4e3) {
       return mergeEntriesWithOverlay(modCached.entries).filter((e) => e.category === toFrontendCategory(canonicalTab));
     }
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
-  if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-    if (forceRefresh || Date.now() - cachedEntriesState.timestamp >= 45e3) {
-      refreshEntriesFromSheetInBackground();
-    }
+  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && Date.now() - cachedEntriesState.timestamp < 4e3) {
     return mergeEntriesWithOverlay(cachedEntriesState.entries);
   }
   try {
-    const fetchAllPromise = (async () => {
-      const allModuleLists = await Promise.all(
-        ISOLATED_FIELD_MODULES.map(
-          (tab) => fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
-            return moduleEntriesCacheMap.get(tab)?.entries || [];
-          })
-        )
-      );
-      const combined = mergeEntriesWithOverlay(allModuleLists.flat());
-      if (combined.length > 0 || !cachedEntriesState) {
-        cachedEntriesState = { entries: combined, timestamp: Date.now() };
-        try {
-          fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), "utf-8");
-        } catch {
-        }
-      }
-      return combined;
-    })();
-    const result = await Promise.race([
-      fetchAllPromise,
-      new Promise(
-        (resolve) => setTimeout(() => resolve(cachedEntriesState?.entries || []), 6e3)
+    const allModuleLists = await Promise.all(
+      ISOLATED_FIELD_MODULES.map(
+        (tab) => fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
+          return moduleEntriesCacheMap.get(tab)?.entries || [];
+        })
       )
-    ]);
-    return mergeEntriesWithOverlay(result);
+    );
+    const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+    cachedEntriesState = { entries: combined, timestamp: Date.now() };
+    return combined;
   } catch {
     return mergeEntriesWithOverlay(cachedEntriesState?.entries || []);
   }
@@ -4487,7 +4540,6 @@ try {
   }
 } catch {
 }
-var DISCONNECTION_CACHE_TTL_MS = 8e3;
 function normalizeConsumerIdKey(val) {
   if (val === void 0 || val === null) return "";
   let s = String(val).trim();
@@ -5043,30 +5095,22 @@ app.get("/api/disconnection-tasks", async (req, res) => {
   const workerName = String(query.workerName || "").toLowerCase().trim();
   const forceRefresh = query.refresh === "true" || query.force === "true";
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-    const isStale = Date.now() - cachedDisconnectionState.timestamp > DISCONNECTION_CACHE_TTL_MS;
+    const isStale = Date.now() - cachedDisconnectionState.timestamp > 3e3;
     if (forceRefresh || isStale) {
-      if (forceRefresh) {
-        gasCache.delete("getDisconnectionTasks_{}");
-        gasCache.delete('entries_{"category":"Disconnection"}');
-        gasCache.delete('entries:{"category":"Disconnection"}');
-        const freshTasks2 = await Promise.race([
-          fetchDisconnectionTasksFromGoogleSheet(),
-          new Promise(
-            (resolve) => setTimeout(() => resolve(mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks)), 5e3)
-          )
-        ]);
-        const stats3 = computeLocalStats(freshTasks2, workerId, workerName);
-        return res.json({
-          success: true,
-          sheetConnected: true,
-          spreadsheetId: GOOGLE_SHEET_ID,
-          spreadsheetUrl: GOOGLE_SHEET_URL,
-          sheetName: "Disconnection",
-          tasks: freshTasks2,
-          stats: stats3
-        });
-      }
-      refreshDisconnectionFromSheetInBackground();
+      gasCache.delete("getDisconnectionTasks_{}");
+      gasCache.delete('entries_{"category":"Disconnection"}');
+      gasCache.delete('entries:{"category":"Disconnection"}');
+      const freshTasks2 = await fetchDisconnectionTasksFromGoogleSheet();
+      const stats3 = computeLocalStats(freshTasks2, workerId, workerName);
+      return res.json({
+        success: true,
+        sheetConnected: true,
+        spreadsheetId: GOOGLE_SHEET_ID,
+        spreadsheetUrl: GOOGLE_SHEET_URL,
+        sheetName: "Disconnection",
+        tasks: freshTasks2,
+        stats: stats3
+      });
     }
     const cleanList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks);
     const stats2 = computeLocalStats(cleanList, workerId, workerName);
