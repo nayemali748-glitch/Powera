@@ -107,9 +107,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header
-      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
-      className={`min-h-16 sm:min-h-20 py-2 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 transition-colors duration-200 ${
+    <header className={`h-16 sm:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between shrink-0 w-full z-30 sticky top-0 transition-colors duration-200 ${
       theme === 'night' 
         ? 'bg-[#0a1122] border-b border-slate-800 text-white shadow-md' 
         : 'bg-white border-b border-slate-200 text-slate-900 shadow-xs'

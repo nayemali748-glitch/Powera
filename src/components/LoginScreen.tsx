@@ -344,13 +344,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   return (
-    <div
-      style={{
-        paddingTop: 'max(1rem, env(safe-area-inset-top, 1rem))',
-        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))'
-      }}
-      className="h-full w-full bg-[#020917] text-white flex flex-col items-center relative overflow-y-auto overflow-x-hidden overscroll-contain px-3 sm:px-6 font-sans select-none"
-    >
+    <div className="min-h-screen w-full bg-[#020917] text-white flex flex-col items-center justify-center relative overflow-x-hidden py-4 sm:py-8 px-3 sm:px-4 font-sans select-none">
       {/* Ambient Desktop Surround Backdrop */}
       <div className="fixed inset-0 pointer-events-none z-0 bg-[#020917]">
         <img
@@ -361,8 +355,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         />
       </div>
 
-      {/* Main Responsive Viewport Card (Centers on tall screens, never clips top/bottom on mobile/tab/laptop) */}
-      <div className="relative z-10 my-auto w-full max-w-[440px] sm:max-w-[480px] md:max-w-[500px] rounded-[28px] sm:rounded-[34px] flex flex-col justify-between items-center px-4 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden shrink-0">
+      {/* Main Portrait Viewport Precision Matching Original Photo */}
+      <div className="relative z-10 w-full max-w-[440px] rounded-[32px] sm:rounded-[36px] flex flex-col justify-between items-center px-5 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
         {/* ================================================================= */}
         {/* BACKGROUND ARTWORK: STORMY SKY, PYLONS, LIGHTNING, NEON WAVES     */}
         {/* ================================================================= */}

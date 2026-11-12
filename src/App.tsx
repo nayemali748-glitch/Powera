@@ -781,7 +781,7 @@ export default function App() {
   }
 
   return (
-    <div className={`fixed inset-0 flex h-full w-full min-h-0 overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
+    <div className={`flex min-h-screen w-full select-none font-sans antialiased ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
@@ -1317,7 +1317,7 @@ export default function App() {
       </aside>
 
       {/* MAIN VIEWPORT (Top Header + Scrollable Content) */}
-      <main className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative ${
+      <main className={`flex-1 flex flex-col min-w-0 relative ${
         theme === 'night' ? 'bg-[#060a17]' : 'bg-slate-50'
       }`}>
         {/* Top Operations Header */}
@@ -1348,8 +1348,7 @@ export default function App() {
         {/* Content Container */}
         <section
           ref={mainScrollRef}
-          style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))' }}
-          className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y select-none p-3.5 sm:p-6 lg:p-8 space-y-5 sm:space-y-6 ${
+          className={`flex-1 p-4 sm:p-6 lg:p-8 space-y-6 ${
           theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
         }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
