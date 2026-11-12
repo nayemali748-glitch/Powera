@@ -300,6 +300,7 @@ export default function App() {
 
   const inFlightRef = useRef(false);
   const lastOrdersHashRef = useRef<string>('');
+  const mainScrollRef = useRef<HTMLElement | null>(null);
   const recentDiscUpdatesRef = useRef<Map<string, { task: DisconnectionTask; timestamp: number }>>(new Map());
   const [syncMode, setSyncMode] = useState<SyncMode>('auto');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
@@ -745,6 +746,20 @@ export default function App() {
     'DTR REPLESMENT': userVisibleEntries.filter(e => e.category === 'DTR REPLESMENT').length,
   };
 
+  // Ensure top of Home Screen & content viewport is always visible on mount or navigation
+  useEffect(() => {
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTop = 0;
+    }
+    try {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    } catch {
+      // ignore
+    }
+  }, [activeTab, activeFormCategory, currentUser]);
+
   // If user is not logged in with ID & Password, display LoginScreen
   if (!currentUser) {
     return (
@@ -757,7 +772,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-full h-[100dvh] w-full overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
+    <div className={`flex h-full w-full overflow-hidden select-none font-sans antialiased touch-pan-y overscroll-none ${
       theme === 'night' ? 'bg-[#060a17] text-slate-100 dark' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Mobile Drawer Overlay */}
@@ -1322,7 +1337,9 @@ export default function App() {
         />
 
         {/* Content Container */}
-        <section className={`flex-1 min-h-0 overflow-y-auto overscroll-none touch-pan-y select-none p-4 sm:p-6 lg:p-8 space-y-6 ${
+        <section
+          ref={mainScrollRef}
+          className={`flex-1 min-h-0 overflow-y-auto overscroll-none touch-pan-y select-none p-4 sm:p-6 lg:p-8 space-y-6 ${
           theme === 'night' ? 'bg-[#030712] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
         }`}>
               {/* VIEW 1: DATA ENTRY VIEW (HOME PAGE) */}
