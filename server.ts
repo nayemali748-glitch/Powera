@@ -44,7 +44,7 @@ interface CacheEntry {
 }
 const gasCache = new Map<string, CacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const CACHE_TTL_MS = 60000; // 60 seconds memory cache for reads (cleared instantly on any mutation)
+const CACHE_TTL_MS = 2500; // 2.5s short window solely for deduplicating simultaneous requests; live sync with Google Sheets is paramount
 const READ_ACTIONS = new Set(['entries', 'workorders', 'stats', 'users', 'health', 'chat', 'logs', 'disconnectiontasks', 'getDisconnectionTasks']);
 
 // Strict Idempotency Submission Map (15 minutes TTL)
@@ -3130,7 +3130,7 @@ async function fetchIsolatedModuleEntriesFromSheet(sheetTabName: string, forceRe
   const canonicalTab = toSheetTabCategory(sheetTabName);
   const expectedFrontendCat = toFrontendCategory(canonicalTab);
   const cached = moduleEntriesCacheMap.get(canonicalTab);
-  if (!forceRefresh && cached && (Date.now() - cached.timestamp < 30000)) {
+  if (!forceRefresh && cached && (Date.now() - cached.timestamp < 4000)) {
     return mergeEntriesWithOverlay(cached.entries).filter(e => e.category === expectedFrontendCat);
   }
   if (forceRefresh) {
@@ -3658,57 +3658,37 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
   if (query?.category && String(query.category).toUpperCase().trim() !== 'ALL') {
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === 'Disconnection') {
-      if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-        if (forceRefresh) refreshDisconnectionFromSheetInBackground();
-        return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(t =>
-          normalizeServerEntry({ ...t, category: 'DISCONNECTION' })
-        );
+      const isStale = !cachedDisconnectionState || (Date.now() - cachedDisconnectionState.timestamp > 4000);
+      if (forceRefresh || isStale) {
+        const tasks = await fetchDisconnectionTasksFromGoogleSheet();
+        return tasks.map(t => normalizeServerEntry({ ...t, category: 'DISCONNECTION' }));
       }
-      const tasks = await fetchDisconnectionTasksFromGoogleSheet();
-      return tasks.map(t => normalizeServerEntry({ ...t, category: 'DISCONNECTION' }));
+      return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks).map(t =>
+        normalizeServerEntry({ ...t, category: 'DISCONNECTION' })
+      );
     }
     const modCached = moduleEntriesCacheMap.get(canonicalTab);
-    if (modCached && Array.isArray(modCached.entries)) {
-      if (forceRefresh || Date.now() - modCached.timestamp >= 45000) {
-        fetchIsolatedModuleEntriesFromSheet(canonicalTab, true).catch(() => {});
-      }
+    if (!forceRefresh && modCached && Array.isArray(modCached.entries) && (Date.now() - modCached.timestamp < 4000)) {
       return mergeEntriesWithOverlay(modCached.entries).filter(e => e.category === toFrontendCategory(canonicalTab));
     }
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
 
-  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-    if (Date.now() - cachedEntriesState.timestamp >= 45000) {
-      refreshEntriesFromSheetInBackground();
-    }
+  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && (Date.now() - cachedEntriesState.timestamp < 4000)) {
     return mergeEntriesWithOverlay(cachedEntriesState.entries);
   }
 
   try {
-    const fetchAllPromise = (async () => {
-      const allModuleLists = await Promise.all(
-        ISOLATED_FIELD_MODULES.map(tab =>
-          fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
-            return moduleEntriesCacheMap.get(tab)?.entries || [];
-          })
-        )
-      );
-      const combined = mergeEntriesWithOverlay(allModuleLists.flat());
-      if (combined.length > 0 || !cachedEntriesState) {
-        cachedEntriesState = { entries: combined, timestamp: Date.now() };
-        try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
-      }
-      return combined;
-    })();
-
-    // Bound foreground wait to 6 seconds so UI refresh never hangs; let fetch finish in background if GAS is slow
-    const result = await Promise.race([
-      fetchAllPromise,
-      new Promise<any[]>(resolve =>
-        setTimeout(() => resolve(cachedEntriesState?.entries || []), 6000)
+    const allModuleLists = await Promise.all(
+      ISOLATED_FIELD_MODULES.map(tab =>
+        fetchIsolatedModuleEntriesFromSheet(tab, forceRefresh).catch(() => {
+          return moduleEntriesCacheMap.get(tab)?.entries || [];
+        })
       )
-    ]);
-    return mergeEntriesWithOverlay(result);
+    );
+    const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+    cachedEntriesState = { entries: combined, timestamp: Date.now() };
+    return combined;
   } catch {
     return mergeEntriesWithOverlay(cachedEntriesState?.entries || []);
   }
@@ -5784,30 +5764,22 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const forceRefresh = query.refresh === 'true' || query.force === 'true';
 
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-    const isStale = Date.now() - cachedDisconnectionState.timestamp > DISCONNECTION_CACHE_TTL_MS;
+    const isStale = Date.now() - cachedDisconnectionState.timestamp > 3000;
     if (forceRefresh || isStale) {
-      if (forceRefresh) {
-        gasCache.delete('getDisconnectionTasks_{}');
-        gasCache.delete('entries_{"category":"Disconnection"}');
-        gasCache.delete('entries:{"category":"Disconnection"}');
-        const freshTasks = await Promise.race([
-          fetchDisconnectionTasksFromGoogleSheet(),
-          new Promise<any[]>(resolve =>
-            setTimeout(() => resolve(mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState!.tasks)), 5000)
-          )
-        ]);
-        const stats = computeLocalStats(freshTasks, workerId, workerName);
-        return res.json({
-          success: true,
-          sheetConnected: true,
-          spreadsheetId: GOOGLE_SHEET_ID,
-          spreadsheetUrl: GOOGLE_SHEET_URL,
-          sheetName: 'Disconnection',
-          tasks: freshTasks,
-          stats
-        });
-      }
-      refreshDisconnectionFromSheetInBackground();
+      gasCache.delete('getDisconnectionTasks_{}');
+      gasCache.delete('entries_{"category":"Disconnection"}');
+      gasCache.delete('entries:{"category":"Disconnection"}');
+      const freshTasks = await fetchDisconnectionTasksFromGoogleSheet();
+      const stats = computeLocalStats(freshTasks, workerId, workerName);
+      return res.json({
+        success: true,
+        sheetConnected: true,
+        spreadsheetId: GOOGLE_SHEET_ID,
+        spreadsheetUrl: GOOGLE_SHEET_URL,
+        sheetName: 'Disconnection',
+        tasks: freshTasks,
+        stats
+      });
     }
     const cleanList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks);
     const stats = computeLocalStats(cleanList, workerId, workerName);

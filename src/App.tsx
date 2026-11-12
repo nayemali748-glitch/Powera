@@ -454,15 +454,15 @@ export default function App() {
     // Single active 10-second background timer per authenticated app session (POWER APP & SHEETS REFRESH)
     const interval = setInterval(() => {
       if (!document.hidden && !inFlightRef.current) {
-        loadData(true);
+        loadData(true, true);
       }
     }, 10000);
 
     const onFocus = () => {
-      if (!inFlightRef.current) loadData(true);
+      if (!inFlightRef.current) loadData(true, true);
     };
     const onVisibilityChange = () => {
-      if (!document.hidden && !inFlightRef.current) loadData(true);
+      if (!document.hidden && !inFlightRef.current) loadData(true, true);
     };
 
     window.addEventListener('focus', onFocus);
