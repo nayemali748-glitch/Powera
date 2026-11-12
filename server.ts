@@ -3614,12 +3614,15 @@ function mergeEntriesWithOverlay(sheetEntries: any[]): any[] {
       continue;
     }
     const existing = resultMap.get(k);
-    const isRecent = !ov._localUpdatedAt || (now - Number(ov._localUpdatedAt) < 86400000);
+    const ageMs = ov._localUpdatedAt ? now - Number(ov._localUpdatedAt) : Infinity;
+    const isFreshPending = ageMs < 45000;
     if (existing) {
-      if (!ov._syncedToSheet || isRecent) {
+      // Only override sheet data if local write is still pending sync or within 15s propagation window
+      if (!ov._syncedToSheet || ageMs < 15000) {
         resultMap.set(k, normalizeServerEntry({ ...existing, ...ov }));
       }
-    } else if (!ov._syncedToSheet || isRecent) {
+    } else if (!ov._syncedToSheet && isFreshPending) {
+      // Only inject if not yet confirmed synced to sheet; if it was already synced and is now absent from sheet, it was deleted in the sheet!
       resultMap.set(k, normalizeServerEntry(ov));
     }
   }
@@ -3674,8 +3677,8 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
 
-  if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-    if (forceRefresh || Date.now() - cachedEntriesState.timestamp >= 45000) {
+  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
+    if (Date.now() - cachedEntriesState.timestamp >= 45000) {
       refreshEntriesFromSheetInBackground();
     }
     return mergeEntriesWithOverlay(cachedEntriesState.entries);
