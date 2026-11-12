@@ -90,27 +90,27 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
 
   return (
     <div className="w-full space-y-4">
-      {/* WORK CATEGORY SELECTION Header (Color-coded Blue) */}
-      <div className={`flex items-center justify-between px-4 sm:px-5 py-3 rounded-2xl transition-all duration-200 ${
+      {/* WORK CATEGORY SELECTION Header (Compact Color-coded Blue) */}
+      <div className={`flex items-center justify-between px-3 py-1.5 rounded-xl transition-all duration-200 ${
         isNight
-          ? 'bg-[#06122c] border border-[#0ea5e9]/80 shadow-[0_0_20px_rgba(14,165,233,0.25)]'
+          ? 'bg-[#06122c] border border-[#0ea5e9]/80 shadow-[0_0_14px_rgba(14,165,233,0.2)]'
           : 'bg-[#edf5ff] border border-[#bfdbfe] shadow-2xs'
       }`}>
-        <div className="flex items-center gap-3">
-          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-xs ${
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 shadow-xs ${
             isNight
-              ? 'bg-[#0284c7] text-white shadow-[0_0_10px_rgba(14,165,233,0.5)]'
+              ? 'bg-[#0284c7] text-white shadow-[0_0_8px_rgba(14,165,233,0.45)]'
               : 'bg-[#2563eb] text-white'
           }`}>
-            <Layers className="w-4 h-4" />
+            <Layers className="w-3.5 h-3.5" />
           </div>
-          <h2 className={`text-xs sm:text-sm font-black tracking-wider uppercase ${
+          <h2 className={`text-[11px] sm:text-xs font-extrabold tracking-wide uppercase truncate ${
             isNight ? 'text-white' : 'text-[#1d4ed8]'
           }`}>
             WORK CATEGORY SELECTION (5 MODULES)
           </h2>
         </div>
-        <ChevronRight className={`w-5 h-5 shrink-0 ${
+        <ChevronRight className={`w-4 h-4 shrink-0 ${
           isNight ? 'text-[#38bdf8]' : 'text-[#2563eb]'
         }`} />
       </div>
