@@ -16,12 +16,14 @@ import {
   RefreshCw,
   X,
   ExternalLink,
-  Camera
+  Camera,
+  Receipt
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { DisconnectionTask } from '../../types';
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY } from '../../utils/dateTimeFormat';
 import { cleanWorkerOrAgencyName, cleanDisconnectionNotes } from '../../utils/disconnectionClassifier';
+import { PaymentReceiptModal } from './PaymentReceiptModal';
 
 interface DisconnectionReportProps {
   tasks: DisconnectionTask[];
@@ -41,6 +43,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [dateFilter, setDateFilter] = useState<string>('');
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string; meta?: string } | null>(null);
+  const [selectedReceiptTask, setSelectedReceiptTask] = useState<DisconnectionTask | null>(null);
 
   // Extract all unique workers from tasks (Name only)
   const workers = useMemo(() => {
@@ -418,6 +421,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
                   <th className="py-3 px-3">{lang === 'bn' ? 'পর্যবেক্ষণ ও মন্তব্য' : 'Report & Remarks'}</th>
                   <th className="py-3 px-3">{lang === 'bn' ? 'পরিশোধ / রিডিং' : 'Paid / Reading'}</th>
                   <th className="py-3 px-3 text-center">{lang === 'bn' ? 'প্রমাণ ছবি' : 'Evidence'}</th>
+                  <th className="py-3 px-3 text-center">{lang === 'bn' ? 'Payment Receipt' : 'Payment Receipt'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -528,6 +532,18 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
                           <span className="text-[10px] text-slate-400 italic">No Photo</span>
                         )}
                       </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReceiptTask(t)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+                          title="View or download Payment Receipt"
+                        >
+                          <Receipt className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                          <span>Payment Receipt</span>
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -584,6 +600,15 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {selectedReceiptTask && (
+        <PaymentReceiptModal
+          task={selectedReceiptTask}
+          isOpen={Boolean(selectedReceiptTask)}
+          onClose={() => setSelectedReceiptTask(null)}
+          lang={lang}
+        />
       )}
     </div>
   );

@@ -14,7 +14,8 @@ import {
   CheckCircle2,
   XCircle,
   Eye,
-  X
+  X,
+  Receipt
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
 import { submitDisconnectionTaskReport } from '../../services/api';
@@ -27,6 +28,7 @@ import {
   cleanWorkerOrAgencyName
 } from '../../utils/disconnectionClassifier';
 import { LiveOutstandingModal } from './LiveOutstandingModal';
+import { PaymentReceiptModal } from './PaymentReceiptModal';
 
 interface DisconnectionConsumerCardProps {
   task: DisconnectionTask;
@@ -58,6 +60,7 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
   const [optimisticAdminDecision, setOptimisticAdminDecision] = useState<'APPROVED' | 'REJECTED' | null>(null);
   const [showHdPhotoModal, setShowHdPhotoModal] = useState(false);
   const [showLiveCheckModal, setShowLiveCheckModal] = useState(false);
+  const [showPaymentReceiptModal, setShowPaymentReceiptModal] = useState(false);
 
   const isUrgent = String(task.priority || '').toUpperCase() === 'URGENT';
   const rawStatus = String(task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
@@ -389,6 +392,20 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
             >
               <Zap className="w-3 h-3 fill-amber-600 text-amber-600 shrink-0" />
               <span>{lang === 'bn' ? 'লাইভ OSD' : 'Live OSD'}</span>
+            </button>
+
+            {/* Payment Receipt option button on every Disconnection list item */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowPaymentReceiptModal(true);
+              }}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-black text-[11px] border border-emerald-300 cursor-pointer active:scale-95 transition-all shadow-2xs"
+              title="Payment Receipt দেখুন বা WBSEDCL পোর্টাল থেকে ডাউনলোড করুন"
+            >
+              <Receipt className="w-3 h-3 text-emerald-700 shrink-0" />
+              <span>{lang === 'bn' ? 'Payment Receipt' : 'Payment Receipt'}</span>
             </button>
           </div>
         </div>
@@ -727,6 +744,14 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
           task={task}
           isOpen={showLiveCheckModal}
           onClose={() => setShowLiveCheckModal(false)}
+          lang={lang}
+        />
+      )}
+      {showPaymentReceiptModal && (
+        <PaymentReceiptModal
+          task={task}
+          isOpen={showPaymentReceiptModal}
+          onClose={() => setShowPaymentReceiptModal(false)}
           lang={lang}
         />
       )}
