@@ -56,6 +56,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { EditEntryModal } from './EditEntryModal';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
 import { DisconnectionPerformanceDashboard } from './DisconnectionPerformanceDashboard';
+import { UploadPaymentDataScreen } from './UploadPaymentDataScreen';
 import { Language, translations } from '../utils/translations';
 import { cleanNameOnly } from '../utils/entryNormalizer';
 import { getReissueLockState, cleanDisconnectionNotes } from '../utils/disconnectionClassifier';
@@ -129,6 +130,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [approvingReissueId, setApprovingReissueId] = useState<string | null>(null);
   const [rejectingReissueId, setRejectingReissueId] = useState<string | null>(null);
   const [showReissueRequestsPanel, setShowReissueRequestsPanel] = useState<boolean>(false);
+  const [showUploadPaymentDataScreen, setShowUploadPaymentDataScreen] = useState<boolean>(false);
   const [localReissueOverrides, setLocalReissueOverrides] = useState<Record<string, 'APPROVED' | 'REJECTED'>>({});
 
   const handleAdminApproveReissue = async (task: DisconnectionTask) => {
@@ -1002,6 +1004,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     printWindow.print();
   };
 
+  if (showUploadPaymentDataScreen) {
+    return (
+      <UploadPaymentDataScreen
+        onBack={() => setShowUploadPaymentDataScreen(false)}
+        onUploadCompleted={onRefresh}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Admin Top Dashboard Bar - Clean White Executive Design */}
@@ -1111,6 +1122,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              {/* Upload Payment Data Option Button in Admin Panel */}
+              <button
+                id="admin-upload-payment-data-btn"
+                type="button"
+                onClick={() => setShowUploadPaymentDataScreen(true)}
+                className="px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 border bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200 transition-all cursor-pointer shadow-xs active:scale-95"
+                title="Upload Payment Data Excel (.xlsx / .xls) for Disconnection Consumers"
+              >
+                <UploadCloud className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Upload Payment Data</span>
+              </button>
+
               {/* Compact "Reissue Request's" Option Button in Admin Panel */}
               <button
                 id="admin-reissue-requests-btn"

@@ -17,7 +17,8 @@ import {
   Zap,
   ShieldCheck,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  FileCheck2
 } from 'lucide-react';
 import { DisconnectionTask } from '../../types';
 import { cleanAndNormalizeConsumerId } from '../../utils/consumerId';
@@ -39,6 +40,7 @@ interface LiveWbsedclSummary {
   reportingDate?: string;
   lastReadingDate?: string;
   connectionStatus?: string;
+  pdfBase64?: string;
 }
 
 const WBSEDCL_PAYMENT_RECEIPT_BASE_URL =
@@ -68,6 +70,7 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveSummary, setLiveSummary] = useState<LiveWbsedclSummary | null>(null);
   const [liveCheckNonce, setLiveCheckNonce] = useState(0);
+  const [downloadingOfficial, setDownloadingOfficial] = useState(false);
 
   const cleanIdForEffect =
     cleanAndNormalizeConsumerId(
@@ -106,7 +109,8 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
             outstandingAmount: data.outstandingAmount ?? null,
             reportingDate: data.reportingDate || '',
             lastReadingDate: data.lastReadingDate || '',
-            connectionStatus: data.connectionStatus || ''
+            connectionStatus: data.connectionStatus || '',
+            pdfBase64: data.pdfBase64 || ''
           });
         } else {
           setLiveSummary(null);
@@ -227,7 +231,118 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
     setTimeout(() => setStatusMessage(null), 3000);
   };
 
-  const handleDownloadPdf = () => {
+  const savePdfBlob = async (blob: Blob, filename: string) => {
+    const isIosStandalone =
+      typeof window !== 'undefined' &&
+      (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        window.matchMedia?.('(display-mode: standalone)').matches ||
+        Boolean((navigator as any).standalone));
+
+    if (isIosStandalone && typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        const file = new File([blob], filename, { type: 'application/pdf' });
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: filename
+          });
+          return;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+      }
+    }
+
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+  };
+
+  const handleDownloadOfficialWbsedclPdf = async () => {
+    if (!cleanId || downloadingOfficial) return;
+    setDownloadingOfficial(true);
+    try {
+      let base64 = liveSummary?.pdfBase64 || '';
+      if (!base64) {
+        const res = await fetch('/api/wbsedcl/live-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ consumerId: cleanId })
+        });
+        const data = await res.json().catch(() => null);
+        if (data?.success && data?.pdfBase64) {
+          base64 = data.pdfBase64;
+          setLiveSummary(prev => ({
+            ...(prev || { liveConnected: true }),
+            liveConnected: true,
+            reportType: data.reportType,
+            totalDueAmount: data.totalDueAmount ?? data.outstandingAmount ?? null,
+            outstandingAmount: data.outstandingAmount ?? null,
+            reportingDate: data.reportingDate || '',
+            lastReadingDate: data.lastReadingDate || '',
+            connectionStatus: data.connectionStatus || '',
+            pdfBase64: data.pdfBase64
+          }));
+        }
+      }
+
+      if (base64) {
+        const byteCharacters = atob(base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+        await savePdfBlob(blob, `WBSEDCL_Official_Status_${cleanId}.pdf`);
+        setStatusMessage(
+          lang === 'bn'
+            ? '✓ WBSEDCL অফিসিয়াল PDF ডাউনলোড হয়েছে।'
+            : '✓ Official WBSEDCL PDF downloaded.'
+        );
+        setTimeout(() => setStatusMessage(null), 3500);
+        return;
+      }
+
+      // Fallback to direct download endpoint
+      const pdfRes = await fetch(`/api/wbsedcl/download-official-pdf?consumerId=${encodeURIComponent(cleanId)}`);
+      const contentType = pdfRes.headers.get('content-type') || '';
+      if (pdfRes.ok && contentType.includes('application/pdf')) {
+        const blob = await pdfRes.blob();
+        await savePdfBlob(blob, `WBSEDCL_Official_Status_${cleanId}.pdf`);
+        setStatusMessage(
+          lang === 'bn'
+            ? '✓ WBSEDCL অফিসিয়াল PDF ডাউনলোড হয়েছে।'
+            : '✓ Official WBSEDCL PDF downloaded.'
+        );
+        setTimeout(() => setStatusMessage(null), 3500);
+        return;
+      }
+
+      setStatusMessage(
+        lang === 'bn'
+          ? 'সরাসরি অফিসিয়াল PDF পাওয়া যায়নি — উপরের WBSEDCL Payment Receipt বাটন দিয়ে পোর্টাল থেকে ডাউনলোড করুন।'
+          : 'Direct official PDF unavailable — use Open WBSEDCL Payment Receipt above to download.'
+      );
+      setTimeout(() => setStatusMessage(null), 4500);
+    } catch {
+      setStatusMessage(
+        lang === 'bn'
+          ? 'ডাউনলোডে সমস্যা হয়েছে — উপরের WBSEDCL Payment Receipt পোর্টাল থেকে ডাউনলোড করুন।'
+          : 'Download failed — please use Open WBSEDCL Payment Receipt above.'
+      );
+      setTimeout(() => setStatusMessage(null), 4500);
+    } finally {
+      setDownloadingOfficial(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -291,7 +406,8 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
       y
     );
 
-    doc.save(`WBSEDCL_Payment_Receipt_${cleanId || 'Consumer'}.pdf`);
+    const pdfBlob = doc.output('blob');
+    await savePdfBlob(pdfBlob, `WBSEDCL_Payment_Receipt_${cleanId || 'Consumer'}.pdf`);
     setStatusMessage(
       lang === 'bn' ? '✓ পেমেন্ট রসিদ PDF ডাউনলোড হয়েছে।' : '✓ Payment Receipt PDF downloaded.'
     );
@@ -553,6 +669,35 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
                   </span>
                 </a>
               </div>
+
+              {cleanId && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-emerald-200/70">
+                  <button
+                    type="button"
+                    onClick={handleDownloadOfficialWbsedclPdf}
+                    disabled={downloadingOfficial}
+                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer active:scale-95 disabled:opacity-60"
+                  >
+                    {downloadingOfficial ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FileCheck2 className="w-3.5 h-3.5 text-emerald-400" />
+                    )}
+                    <span>
+                      {downloadingOfficial
+                        ? (lang === 'bn' ? 'অফিশিয়াল PDF ডাউনলোড হচ্ছে...' : 'Downloading Official PDF...')
+                        : (lang === 'bn'
+                            ? 'অফিশিয়াল WBSEDCL PDF (No Dues / Status) ডাউনলোড'
+                            : 'Download Official WBSEDCL PDF')}
+                    </span>
+                  </button>
+                  <span className="text-[10px] text-emerald-800/90 leading-tight">
+                    {lang === 'bn'
+                      ? 'টিপস: WBSEDCL পোর্টালে রসিদ ডাউনলোড আটকালে Pop-ups Allow করুন।'
+                      : 'Tip: Allow pop-ups in Safari/browser to download PDF inside WBSEDCL portal.'}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Digital Receipt Card */}

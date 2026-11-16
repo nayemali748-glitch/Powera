@@ -137,13 +137,16 @@ export default function App() {
           parsed?.role !== 'agency' &&
           (parsed?.role === 'admin' || parsed?.idNo === '8695716192' || parsed?.idNo === 'controller' || parsed?.idNo === 'administration');
         if (isAdm) return 'admin';
+        const roleLow = String(parsed?.role || '').toLowerCase();
         const isAg =
-          parsed?.role === 'agency' ||
-          String(parsed?.role || '').toLowerCase().includes('agency') ||
-          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
-          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
-          Boolean((parsed as any)?.agencyName) ||
-          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+          roleLow === 'agency' ||
+          roleLow.includes('agency') ||
+          (!roleLow && (
+            /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+            /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+            Boolean((parsed as any)?.agencyName) ||
+            /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '')
+          ));
         if (isAg) return 'disconnection';
         return 'entry';
       } catch (e) {}
@@ -155,13 +158,16 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        const roleLow = String(parsed?.role || '').toLowerCase();
         const isAg =
-          parsed?.role === 'agency' ||
-          String(parsed?.role || '').toLowerCase().includes('agency') ||
-          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
-          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
-          Boolean((parsed as any)?.agencyName) ||
-          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+          roleLow === 'agency' ||
+          roleLow.includes('agency') ||
+          (!roleLow && (
+            /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+            /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+            Boolean((parsed as any)?.agencyName) ||
+            /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '')
+          ));
         if (isAg) return 'DISCONNECTION';
       } catch {}
     }
@@ -172,13 +178,16 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        const roleLow = String(parsed?.role || '').toLowerCase();
         const isAg =
-          parsed?.role === 'agency' ||
-          String(parsed?.role || '').toLowerCase().includes('agency') ||
-          /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
-          /agency|এজেন্সি/i.test(parsed?.designation || '') ||
-          Boolean((parsed as any)?.agencyName) ||
-          /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '');
+          roleLow === 'agency' ||
+          roleLow.includes('agency') ||
+          (!roleLow && (
+            /^(agn|agency)[-_0-9]/i.test(parsed?.idNo || '') ||
+            /agency|এজেন্সি/i.test(parsed?.designation || '') ||
+            Boolean((parsed as any)?.agencyName) ||
+            /enterprise|agency|associates|traders|construction/i.test(parsed?.name || '')
+          ));
         if (isAg) return 'DISCONNECTION';
       } catch {}
     }
@@ -538,13 +547,16 @@ export default function App() {
     } else {
       localStorage.removeItem('power_is_admin');
       if (activeTab === 'admin') {
+        const roleLow = String(currentUser?.role || '').toLowerCase();
         const isAgency =
-          currentUser?.role === 'agency' ||
-          String(currentUser?.role || '').toLowerCase().includes('agency') ||
-          /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
-          /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
-          Boolean((currentUser as any)?.agencyName) ||
-          /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '');
+          roleLow === 'agency' ||
+          roleLow.includes('agency') ||
+          (!roleLow && (
+            /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+            /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+            Boolean((currentUser as any)?.agencyName) ||
+            /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '')
+          ));
         setActiveTab(isAgency ? 'disconnection' : 'entry');
       }
     }
@@ -578,13 +590,16 @@ export default function App() {
   // Enforce access control: If user is not admin, never allow staying in the admin panel
   useEffect(() => {
     if (!isAdmin && activeTab === 'admin') {
+      const roleLow = String(currentUser?.role || '').toLowerCase();
       const isAgency =
-        currentUser?.role === 'agency' ||
-        String(currentUser?.role || '').toLowerCase().includes('agency') ||
-        /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
-        /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
-        Boolean((currentUser as any)?.agencyName) ||
-        /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '');
+        roleLow === 'agency' ||
+        roleLow.includes('agency') ||
+        (!roleLow && (
+          /^(agn|agency)[-_0-9]/i.test(currentUser?.idNo || '') ||
+          /agency|এজেন্সি/i.test(currentUser?.designation || '') ||
+          Boolean((currentUser as any)?.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(currentUser?.name || '')
+        ));
       setActiveTab(isAgency ? 'disconnection' : 'entry');
     }
   }, [isAdmin, activeTab, currentUser]);
@@ -604,15 +619,18 @@ export default function App() {
       session.role !== 'agency' && 
       (session.role === 'admin' || session.idNo === '8695716192' || session.idNo === 'controller' || session.idNo === 'administration')
     );
+    const roleLow = String(session.role || '').toLowerCase();
     const isAgency = Boolean(
       !isUserAdmin &&
-      (session.role === 'agency' ||
-        String(session.role || '').toLowerCase().includes('agency') ||
-        /^(agn|agency)[-_0-9]/i.test(session.idNo || '') ||
-        /agency|এজেন্সি/i.test(session.designation || '') ||
-        Boolean(session.agencyName) ||
-        /enterprise|agency|associates|traders|construction/i.test(session.name || '') ||
-        isAgencyUserSession(session, getCachedDisconnectionTasksSync()))
+      (roleLow === 'agency' ||
+        roleLow.includes('agency') ||
+        (!roleLow && (
+          /^(agn|agency)[-_0-9]/i.test(session.idNo || '') ||
+          /agency|এজেন্সি/i.test(session.designation || '') ||
+          Boolean(session.agencyName) ||
+          /enterprise|agency|associates|traders|construction/i.test(session.name || '') ||
+          isAgencyUserSession(session, getCachedDisconnectionTasksSync())
+        )))
     );
 
     setIsAdmin(isUserAdmin);

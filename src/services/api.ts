@@ -889,82 +889,136 @@ function buildClientUserSyncTag(u: { idNo?: string; password?: string; phone?: s
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
   const rawRole = String(u.role || 'worker').trim().toLowerCase();
-  const role = rawRole === 'admin' ? 'admin' : rawRole === 'agency' ? 'agency' : 'worker';
+  const role = rawRole.includes('admin') || rawRole === 'controller' || rawRole === 'supervisor'
+    ? 'admin'
+    : rawRole.includes('agency')
+      ? 'agency'
+      : 'worker';
   const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
   return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
 
-function sanitizeClientUserRecord(u: any): UserAccount | null {
-  if (!u || typeof u !== 'object') return null;
-  let merged: any = { ...u };
+function firstNonEmptyClient(...values: any[]): string {
+  for (const v of values) {
+    if (v !== undefined && v !== null) {
+      const s = String(v).trim();
+      if (s !== '') return s;
+    }
+  }
+  return '';
+}
 
-  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo||role||status)
-  const createdRaw = String(u.createdAt || u['Created At'] || '').trim();
-  let tagRole = '';
-  let tagStatus = '';
-  if (createdRaw.includes('||')) {
-    const parts = createdRaw.split('||');
-    if (parts.length >= 3) {
-      if (!merged.idNo && parts[1]) merged.idNo = parts[1];
-      if ((merged.password === undefined || merged.password === '') && parts[2] !== undefined) merged.password = parts[2];
-      if (!merged.phone && parts[3]) merged.phone = parts[3];
-      if (!merged.designation && parts[4]) merged.designation = parts[4];
-      if (!merged.badgeNo && parts[5]) merged.badgeNo = parts[5];
-      if (parts[6]) tagRole = parts[6].trim().toLowerCase();
-      if (parts[7]) tagStatus = parts[7].trim().toLowerCase();
+function resolveClientCanonicalRole(record: any, finalIdNo: string, rawId: string, tagRole = ''): 'admin' | 'agency' | 'worker' {
+  const sheetColRole = firstNonEmptyClient(record?.['Role'], record?.role).toLowerCase();
+  const lowerIdNo = String(finalIdNo || '').trim().toLowerCase();
+  const lowerRawId = String(rawId || '').trim().toLowerCase();
+
+  if (lowerIdNo === '8695716192' || lowerRawId === 'adm_8695716192') {
+    return 'admin';
+  }
+
+  const explicitRole = sheetColRole || String(tagRole || '').trim().toLowerCase();
+  if (explicitRole) {
+    if (
+      explicitRole === 'admin' ||
+      explicitRole.includes('admin') ||
+      explicitRole === 'controller' ||
+      explicitRole === 'supervisor'
+    ) {
+      return 'admin';
+    }
+    if (explicitRole === 'agency' || explicitRole.includes('agency')) {
+      return 'agency';
+    }
+    if (explicitRole === 'worker' || explicitRole.includes('worker') || explicitRole === 'lineman' || explicitRole === 'staff') {
+      return 'worker';
     }
   }
 
-  const rawId = String(merged.id || merged['ID'] || '').trim();
-  const rawIdNo = String(
-    merged.idNo ||
-    merged.loginId ||
-    merged.userId ||
-    merged['User ID'] ||
-    merged['User Id'] ||
-    merged['user_id'] ||
-    merged['ID No'] ||
-    merged.workerId ||
-    merged.consumerId ||
-    ''
-  ).trim();
-  const rawPhone = String(merged.phone || merged['Phone'] || merged.mobile || merged.workerPhone || '').trim();
-  const finalIdNo = rawIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
+  if (lowerIdNo === 'admin' || /^adm[-_0-9]/i.test(finalIdNo)) return 'admin';
+  if (/^agn[-_0-9]/i.test(finalIdNo) || /^agency[-_0-9]/i.test(finalIdNo)) return 'agency';
+  return 'worker';
+}
+
+function sanitizeClientUserRecord(u: any): UserAccount | null {
+  if (!u || typeof u !== 'object') return null;
+  const merged: any = { ...u };
+
+  // Parse single-GET sync tag from createdAt strictly as fallback when live sheet columns are absent
+  const createdRaw = firstNonEmptyClient(u.createdAt, u['Created At']);
+  let tagRole = '';
+  let tagStatus = '';
+  let tagIdNo = '';
+  let tagPass = '';
+  let tagPhone = '';
+  let tagDesig = '';
+  let tagBadge = '';
+  if (createdRaw.includes('||')) {
+    const parts = createdRaw.split('||');
+    if (parts.length >= 3) {
+      tagIdNo = String(parts[1] ?? '').trim();
+      tagPass = String(parts[2] ?? '').trim();
+      tagPhone = String(parts[3] ?? '').trim();
+      tagDesig = String(parts[4] ?? '').trim();
+      tagBadge = String(parts[5] ?? '').trim();
+      tagRole = String(parts[6] ?? '').trim().toLowerCase();
+      tagStatus = String(parts[7] ?? '').trim().toLowerCase();
+    }
+  }
+
+  const rawId = firstNonEmptyClient(merged.id, merged['ID'], merged['Record ID']);
+  const colIdNo = firstNonEmptyClient(
+    merged['User ID'],
+    merged['User Id'],
+    merged['user_id'],
+    merged['ID No'],
+    merged.idNo,
+    merged.loginId,
+    merged.userId,
+    merged.workerId,
+    merged.consumerId
+  );
+  const rawPhone = firstNonEmptyClient(
+    merged['Phone'],
+    merged.phone,
+    merged['Mobile'],
+    merged.mobile,
+    merged.workerPhone,
+    tagPhone
+  );
+  const finalIdNo = colIdNo || tagIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
   if (!finalIdNo) return null;
 
-  const rawRole = String(tagRole || merged.role || merged['Role'] || 'worker').trim().toLowerCase();
-  const desigStr = String(merged.designation || merged['Designation'] || '').trim();
-  const isAdm =
-    rawRole === 'admin' ||
-    rawRole === 'controller' ||
-    rawRole === 'administrator' ||
-    rawRole === 'superadmin' ||
-    finalIdNo === '8695716192' ||
-    finalIdNo.toLowerCase() === 'admin' ||
-    rawId === 'adm_8695716192' ||
-    /^adm[-_0-9]/i.test(finalIdNo);
-  const isAgency =
-    !isAdm &&
-    (rawRole === 'agency' ||
-      /^agn[-_0-9]/i.test(finalIdNo) ||
-      /^agency[-_0-9]/i.test(finalIdNo));
+  const resolvedRole = resolveClientCanonicalRole(merged, finalIdNo, rawId, tagRole);
+  const isAdm = resolvedRole === 'admin';
+  const isAgency = resolvedRole === 'agency';
 
-  const finalPass = String(
-    merged.password !== undefined && merged.password !== null
-      ? merged.password
-      : (merged['Password'] !== undefined && merged['Password'] !== null ? merged['Password'] : '')
-  ).trim();
-  const finalHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
+  const finalPass = firstNonEmptyClient(merged['Password'], merged.password, tagPass);
+  const finalHash = firstNonEmptyClient(merged['Password Hash'], merged.passwordHash);
   const defaultDesig = isAdm
     ? 'Sub-Divisional Controller'
     : isAgency
       ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)'
       : 'লাইনম্যান / Worker (WBSEDCL)';
-  const finalDesig = desigStr || defaultDesig;
-  const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
-  const rawSt = String(tagStatus || merged.status || merged['Status'] || 'active').trim().toLowerCase();
+  const finalDesig = firstNonEmptyClient(merged['Designation'], merged.designation, tagDesig, defaultDesig);
+  const finalBadge = firstNonEmptyClient(merged['Badge No'], merged.badgeNo, tagBadge, finalIdNo);
+
+  const colSt = firstNonEmptyClient(merged['Status'], merged.status).toLowerCase();
+  const rawSt = (colSt === 'hold' || colSt === 'active' || colSt === 'inactive' || colSt === 'blocked')
+    ? colSt
+    : (tagStatus || colSt || 'active');
   const finalSt = (rawSt === 'hold' ? 'hold' : 'active') as 'active' | 'hold';
-  const resolvedRole: UserAccount['role'] = isAdm ? 'admin' : isAgency ? 'agency' : 'worker';
+
+  const updatedTag = buildClientUserSyncTag({
+    idNo: finalIdNo,
+    password: finalPass,
+    phone: rawPhone,
+    designation: finalDesig,
+    badgeNo: finalBadge,
+    role: resolvedRole,
+    status: finalSt,
+    createdAt: createdRaw
+  });
 
   const result: UserAccount & { passwordHash?: string; loginId?: string; userId?: string } = {
     id: rawId || `usr_${finalIdNo}`,
@@ -974,15 +1028,15 @@ function sanitizeClientUserRecord(u: any): UserAccount | null {
     uid: merged.uid,
     password: finalPass,
     passwordHash: finalHash,
-    name: String(merged.name || merged['Full Name'] || merged['Name'] || merged.consumerName || finalIdNo || 'কর্মী').trim(),
+    name: firstNonEmptyClient(merged['Full Name'], merged['Name'], merged.name, merged.consumerName, finalIdNo, 'কর্মী'),
     phone: rawPhone,
     role: resolvedRole,
     status: finalSt,
     designation: finalDesig,
     badgeNo: finalBadge,
-    createdAt: createdRaw || buildClientUserSyncTag({ idNo: finalIdNo, password: finalPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: resolvedRole, status: finalSt }),
-    updatedAt: String(merged.updatedAt || ''),
-    lastLogin: String(merged.lastLogin || '')
+    createdAt: updatedTag,
+    updatedAt: firstNonEmptyClient(merged['Updated At'], merged.updatedAt),
+    lastLogin: firstNonEmptyClient(merged.lastLogin)
   };
   return result;
 }
@@ -1057,18 +1111,16 @@ export async function fetchUsers(forceRefresh = false): Promise<UserAccount[]> {
     // 1. Try Express API proxy first
     if (typeof window !== 'undefined') {
       try {
-        const url = forceRefresh ? '/api/users?refresh=true' : '/api/users';
-        const pRes = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        const url = forceRefresh ? `/api/users?refresh=true&_t=${Date.now()}` : `/api/users?_t=${Date.now()}`;
+        const pRes = await fetch(url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
         const ct = pRes.headers.get('content-type') || '';
         if (pRes.ok && ct.includes('application/json')) {
           const pData = await pRes.json();
-          const list = extractClientList(pData);
-          if (Array.isArray(list) && list.length > 0) {
+          if (pData && pData.success !== false) {
+            const list = extractClientList(pData);
             const sanitized = list.map(sanitizeClientUserRecord).filter((u): u is UserAccount => Boolean(u && u.idNo));
-            if (sanitized.length > 0) {
-              writeCache(USERS_CACHE_KEY, sanitized);
-              return sanitized;
-            }
+            writeCache(USERS_CACHE_KEY, sanitized);
+            return sanitized;
           }
         }
       } catch {}
@@ -1188,6 +1240,8 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
 
   // 1. Try server endpoint
   if (typeof window !== 'undefined') {
+    let serverHandled = false;
+    let serverErrMsg = '';
     try {
       const resp = await fetch('/api/users', {
         method: 'POST',
@@ -1195,15 +1249,22 @@ export async function createUserAccount(userData: Partial<UserAccount>): Promise
         body: JSON.stringify({ data: payload })
       });
       const ct = resp.headers.get('content-type') || '';
-      if (resp.ok && ct.includes('application/json')) {
+      if (ct.includes('application/json')) {
+        serverHandled = true;
         const resData = await resp.json();
-        const rawCreated = (resData?.user || resData?.data?.user || payload) as UserAccount;
-        const created = { ...rawCreated, name: cleanName, idNo: finalId, password: cleanPassword, role: resolvedRole, success: true };
-        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-        writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
-        return created;
+        if (resp.ok && resData?.success !== false) {
+          const rawCreated = (resData?.user || resData?.data?.user || payload) as UserAccount;
+          const created = { ...rawCreated, name: cleanName, idNo: finalId, password: cleanPassword, role: resolvedRole, success: true };
+          const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+          writeCache(USERS_CACHE_KEY, [created, ...cached.filter(u => u.idNo !== created.idNo)]);
+          return created;
+        }
+        serverErrMsg = resData?.error || resData?.message || 'Failed to save user to Google Sheets';
       }
     } catch {}
+    if (serverHandled && serverErrMsg) {
+      throw new Error(serverErrMsg);
+    }
   }
 
   // 2. Direct GAS failover via submitRecord with category Users ONLY
@@ -1227,6 +1288,8 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
 
   // 1. Try server endpoint
   if (typeof window !== 'undefined') {
+    let serverHandled = false;
+    let serverErrMsg = '';
     try {
       const resp = await fetch(`/api/users/${encodeURIComponent(cleanId)}`, {
         method: 'PUT',
@@ -1234,15 +1297,22 @@ export async function updateUserAccount(id: string, updates: Partial<UserAccount
         body: JSON.stringify({ data: safeUpdates })
       });
       const ct = resp.headers.get('content-type') || '';
-      if (resp.ok && ct.includes('application/json')) {
+      if (ct.includes('application/json')) {
+        serverHandled = true;
         const resData = await resp.json();
-        const rawUpdated = (resData?.user || resData?.data?.user || { id: cleanId, ...safeUpdates }) as UserAccount;
-        const updated = { ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}), success: true };
-        const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
-        writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
-        return updated;
+        if (resp.ok && resData?.success !== false) {
+          const rawUpdated = (resData?.user || resData?.data?.user || { id: cleanId, ...safeUpdates }) as UserAccount;
+          const updated = { ...rawUpdated, ...(safeUpdates.password ? { password: safeUpdates.password } : {}), success: true };
+          const cached = readCache<UserAccount[]>(USERS_CACHE_KEY, []);
+          writeCache(USERS_CACHE_KEY, cached.map(u => (u.id === cleanId || u.idNo === cleanId) ? { ...u, ...updated } : u));
+          return updated;
+        }
+        serverErrMsg = resData?.error || resData?.message || 'Failed to update user in Google Sheets';
       }
     } catch {}
+    if (serverHandled && serverErrMsg) {
+      throw new Error(serverErrMsg);
+    }
   }
 
   // 2. Direct GAS failover via updateEntry on category Users ONLY
@@ -1517,22 +1587,9 @@ export async function loginUser(loginId: string, password: string): Promise<User
     }
 
     const idNoStr = String(matchedUser.idNo || cleanId).trim();
-    const isRoleAdmin =
-      matchedUser.role === 'admin' ||
-      idNoStr === '8695716192' ||
-      idNoStr.toLowerCase() === 'admin' ||
-      matchedUser.id === 'adm_8695716192' ||
-      /^adm[-_0-9]/i.test(idNoStr);
-
-    const isRoleAgency =
-      !isRoleAdmin &&
-      (matchedUser.role === 'agency' ||
-        String(matchedUser.role || '').toLowerCase().includes('agency') ||
-        /^agn[-_0-9]/i.test(idNoStr) ||
-        /^agency[-_0-9]/i.test(idNoStr) ||
-        /agency|এজেন্সি/i.test(matchedUser.designation || '') ||
-        /enterprise|agency|associates|traders|construction/i.test(matchedUser.name || ''));
-    const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+    const resolvedRole = resolveClientCanonicalRole(matchedUser, idNoStr, String(matchedUser.id || ''));
+    const isRoleAdmin = resolvedRole === 'admin';
+    const isRoleAgency = resolvedRole === 'agency';
 
     resData = {
       success: true,
@@ -3287,5 +3344,102 @@ export async function testRegistryConnection(session?: any): Promise<{ success: 
     throw new Error(result?.error || result?.message || `Connection check failed with status ${resp.status}`);
   }
   return result;
+}
+
+export type PaymentSourceOption = 'Cash Desk' | 'Portal';
+
+export interface PaymentUploadRowResult {
+  rowNumber: number;
+  consumerId: string;
+  d2NetOs: string;
+  paidAmount: string;
+  paidDate: string;
+  paidType: string;
+  outstandingAfter: string;
+  status: 'Updated' | 'Not Found' | 'Failed';
+  message: string;
+}
+
+export interface PaymentUploadResultReport {
+  success: boolean;
+  paymentSource: PaymentSourceOption;
+  fileName: string;
+  uploadId?: string;
+  totalRecords: number;
+  updatedCount: number;
+  notFoundCount: number;
+  failedCount: number;
+  rowResults: PaymentUploadRowResult[];
+  duplicate?: boolean;
+  duplicatePrevented?: boolean;
+  updatedColumns?: string[];
+  message: string;
+  code?: string;
+  error?: string;
+}
+
+export async function uploadDisconnectionPaymentData(payload: {
+  paymentSource: PaymentSourceOption;
+  fileName: string;
+  fileBase64: string;
+  uploadId: string;
+}): Promise<PaymentUploadResultReport> {
+  const resp = await nativeFetch('/api/disconnection/upload-payment-data', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || data.success === false) {
+    const err: any = new Error(data?.error || data?.message || `Upload failed with status ${resp.status}`);
+    if (data?.code) err.code = data.code;
+    throw err;
+  }
+
+  // Update in-memory/local disconnection task cache ONLY for the 4 payment columns on Updated rows
+  try {
+    const updatedRows = Array.isArray(data.rowResults)
+      ? data.rowResults.filter((r: PaymentUploadRowResult) => r.status === 'Updated' && r.consumerId)
+      : [];
+    if (updatedRows.length > 0) {
+      const normalizeCid = (v: any) =>
+        String(v || '')
+          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-)/i, '')
+          .replace(/\.0+$/, '')
+          .replace(/[, \-_]/g, '')
+          .replace(/^0+/, '')
+          .trim()
+          .toLowerCase();
+
+      const updateMap = new Map<string, PaymentUploadRowResult>();
+      for (const r of updatedRows) {
+        updateMap.set(normalizeCid(r.consumerId), r);
+      }
+
+      const cached = getCachedDisconnectionTasksSync();
+      if (cached.length > 0) {
+        const nextCached = cached.map(task => {
+          const key = normalizeCid(task.consumerId || (task as any)['Consumer Id'] || task.taskId);
+          const match = key ? updateMap.get(key) : undefined;
+          if (!match) return task;
+          return {
+            ...task,
+            paidAmount: match.paidAmount,
+            'Paid Amount': match.paidAmount,
+            paidDate: match.paidDate,
+            'Paid Date': match.paidDate,
+            paidType: match.paidType,
+            'Paid Type': match.paidType,
+            outstandingAfter: match.outstandingAfter,
+            'Outstanding After': match.outstandingAfter
+          };
+        });
+        setCachedDisconnectionTasksSync(nextCached);
+      }
+    }
+  } catch {}
+
+  return data as PaymentUploadResultReport;
 }
 

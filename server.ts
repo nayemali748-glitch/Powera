@@ -454,15 +454,25 @@ async function sanitizeObjectForSheetCells(obj: any, recordKeyHint = ''): Promis
   return clone;
 }
 
-// Concurrency gate for all Google Apps Script requests to prevent simultaneous execution throttling
-let gasFetchQueuePromise: Promise<any> = Promise.resolve();
-async function runSerializedGasFetch(url: string, options: RequestInit): Promise<Response> {
-  const next = gasFetchQueuePromise.then(async () => {
+// Concurrency gate for background Google Apps Script polling so it never starves foreground auth/CRUD requests
+let bgGasFetchQueuePromise: Promise<any> = Promise.resolve();
+let activeForegroundGasCount = 0;
+
+async function runGasFetch(url: string, options: RequestInit, isBackground = false): Promise<Response> {
+  if (!isBackground) {
+    activeForegroundGasCount++;
+    try {
+      return await fetch(url, options);
+    } finally {
+      activeForegroundGasCount = Math.max(0, activeForegroundGasCount - 1);
+    }
+  }
+  const next = bgGasFetchQueuePromise.then(async () => {
     const res = await fetch(url, options);
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 60));
     return res;
   });
-  gasFetchQueuePromise = next.catch(() => {});
+  bgGasFetchQueuePromise = next.catch(() => {});
   return next;
 }
 
@@ -471,7 +481,8 @@ async function callGoogleAppsScript(
   action: string, 
   payload: any = {}, 
   method: 'GET' | 'POST' = 'POST',
-  timeoutMs = 45000
+  timeoutMs = 45000,
+  isBackground = false
 ): Promise<any> {
   let finalAction = action;
   let finalPayload = { ...payload };
@@ -588,15 +599,18 @@ async function callGoogleAppsScript(
       };
     }
 
-    const maxAttempts = isMutation ? 2 : 2;
+    const isBatchPaymentUpload = finalAction === 'uploadDisconnectionPaymentData';
+    const maxAttempts = isBatchPaymentUpload ? 1 : (isMutation ? 2 : 2);
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      // Keep timeouts responsive so slow GAS calls never hang the server
-      const currentTimeoutMs = isMutation
-        ? Math.min(Math.max(timeoutMs || 25000, 15000), 30000)
-        : Math.min(Math.max(timeoutMs || 18000, 10000), 22000);
+      // Keep timeouts responsive so slow GAS calls never hang the server, while allowing up to 60s for batch payment uploads
+      const currentTimeoutMs = isBatchPaymentUpload
+        ? Math.min(Math.max(timeoutMs || 60000, 30000), 60000)
+        : isMutation
+          ? Math.min(Math.max(timeoutMs || 25000, 15000), 30000)
+          : Math.min(Math.max(timeoutMs || 18000, 10000), 22000);
       const timeoutId = setTimeout(() => {
         try { controller.abort(); } catch {}
       }, currentTimeoutMs);
@@ -642,7 +656,7 @@ async function callGoogleAppsScript(
           options.body = JSON.stringify({ action: finalAction, ...mergedPayload, data: mergedPayload });
         }
 
-        const finalRes = await runSerializedGasFetch(fetchUrl, options);
+        const finalRes = await runGasFetch(fetchUrl, options, isBackground);
         if (!finalRes) {
           throw new Error(`Failed to retrieve response for action "${finalAction}".`);
         }
@@ -873,18 +887,22 @@ interface CachedUsersState {
 }
 let cachedUsersState: CachedUsersState | null = null;
 let isRefreshingUsersInBg = false;
+const pendingLocalUserSyncMap = new Map<string, { user: any; expiresAt: number }>();
 try {
   if (fs.existsSync(USERS_CACHE_FILE)) {
     const diskUsers = JSON.parse(fs.readFileSync(USERS_CACHE_FILE, 'utf-8'));
     if (Array.isArray(diskUsers) && diskUsers.length > 0) {
-      cachedUsersState = { users: diskUsers, timestamp: Date.now() };
+      // Load with timestamp: 0 so first request/auth refreshes live from Google Sheets Users tab
+      cachedUsersState = { users: diskUsers, timestamp: 0 };
     }
   }
 } catch {}
-const USERS_STATE_TTL_MS = 120000;
+const USERS_STATE_TTL_MS = 30000;
 
 function clearUsersStateCache() {
   gasCache.clear();
+  gasCache.delete('entries:{"category":"Users"}');
+  gasCache.delete('entries_{"category":"Users"}');
 }
 
 function saveUsersStateToDisk(users: any[]) {
@@ -918,12 +936,24 @@ function upsertUserIntoCachedState(userObj: any) {
   } else {
     currentList.unshift(stamped);
   }
+  const key = targetId || `usr_${targetIdNo}`;
+  if (key) {
+    pendingLocalUserSyncMap.set(key, { user: stamped, expiresAt: Date.now() + 25000 });
+  }
   saveUsersStateToDisk(currentList);
 }
 
 function removeUserFromCachedState(idOrIdNo: string) {
   const target = String(idOrIdNo || '').trim().toLowerCase();
-  if (!target || !cachedUsersState?.users) return;
+  if (!target) return;
+  for (const [k, v] of pendingLocalUserSyncMap.entries()) {
+    const vid = String(v?.user?.id || '').trim().toLowerCase();
+    const vidNo = String(v?.user?.idNo || '').trim().toLowerCase();
+    if (k === target || vid === target || vidNo === target) {
+      pendingLocalUserSyncMap.delete(k);
+    }
+  }
+  if (!cachedUsersState?.users) return;
   const next = cachedUsersState.users.filter(
     (u: any) =>
       String(u.id || '').trim().toLowerCase() !== target &&
@@ -940,81 +970,152 @@ function buildUserSyncTag(u: { idNo?: string; password?: string; phone?: string;
   const designation = String(u.designation || '').trim();
   const badgeNo = String(u.badgeNo || idNo).trim();
   const rawRole = String(u.role || 'worker').trim().toLowerCase();
-  const role = rawRole === 'admin' ? 'admin' : rawRole === 'agency' ? 'agency' : 'worker';
+  const role = rawRole.includes('admin') || rawRole === 'controller' || rawRole === 'supervisor'
+    ? 'admin'
+    : rawRole.includes('agency')
+      ? 'agency'
+      : 'worker';
   const status = String(u.status || 'active').trim().toLowerCase() === 'hold' ? 'hold' : 'active';
   return `${baseDate}||${idNo}||${password}||${phone}||${designation}||${badgeNo}||${role}||${status}`;
 }
 
-function normalizeUserRecord(u: any): any {
-  if (!u || typeof u !== 'object') return null;
-  let merged: any = { ...u };
+function firstNonEmpty(...values: any[]): string {
+  for (const v of values) {
+    if (v !== undefined && v !== null) {
+      const s = String(v).trim();
+      if (s !== '') return s;
+    }
+  }
+  return '';
+}
 
-  // Parse single-GET sync tag from createdAt if present (format: YYYY-MM-DD||idNo||password||phone||designation||badgeNo||role||status)
-  const createdRaw = String(u.createdAt || u['Created At'] || '').trim();
-  let tagRole = '';
-  let tagStatus = '';
-  if (createdRaw.includes('||')) {
-    const parts = createdRaw.split('||');
-    if (parts.length >= 3) {
-      if (!merged.idNo && parts[1]) merged.idNo = parts[1];
-      if ((merged.password === undefined || merged.password === '') && parts[2] !== undefined) merged.password = parts[2];
-      if (!merged.phone && parts[3]) merged.phone = parts[3];
-      if (!merged.designation && parts[4]) merged.designation = parts[4];
-      if (!merged.badgeNo && parts[5]) merged.badgeNo = parts[5];
-      if (parts[6]) tagRole = parts[6].trim().toLowerCase();
-      if (parts[7]) tagStatus = parts[7].trim().toLowerCase();
+function resolveCanonicalUserRole(record: any, finalIdNo: string, rawId: string, tagRole = ''): 'admin' | 'agency' | 'worker' {
+  const sheetColRole = firstNonEmpty(record?.['Role'], record?.role).toLowerCase();
+  const lowerIdNo = String(finalIdNo || '').trim().toLowerCase();
+  const lowerRawId = String(rawId || '').trim().toLowerCase();
+
+  // Primary Master Admin is always protected as admin
+  if (lowerIdNo === '8695716192' || lowerRawId === 'adm_8695716192') {
+    return 'admin';
+  }
+
+  // Sheet Role column ALWAYS takes precedence over sync tag; sync tag used only when sheet column is empty
+  const explicitRole = sheetColRole || String(tagRole || '').trim().toLowerCase();
+  if (explicitRole) {
+    if (
+      explicitRole === 'admin' ||
+      explicitRole.includes('admin') ||
+      explicitRole === 'controller' ||
+      explicitRole === 'supervisor'
+    ) {
+      return 'admin';
+    }
+    if (explicitRole === 'agency' || explicitRole.includes('agency')) {
+      return 'agency';
+    }
+    if (explicitRole === 'worker' || explicitRole.includes('worker') || explicitRole === 'lineman' || explicitRole === 'staff') {
+      return 'worker';
     }
   }
 
-  const rawId = String(merged.id || merged['ID'] || merged['Record ID'] || '').trim();
-  const rawIdNo = String(
-    merged.idNo ||
-    merged.loginId ||
-    merged.userId ||
-    merged['User ID'] ||
-    merged['User Id'] ||
-    merged['user_id'] ||
-    merged['ID No'] ||
-    merged.workerId ||
-    merged.consumerId ||
-    ''
-  ).trim();
-  const rawPhone = String(merged.phone || merged['Phone'] || merged['Mobile'] || merged.mobile || merged.workerPhone || '').trim();
-  const rawName = String(merged.name || merged['Name'] || merged['Full Name'] || merged.consumerName || merged.workerName || '').trim();
-  const rawPass = String(
-    merged.password !== undefined && merged.password !== null
-      ? merged.password
-      : (merged['Password'] !== undefined && merged['Password'] !== null ? merged['Password'] : '')
-  ).trim();
-  const rawHash = String(merged.passwordHash || merged['Password Hash'] || '').trim();
-  const rawRole = String(tagRole || merged.role || merged['Role'] || 'worker').trim().toLowerCase();
-  const rawStatus = String(tagStatus || merged.status || merged['Status'] || 'active').trim().toLowerCase();
+  // Fallback ONLY if Role column and tag both provide no recognized role
+  if (lowerIdNo === 'admin' || /^adm[-_0-9]/i.test(finalIdNo)) {
+    return 'admin';
+  }
+  if (/^agn[-_0-9]/i.test(finalIdNo) || /^agency[-_0-9]/i.test(finalIdNo)) {
+    return 'agency';
+  }
+  return 'worker';
+}
+
+function normalizeUserRecord(u: any): any {
+  if (!u || typeof u !== 'object') return null;
+  const merged: any = { ...u };
+
+  // Parse single-GET sync tag from createdAt strictly as FALLBACK for columns omitted in compact GET responses
+  const createdRaw = firstNonEmpty(u.createdAt, u['Created At']);
+  let tagRole = '';
+  let tagStatus = '';
+  let tagIdNo = '';
+  let tagPass = '';
+  let tagPhone = '';
+  let tagDesig = '';
+  let tagBadge = '';
+  if (createdRaw.includes('||')) {
+    const parts = createdRaw.split('||');
+    if (parts.length >= 3) {
+      tagIdNo = String(parts[1] ?? '').trim();
+      tagPass = String(parts[2] ?? '').trim();
+      tagPhone = String(parts[3] ?? '').trim();
+      tagDesig = String(parts[4] ?? '').trim();
+      tagBadge = String(parts[5] ?? '').trim();
+      tagRole = String(parts[6] ?? '').trim().toLowerCase();
+      tagStatus = String(parts[7] ?? '').trim().toLowerCase();
+    }
+  }
+
+  const rawId = firstNonEmpty(merged.id, merged['ID'], merged['Record ID']);
+  const colIdNo = firstNonEmpty(
+    merged['User ID'],
+    merged['User Id'],
+    merged['user_id'],
+    merged['ID No'],
+    merged.idNo,
+    merged.loginId,
+    merged.userId,
+    merged.workerId,
+    merged.consumerId
+  );
+  const rawPhone = firstNonEmpty(
+    merged['Phone'],
+    merged.phone,
+    merged['Mobile'],
+    merged.mobile,
+    merged.workerPhone,
+    tagPhone
+  );
+  const rawName = firstNonEmpty(
+    merged['Full Name'],
+    merged['Name'],
+    merged.name,
+    merged.consumerName,
+    merged.workerName
+  );
+
+  const rawPass = firstNonEmpty(merged['Password'], merged.password, tagPass);
+  const rawHash = firstNonEmpty(merged['Password Hash'], merged.passwordHash);
+
+  const colStatusRaw = firstNonEmpty(merged['Status'], merged.status).toLowerCase();
+  const rawStatus =
+    colStatusRaw === 'hold' || colStatusRaw === 'active' || colStatusRaw === 'inactive' || colStatusRaw === 'blocked'
+      ? colStatusRaw
+      : (tagStatus || colStatusRaw || 'active');
   const finalStatus = rawStatus === 'hold' ? 'hold' : 'active';
-  const finalIdNo = rawIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
+
+  const finalIdNo = colIdNo || tagIdNo || (rawId === 'adm_8695716192' ? '8695716192' : rawPhone || rawId);
   if (!finalIdNo) return null;
 
-  const isAdm =
-    rawRole === 'admin' ||
-    rawRole === 'controller' ||
-    rawRole === 'administrator' ||
-    rawRole === 'superadmin' ||
-    finalIdNo === '8695716192' ||
-    finalIdNo.toLowerCase() === 'admin' ||
-    rawId === 'adm_8695716192' ||
-    /^adm[-_0-9]/i.test(finalIdNo);
-  const isAgency =
-    !isAdm &&
-    (rawRole === 'agency' ||
-      /^agn[-_0-9]/i.test(finalIdNo) ||
-      /^agency[-_0-9]/i.test(finalIdNo));
-  const finalRole = isAdm ? 'admin' : isAgency ? 'agency' : 'worker';
+  const finalRole = resolveCanonicalUserRole(merged, finalIdNo, rawId, tagRole);
+  const isAdm = finalRole === 'admin';
+  const isAgency = finalRole === 'agency';
   const defaultDesig = isAdm
     ? 'Sub-Divisional Controller'
     : isAgency
       ? 'এজেন্সি পার্টনার / Agency (WBSEDCL)'
       : 'লাইনম্যান / Worker (WBSEDCL)';
-  const finalDesig = String(merged.designation || merged['Designation'] || defaultDesig).trim();
-  const finalBadge = String(merged.badgeNo || merged['Badge No'] || finalIdNo).trim();
+  const finalDesig = firstNonEmpty(merged['Designation'], merged.designation, tagDesig, defaultDesig);
+  const finalBadge = firstNonEmpty(merged['Badge No'], merged.badgeNo, tagBadge, finalIdNo);
+
+  const updatedTag = buildUserSyncTag({
+    idNo: finalIdNo,
+    password: rawPass,
+    phone: rawPhone,
+    designation: finalDesig,
+    badgeNo: finalBadge,
+    role: finalRole,
+    status: finalStatus,
+    createdAt: createdRaw
+  });
 
   return {
     id: rawId || `usr_${finalIdNo}`,
@@ -1029,10 +1130,8 @@ function normalizeUserRecord(u: any): any {
     status: finalStatus,
     designation: finalDesig,
     badgeNo: finalBadge,
-    createdAt: createdRaw.includes('||')
-      ? createdRaw
-      : buildUserSyncTag({ idNo: finalIdNo, password: rawPass, phone: rawPhone, designation: finalDesig, badgeNo: finalBadge, role: finalRole, status: finalStatus, createdAt: createdRaw }),
-    updatedAt: String(merged.updatedAt || merged['Updated At'] || '').trim()
+    createdAt: updatedTag,
+    updatedAt: firstNonEmpty(merged['Updated At'], merged.updatedAt)
   };
 }
 
@@ -1049,10 +1148,10 @@ function extractEntriesArray(res: any): any[] {
   return [];
 }
 
-async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | null> {
+async function hydrateSingleUserFromUsersSheet(rowId: string, fallbackSummary?: any): Promise<any | null> {
   if (!rowId) return null;
   try {
-    // 1. Read full entry from Users sheet using empty data {} so existing Role and Status columns are never overwritten
+    // 1. Read full entry columns from Users sheet
     const detailRes = await callGoogleAppsScript('updateEntry', {
       id: rowId,
       category: 'Users',
@@ -1060,11 +1159,21 @@ async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | nul
     }, 'POST', 20000);
     const fullEntry = detailRes?.entry || detailRes?.data?.entry;
     if (fullEntry && typeof fullEntry === 'object') {
-      const hydrated = normalizeUserRecord(fullEntry);
+      const mergedDetail = { ...fullEntry };
+      // Guard against older deployed Code.gs overwriting Role/Status on data: {} probes
+      if (fallbackSummary?.status && (!mergedDetail.status || String(mergedDetail.status).toLowerCase() === 'completed')) {
+        mergedDetail.status = fallbackSummary.status;
+        mergedDetail.Status = fallbackSummary.status;
+      }
+      if (fallbackSummary?.role && !mergedDetail.role && !mergedDetail['Role']) {
+        mergedDetail.role = fallbackSummary.role;
+        mergedDetail.Role = fallbackSummary.role;
+      }
+      const hydrated = normalizeUserRecord(mergedDetail);
       if (hydrated && hydrated.idNo) {
         const tag = buildUserSyncTag(hydrated);
         hydrated.createdAt = tag;
-        // 2. ALWAYS await writing the 8-part sync tag back to createdAt because step 1's updateEntry overwrites createdAt in GAS
+        // 2. Immediately restore live Role, Status, and fresh syncTag in Google Sheets
         await callGoogleAppsScript('updateEntry', {
           id: rowId,
           category: 'Users',
@@ -1088,109 +1197,134 @@ async function hydrateSingleUserFromUsersSheet(rowId: string): Promise<any | nul
   return null;
 }
 
+async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIdx < items.length) {
+      const idx = nextIdx++;
+      results[idx] = await worker(items[idx]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+let inFlightUsersRefresh: Promise<any[]> | null = null;
+
 async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]> {
   if (forceRefresh) {
-    gasCache.delete('entries:{"category":"Users"}');
-    gasCache.delete('entries_{"category":"Users"}');
-    try {
-      const fresh = await Promise.race([
-        refreshVerifiedUsersFromSheetNow(),
-        new Promise<any[]>(resolve =>
-          setTimeout(() => resolve(cachedUsersState?.users || []), 6000)
-        )
-      ]);
-      if (Array.isArray(fresh) && fresh.length > 0) {
-        return fresh;
-      }
-    } catch {}
+    clearUsersStateCache();
+    return await refreshVerifiedUsersFromSheetNow();
   }
   if (cachedUsersState && Array.isArray(cachedUsersState.users) && cachedUsersState.users.length > 0) {
     const isExpired = Date.now() - cachedUsersState.timestamp >= USERS_STATE_TTL_MS;
-    if (isExpired && !isRefreshingUsersInBg) {
-      isRefreshingUsersInBg = true;
-      (async () => {
-        try {
-          await refreshVerifiedUsersFromSheetNow();
-        } catch {} finally {
-          isRefreshingUsersInBg = false;
-        }
-      })();
+    if (!isExpired) {
+      return cachedUsersState.users;
     }
-    return cachedUsersState.users;
+    return await refreshVerifiedUsersFromSheetNow();
   }
   return await refreshVerifiedUsersFromSheetNow();
 }
 
 async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
-  const userMap = new Map<string, any>();
+  if (inFlightUsersRefresh) {
+    return await inFlightUsersRefresh;
+  }
+
+  inFlightUsersRefresh = (async () => {
+    const userMap = new Map<string, any>();
+    let sheetFetchSucceeded = false;
+
+    try {
+      const usersSheetRes = await callGoogleAppsScript('entries', { category: 'Users' }, 'GET', 20000).catch(() => null);
+      if (usersSheetRes && usersSheetRes.success !== false) {
+        const rawEntries = extractEntriesArray(usersSheetRes);
+        sheetFetchSucceeded = true;
+
+        let tombstonesChanged = false;
+        const rowsNeedingHydration: { rowId: string; rowSummary: any; normSummary: any }[] = [];
+
+        for (const rowSummary of rawEntries) {
+          const rowId = String(rowSummary?.id || '').trim();
+          if (!rowId) continue;
+
+          const normSummary = normalizeUserRecord(rowSummary);
+          // Un-tombstone any ID actively present in Google Sheets so sheet-side creations always show up
+          if (deletedTombstoneSet.delete(rowId.toLowerCase())) tombstonesChanged = true;
+          if (normSummary?.idNo && deletedTombstoneSet.delete(`usr_${String(normSummary.idNo).trim().toLowerCase()}`)) {
+            tombstonesChanged = true;
+          }
+
+          const needsHydration =
+            !normSummary ||
+            !normSummary.idNo ||
+            (normSummary.password === '' && normSummary.passwordHash === '');
+
+          if (needsHydration) {
+            rowsNeedingHydration.push({ rowId, rowSummary, normSummary });
+          } else {
+            userMap.set(rowId, normSummary);
+          }
+        }
+
+        if (tombstonesChanged) {
+          saveTombstonesToDisk();
+        }
+
+        if (rowsNeedingHydration.length > 0) {
+          await mapWithConcurrency(rowsNeedingHydration, 6, async ({ rowId, normSummary }) => {
+            const hydrated = await hydrateSingleUserFromUsersSheet(rowId, normSummary);
+            if (hydrated && hydrated.idNo) {
+              userMap.set(rowId, hydrated);
+            } else if (normSummary) {
+              userMap.set(rowId, normSummary);
+            }
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[UsersLoader] Sheet fetch notice:', err?.message);
+    }
+
+  // Fallback to cached users ONLY if Google Sheets fetch completely failed
+  if (!sheetFetchSucceeded) {
+    return cachedUsersState?.users || [];
+  }
+
+  // Merge ONLY active short-lived pending local writes (<= 25s) while GAS propagates newly saved rows
+  const nowTs = Date.now();
+  for (const [k, entry] of pendingLocalUserSyncMap.entries()) {
+    if (!entry || nowTs >= entry.expiresAt) {
+      pendingLocalUserSyncMap.delete(k);
+      continue;
+    }
+    const localU = entry.user;
+    if (!localU || !localU.idNo) continue;
+    const lId = String(localU.id || '').trim();
+    const lIdNoLower = String(localU.idNo || '').trim().toLowerCase();
+    const existingByRowId = lId ? userMap.get(lId) : undefined;
+    const existingByIdNo = Array.from(userMap.values()).find(
+      (u: any) => String(u.idNo || '').trim().toLowerCase() === lIdNoLower
+    );
+    if (!existingByRowId && !existingByIdNo) {
+      userMap.set(lId || `usr_${localU.idNo}`, localU);
+    } else if (existingByRowId || existingByIdNo) {
+      const keyToUpdate = existingByRowId ? lId : String(existingByIdNo.id || lId);
+      userMap.set(keyToUpdate, { ...(existingByRowId || existingByIdNo), ...localU });
+    }
+  }
+
+    const users = Array.from(userMap.values());
+    saveUsersStateToDisk(users);
+    return cachedUsersState?.users || users;
+  })();
 
   try {
-    // Single GET call to the existing Google Sheets Users sheet ONLY (sole source of truth)
-    const usersSheetRes = await callGoogleAppsScript('entries', { category: 'Users' }, 'GET', 20000).catch(() => null);
-    const rawEntries = extractEntriesArray(usersSheetRes);
-
-    for (const rowSummary of rawEntries) {
-      const rowId = String(rowSummary?.id || '').trim();
-      if (!rowId) continue;
-
-      const normSummary = normalizeUserRecord(rowSummary);
-      // If createdAt sync tag or direct columns provided idNo and password/hash, we have the full record in 1 GET!
-      if (normSummary && normSummary.idNo && (normSummary.password !== '' || normSummary.passwordHash !== '')) {
-        userMap.set(rowId, normSummary);
-        continue;
-      }
-
-      // If row was added or edited directly in Google Sheets without sync tag, hydrate that row and persist its sync tag
-      const hydrated = await hydrateSingleUserFromUsersSheet(rowId);
-      if (hydrated && hydrated.idNo) {
-        userMap.set(rowId, hydrated);
-        continue;
-      }
-
-      if (normSummary) {
-        userMap.set(rowId, normSummary);
-      }
-    }
-  } catch (err: any) {
-    console.warn('[UsersLoader] Sheet fetch notice:', err?.message);
+    return await inFlightUsersRefresh;
+  } finally {
+    inFlightUsersRefresh = null;
   }
-
-  // Preserve any locally created/updated users from cachedUsersState so newly created Agency/Worker accounts never vanish while Google Sheets indexes
-  if (cachedUsersState && Array.isArray(cachedUsersState.users)) {
-    for (const localU of cachedUsersState.users) {
-      if (!localU || !localU.idNo) continue;
-      const lId = String(localU.id || '').trim();
-      const lIdNoLower = String(localU.idNo || '').trim().toLowerCase();
-      if (lId && deletedTombstoneSet.has(lId.toLowerCase())) continue;
-      if (lIdNoLower && deletedTombstoneSet.has(`usr_${lIdNoLower}`)) continue;
-
-      const existingByRowId = lId ? userMap.get(lId) : undefined;
-      const existingByIdNo = Array.from(userMap.values()).find(
-        (u: any) => String(u.idNo || '').trim().toLowerCase() === lIdNoLower
-      );
-      const isRecentLocal = Boolean(localU._localSavedAt) && (Date.now() - Number(localU._localSavedAt) < 600000);
-
-      if (!existingByRowId && !existingByIdNo) {
-        userMap.set(lId || `usr_${localU.idNo}`, localU);
-      } else if (isRecentLocal && (existingByRowId || existingByIdNo)) {
-        const keyToUpdate = existingByRowId ? lId : String(existingByIdNo.id || lId);
-        userMap.set(keyToUpdate, { ...(existingByRowId || existingByIdNo), ...localU });
-      }
-    }
-  }
-
-  const users = Array.from(userMap.values()).filter((u: any) => {
-    if (!u) return false;
-    const uid = String(u.id || '').trim().toLowerCase();
-    const uidNo = String(u.idNo || '').trim().toLowerCase();
-    if (uid && deletedTombstoneSet.has(uid)) return false;
-    if (uidNo && deletedTombstoneSet.has(`usr_${uidNo}`)) return false;
-    return true;
-  });
-  if (users.length > 0) {
-    saveUsersStateToDisk(users);
-  }
-  return cachedUsersState?.users || users;
 }
 
 function findMatchingUserInList(users: any[], cleanId: string): any {
@@ -1342,63 +1476,31 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
     };
   }
 
-  // 1. Check cached Users list first for instant (<5ms) login response
-  let users = cachedUsersState?.users && cachedUsersState.users.length > 0
-    ? cachedUsersState.users
-    : await fetchVerifiedUsersFromSheet(false);
+  // 1. Check non-expired Users list first
+  let users = await fetchVerifiedUsersFromSheet(false);
   let matchedUser = findMatchingUserInList(users, cleanId);
 
-  if (matchedUser && checkUserPasswordMatch(matchedUser, cleanPass)) {
-    // Refresh users sheet in background so any recent role/status change is synced without slowing login
-    if (!cachedUsersState || (Date.now() - cachedUsersState.timestamp > 30000)) {
-      fetchVerifiedUsersFromSheet(true).catch(() => {});
-    }
-  } else {
-    // 2. If user not found or password does not match cached state, force live refresh from Google Sheets Users sheet
+  if (!matchedUser) {
+    // Force single-GET refresh from Google Sheets Users tab (hydrates any newly added untagged sheet rows)
     users = await fetchVerifiedUsersFromSheet(true);
     matchedUser = findMatchingUserInList(users, cleanId);
 
-    // If user exists in Users sheet, also hydrate their live row directly from Users sheet in case Password column was edited in Google Sheets
-    if (matchedUser && !checkUserPasswordMatch(matchedUser, cleanPass)) {
-      const liveRow = await hydrateSingleUserFromUsersSheet(matchedUser.id);
-      if (liveRow) {
-        matchedUser = liveRow;
-        clearUsersStateCache();
+    // Direct row hydration fallback by entered ID if still unmatched (e.g. sheet row with User ID column matching)
+    if (!matchedUser) {
+      const directRow = await hydrateSingleUserFromUsersSheet(cleanId);
+      if (directRow) {
+        matchedUser = directRow;
+        upsertUserIntoCachedState(directRow);
       }
     }
   }
 
-  if (!matchedUser) {
-    // Check if cleanId matches any Agency name in cached disconnection tasks or Google Sheet tasks
-    let discTasks = cachedDisconnectionState?.tasks || [];
-    if (!discTasks || discTasks.length === 0) {
-      try {
-        const gasTasks = await fetchDisconnectionTasksFromGoogleSheet();
-        if (Array.isArray(gasTasks) && gasTasks.length > 0) {
-          discTasks = gasTasks;
-        }
-      } catch {}
-    }
-    const cleanAlnum = cleanId.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const matchingDiscTask = (discTasks || []).find((t: any) => {
-      const ag = String(t.Agency || t.agency || t.assignedAgency || t['Agency Name'] || '').trim().toLowerCase();
-      const agAlnum = ag.replace(/[^a-z0-9]/g, '');
-      return (ag && (ag === cleanId.toLowerCase() || (cleanAlnum.length >= 3 && (agAlnum === cleanAlnum || agAlnum.includes(cleanAlnum) || cleanAlnum.includes(agAlnum)))));
-    });
-    if (matchingDiscTask) {
-      const agName = String(matchingDiscTask.Agency || matchingDiscTask.agency || matchingDiscTask.assignedAgency || cleanId).trim();
-      matchedUser = {
-        id: `usr_agency_${cleanAlnum || 'agency'}`,
-        idNo: cleanId.toUpperCase(),
-        loginId: cleanId,
-        userId: cleanId,
-        name: agName,
-        agencyName: agName,
-        role: 'agency',
-        status: 'active',
-        password: cleanPass,
-        designation: 'Agency Partner (WBSEDCL)'
-      };
+  if (matchedUser && !checkUserPasswordMatch(matchedUser, cleanPass) && matchedUser.id) {
+    // Password may have been edited directly in Google Sheets Password column: hydrate just this user row
+    const liveRow = await hydrateSingleUserFromUsersSheet(matchedUser.id, matchedUser);
+    if (liveRow) {
+      matchedUser = liveRow;
+      upsertUserIntoCachedState(liveRow);
     }
   }
 
@@ -1439,32 +1541,14 @@ async function authenticateUserCredentials(rawId: any, rawPassword: any): Promis
   // Clear any failed attempts upon verified authentication
   clearFailedLogin(cleanId);
 
-  const roleStr = String(matchedUser['Role'] || matchedUser.role || 'worker').trim().toLowerCase();
   const idNoStr = String(matchedUser.idNo || matchedUser['User ID'] || cleanId).trim();
   const nameStr = String(matchedUser['Full Name'] || matchedUser.name || '').trim();
   const desigStr = String(matchedUser['Designation'] || matchedUser.designation || '').trim();
   const agencyNameStr = String(matchedUser['Agency Name'] || matchedUser.agencyName || '').trim();
 
-  const isRoleAdmin =
-    roleStr === 'admin' ||
-    roleStr === 'controller' ||
-    roleStr === 'administrator' ||
-    roleStr === 'superadmin' ||
-    idNoStr === '8695716192' ||
-    idNoStr.toLowerCase() === 'admin' ||
-    matchedUser.id === 'adm_8695716192' ||
-    /^adm[-_0-9]/i.test(idNoStr);
-
-  const isRoleAgency =
-    !isRoleAdmin &&
-    (roleStr === 'agency' ||
-      roleStr.includes('agency') ||
-      /^agn[-_0-9]/i.test(idNoStr) ||
-      /^agency[-_0-9]/i.test(idNoStr) ||
-      /agency|এজেন্সি/i.test(desigStr) ||
-      Boolean(agencyNameStr) ||
-      /enterprise|agency|associates|traders|construction/i.test(nameStr));
-  const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+  const resolvedRole = resolveCanonicalUserRole(matchedUser, idNoStr, String(matchedUser.id || ''));
+  const isRoleAdmin = resolvedRole === 'admin';
+  const isRoleAgency = resolvedRole === 'agency';
 
   const session = {
     id: String(matchedUser.id || `usr_${idNoStr}`),
@@ -1537,7 +1621,8 @@ app.post('/api/auth/change-password', async (req, res) => {
         createdAt: syncTag,
         'Created At': syncTag,
         data: updatedTarget
-      }, 'POST');
+      }, 'POST', 25000);
+      upsertUserIntoCachedState(normalizeUserRecord(updatedTarget));
       clearUsersStateCache();
       return res.json({ success: true, message: 'Password updated successfully' });
     }
@@ -1580,7 +1665,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
         createdAt: syncTag,
         'Created At': syncTag,
         data: updatedTarget
-      }, 'POST');
+      }, 'POST', 25000);
+      upsertUserIntoCachedState(normalizeUserRecord(updatedTarget));
       clearUsersStateCache();
       return res.json({ success: true, message: 'Password reset successfully' });
     }
@@ -1847,24 +1933,10 @@ app.post('/api/auth/otp/verify-login', async (req, res) => {
       });
     }
 
-    const roleStr = String(matchedUser['Role'] || matchedUser.role || 'worker').trim().toLowerCase();
     const idNoStr = String(matchedUser.idNo || matchedUser['User ID'] || phone10).trim();
-    const isRoleAdmin =
-      roleStr === 'admin' ||
-      roleStr === 'controller' ||
-      roleStr === 'administrator' ||
-      roleStr === 'superadmin' ||
-      idNoStr === '8695716192' ||
-      idNoStr.toLowerCase() === 'admin' ||
-      matchedUser.id === 'adm_8695716192' ||
-      /^adm[-_0-9]/i.test(idNoStr);
-
-    const isRoleAgency =
-      !isRoleAdmin &&
-      (roleStr === 'agency' ||
-        /^agn[-_0-9]/i.test(idNoStr) ||
-        /^agency[-_0-9]/i.test(idNoStr));
-    const resolvedRole: 'admin' | 'agency' | 'worker' = isRoleAdmin ? 'admin' : isRoleAgency ? 'agency' : 'worker';
+    const resolvedRole = resolveCanonicalUserRole(matchedUser, idNoStr, String(matchedUser.id || ''));
+    const isRoleAdmin = resolvedRole === 'admin';
+    const isRoleAgency = resolvedRole === 'agency';
 
     const session = {
       id: String(matchedUser.id || `usr_${idNoStr}`),
@@ -2022,8 +2094,9 @@ app.post('/api/auth/otp/verify-reset-password', async (req, res) => {
       createdAt: syncTag,
       'Created At': syncTag,
       data: updatedTarget
-    }, 'POST');
+    }, 'POST', 25000);
 
+    upsertUserIntoCachedState(normalizeUserRecord(updatedTarget));
     clearUsersStateCache();
     pendingOtpSessionMap.delete(sessionId);
 
@@ -3857,9 +3930,7 @@ app.post('/api/users', async (req, res) => {
     const cleanDesig = String(payload.designation || defaultDesignation).trim();
     const cleanBadge = String(payload.badgeNo || cleanIdNo).trim();
 
-    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
-      ? cachedUsersState.users
-      : await fetchVerifiedUsersFromSheet();
+    const existingUsers = await fetchVerifiedUsersFromSheet(true).catch(() => cachedUsersState?.users || []);
     const existingMatch = existingUsers.find(u =>
       String(u.idNo || '').trim().toLowerCase() === cleanIdNo.toLowerCase() ||
       (payload.id && String(u.id || '').trim().toLowerCase() === String(payload.id).trim().toLowerCase())
@@ -3909,48 +3980,43 @@ app.post('/api/users', async (req, res) => {
     };
 
     const savedUser = normalizeUserRecord(userRowData);
+
+    // Await saving to Google Sheets Users sheet synchronously so the sheet always reflects created/updated users
+    if (existingMatch) {
+      await callGoogleAppsScript('updateEntry', {
+        id: recordId,
+        category: 'Users',
+        status: cleanStatus,
+        role: cleanRole,
+        ...userRowData,
+        data: userRowData
+      }, 'POST', 25000);
+    } else {
+      await callGoogleAppsScript('submitRecord', {
+        id: recordId,
+        category: 'Users',
+        status: cleanStatus,
+        role: cleanRole,
+        ...userRowData,
+        data: userRowData
+      }, 'POST', 25000);
+      await callGoogleAppsScript('updateEntry', {
+        id: recordId,
+        category: 'Users',
+        status: cleanStatus,
+        role: cleanRole,
+        createdAt: syncTag,
+        'Created At': syncTag,
+        data: {
+          ...userRowData,
+          createdAt: syncTag,
+          'Created At': syncTag
+        }
+      }, 'POST', 20000).catch(() => {});
+    }
+
     upsertUserIntoCachedState(savedUser);
     clearUsersStateCache();
-
-    // Sync to Google Sheets Users sheet in background and ensure 8-part syncTag is persisted in Created At
-    (async () => {
-      try {
-        if (existingMatch) {
-          await callGoogleAppsScript('updateEntry', {
-            id: recordId,
-            category: 'Users',
-            status: cleanStatus,
-            role: cleanRole,
-            ...userRowData,
-            data: userRowData
-          }, 'POST');
-        } else {
-          await callGoogleAppsScript('submitRecord', {
-            id: recordId,
-            category: 'Users',
-            status: cleanStatus,
-            role: cleanRole,
-            ...userRowData,
-            data: userRowData
-          }, 'POST');
-        }
-        await callGoogleAppsScript('updateEntry', {
-          id: recordId,
-          category: 'Users',
-          status: cleanStatus,
-          role: cleanRole,
-          createdAt: syncTag,
-          'Created At': syncTag,
-          data: {
-            ...userRowData,
-            createdAt: syncTag,
-            'Created At': syncTag
-          }
-        }, 'POST').catch(() => {});
-      } catch (err) {
-        console.warn('[Users Sheet Sync] Background save notice:', err);
-      }
-    })();
 
     return res.status(201).json({
       success: true,
@@ -3975,9 +4041,7 @@ const handleUserDeleteRequest = async (req: express.Request, res: express.Respon
       });
     }
 
-    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
-      ? cachedUsersState.users
-      : await fetchVerifiedUsersFromSheet();
+    const existingUsers = await fetchVerifiedUsersFromSheet(false).catch(() => cachedUsersState?.users || []);
     const targetUser = existingUsers.find(u =>
       String(u.id).trim().toLowerCase() === id.toLowerCase() ||
       String(u.idNo).trim().toLowerCase() === id.toLowerCase()
@@ -3985,27 +4049,29 @@ const handleUserDeleteRequest = async (req: express.Request, res: express.Respon
     const rowId = targetUser ? targetUser.id : id;
     const idNo = targetUser ? targetUser.idNo : id;
 
+    // Await deletion from Google Sheets Users tab
+    await Promise.allSettled([
+      callGoogleAppsScript('deleteEntry', {
+        id: rowId,
+        consumerId: idNo,
+        category: 'Users',
+        confirmDelete: true,
+        confirmAdminDelete: clientPayload.confirmAdminDelete,
+        reason: clientPayload.reason
+      }, 'POST', 25000),
+      callGoogleAppsScript('deleteUser', {
+        id: rowId,
+        idNo,
+        category: 'Users'
+      }, 'POST', 15000)
+    ]);
+
     deletedTombstoneSet.add(String(rowId).trim().toLowerCase());
     if (idNo) deletedTombstoneSet.add(`usr_${String(idNo).trim().toLowerCase()}`);
     saveTombstonesToDisk();
     removeUserFromCachedState(rowId);
     if (idNo) removeUserFromCachedState(idNo);
     clearUsersStateCache();
-
-    callGoogleAppsScript('deleteUser', {
-      id: rowId,
-      idNo,
-      category: 'Users'
-    }, 'POST').catch(() => {});
-
-    callGoogleAppsScript('deleteEntry', {
-      id: rowId,
-      consumerId: idNo,
-      category: 'Users',
-      confirmDelete: true,
-      confirmAdminDelete: clientPayload.confirmAdminDelete,
-      reason: clientPayload.reason
-    }, 'POST').catch(() => {});
 
     return res.json({
       success: true,
@@ -4025,9 +4091,7 @@ app.put('/api/users/:id', async (req, res) => {
   try {
     const paramId = String(req.params.id || '').trim();
     const payload = req.body.data || req.body;
-    const existingUsers = cachedUsersState?.users && cachedUsersState.users.length > 0
-      ? cachedUsersState.users
-      : await fetchVerifiedUsersFromSheet();
+    const existingUsers = await fetchVerifiedUsersFromSheet(false).catch(() => cachedUsersState?.users || []);
     const targetUser = existingUsers.find(u =>
       String(u.id).trim().toLowerCase() === paramId.toLowerCase() ||
       String(u.idNo).trim().toLowerCase() === paramId.toLowerCase()
@@ -4071,8 +4135,17 @@ app.put('/api/users/:id', async (req, res) => {
       mergedUser['Status'] = mergedUser.status;
     }
     if (payload.role !== undefined) {
-      mergedUser.role = payload.role;
-      mergedUser['Role'] = payload.role;
+      const rawR = String(payload.role).trim().toLowerCase();
+      const canonicalR = rawR.includes('admin') || rawR === 'controller' || rawR === 'supervisor'
+        ? 'admin'
+        : rawR.includes('agency')
+          ? 'agency'
+          : 'worker';
+      mergedUser.role = canonicalR;
+      mergedUser['Role'] = canonicalR;
+    } else if (targetUser?.role) {
+      mergedUser.role = targetUser.role;
+      mergedUser['Role'] = targetUser.role;
     }
 
     const syncTag = buildUserSyncTag({
@@ -4089,17 +4162,18 @@ app.put('/api/users/:id', async (req, res) => {
     mergedUser['Created At'] = syncTag;
 
     const updatedUser = normalizeUserRecord(mergedUser);
-    upsertUserIntoCachedState(updatedUser);
-    clearUsersStateCache();
 
-    callGoogleAppsScript('updateEntry', {
+    await callGoogleAppsScript('updateEntry', {
       id: rowId,
       category: 'Users',
       status: mergedUser.status,
       role: mergedUser.role,
       ...mergedUser,
       data: mergedUser
-    }, 'POST').catch(() => {});
+    }, 'POST', 25000);
+
+    upsertUserIntoCachedState(updatedUser);
+    clearUsersStateCache();
 
     return res.json({
       success: true,
@@ -5708,17 +5782,17 @@ function refreshDisconnectionFromSheetInBackground() {
   })();
 }
 
-// Keep Disconnection cache synced with Google Sheet every 10 seconds (in standalone server only)
+// Keep Disconnection cache synced with Google Sheet every 30 seconds (in standalone server only)
 if (!process.env.VERCEL) {
   setInterval(() => {
-    if (activeGasWriteCount === 0) {
+    if (activeGasWriteCount === 0 && activeForegroundGasCount === 0) {
       refreshDisconnectionFromSheetInBackground();
     }
-  }, 10000).unref();
+  }, 30000).unref();
 
   // Keep other module caches warm every 90 seconds
   setInterval(() => {
-    if (activeGasWriteCount === 0) {
+    if (activeGasWriteCount === 0 && activeForegroundGasCount === 0) {
       refreshEntriesFromSheetInBackground();
     }
   }, 90000).unref();
@@ -7005,6 +7079,750 @@ app.get('/api/disconnection-tasks/history', async (req, res) => {
 });
 
 // ============================================================================
+// ADMIN PANEL -> UPLOAD PAYMENT DATA (PAYMENT-ONLY DISCONNECTION UPDATER)
+// ============================================================================
+const PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
+const paymentUploadIdempotencyMap = new Map<string, { timestamp: number; result: any }>();
+const inFlightPaymentUploads = new Map<string, Promise<any>>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of paymentUploadIdempotencyMap.entries()) {
+    if (now - v.timestamp > PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      paymentUploadIdempotencyMap.delete(k);
+    }
+  }
+}, 60000).unref();
+
+function normalizePaymentExcelHeader(header: any): string {
+  return String(header ?? '')
+    .trim()
+    .replace(/[\s_-]+/g, ' ')
+    .toLowerCase();
+}
+
+function normalizeExcelConsumerId(val: any): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val)) return '';
+    return Math.round(val).toString();
+  }
+  let s = normalizeUniversal(val).trim();
+  s = s.replace(/\.0+$/, '').trim();
+  if (/^\d+\.?\d*e[+-]?\d+$/i.test(s)) {
+    const num = Number(s);
+    if (Number.isFinite(num)) s = Math.round(num).toString();
+  }
+  if (!s || /^(null|undefined|nan|n\/a|-+)$/i.test(s)) return '';
+  return s;
+}
+
+function parseExcelPaymentAmount(val: any): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val) || val <= 0) return null;
+    return Math.round(val * 100) / 100;
+  }
+  let s = normalizeUniversal(val).trim();
+  s = s.replace(/[₹,\s]/g, '').replace(/^(rs\.?|inr)/i, '').trim();
+  if (!s || !/^-?\d+(\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function isValidCalendarYMD(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (year < 1990 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+}
+
+function formatYMD(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function getXlsxSsf(): { parse_date_code?: (serial: number, opts?: { date1904?: boolean }) => { y: number; m: number; d: number } | null } | null {
+  const mod = XLSX as any;
+  if (mod?.SSF && typeof mod.SSF.parse_date_code === 'function') return mod.SSF;
+  if (mod?.default?.SSF && typeof mod.default.SSF.parse_date_code === 'function') return mod.default.SSF;
+  return null;
+}
+
+function excelSerialToCalendarYMD(serial: number, date1904 = false): { y: number; m: number; d: number } | null {
+  if (!Number.isFinite(serial) || serial <= 0) return null;
+  const wholeDays = Math.floor(serial + 1e-7);
+  if (wholeDays <= 0) return null;
+  if (date1904) {
+    const dt = new Date(Date.UTC(1904, 0, 1) + wholeDays * 86400000);
+    return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+  }
+  // Excel 1900 date system: serial 60 is phantom 1900-02-29; serial 25569 is 1970-01-01
+  if (wholeDays === 60) return null;
+  const adjustedDays = wholeDays < 60 ? wholeDays + 1 : wholeDays;
+  const dt = new Date(Date.UTC(1970, 0, 1) + (adjustedDays - 25569) * 86400000);
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+}
+
+function parseExcelSerialToYMD(serial: number, date1904 = false): string | null {
+  if (!Number.isFinite(serial) || serial <= 0) return null;
+  const ssf = getXlsxSsf();
+  let parsed: { y: number; m: number; d: number } | null = null;
+  if (ssf && typeof ssf.parse_date_code === 'function') {
+    try {
+      parsed = ssf.parse_date_code(serial, date1904 ? { date1904: true } : undefined) || null;
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!parsed) {
+    parsed = excelSerialToCalendarYMD(serial, date1904);
+  }
+  if (parsed && isValidCalendarYMD(parsed.y, parsed.m, parsed.d)) {
+    return formatYMD(parsed.y, parsed.m, parsed.d);
+  }
+  return null;
+}
+
+const MONTH_NAME_MAP: Record<string, number> = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12
+};
+
+function parseExcelPaymentDate(val: any, date1904 = false): string | null {
+  if (val === null || val === undefined || val === '') return null;
+
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return null;
+    const isUtcMidnight =
+      val.getUTCHours() === 0 &&
+      val.getUTCMinutes() === 0 &&
+      val.getUTCSeconds() === 0 &&
+      val.getUTCMilliseconds() === 0;
+    const y = isUtcMidnight ? val.getUTCFullYear() : val.getFullYear();
+    const m = (isUtcMidnight ? val.getUTCMonth() : val.getMonth()) + 1;
+    const d = isUtcMidnight ? val.getUTCDate() : val.getDate();
+    return isValidCalendarYMD(y, m, d) ? formatYMD(y, m, d) : null;
+  }
+
+  if (typeof val === 'number') {
+    return parseExcelSerialToYMD(val, date1904);
+  }
+
+  const s = normalizeUniversal(val).trim();
+  if (!s) return null;
+
+  // Numeric Excel serial passed as string (e.g. "45768" or "46127.5")
+  if (/^\d{4,6}(\.\d+)?$/.test(s)) {
+    const serial = Number(s);
+    const serialDate = parseExcelSerialToYMD(serial, date1904);
+    if (serialDate) return serialDate;
+  }
+
+  // YYYY-MM-DD or YYYY/MM/DD (strictly preserve calendar date without Date timezone shift)
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s].*)?$/);
+  if (m) {
+    const year = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    const day = parseInt(m[3], 10);
+    return isValidCalendarYMD(year, month, day) ? formatYMD(year, month, day) : null;
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY (with optional time component)
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:\s.*)?$/);
+  if (m) {
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    const rawYear = parseInt(m[3], 10);
+    const year = m[3].length === 2 ? 2000 + rawYear : rawYear;
+    if (isValidCalendarYMD(year, month, day)) {
+      return formatYMD(year, month, day);
+    }
+    // Fallback if MM/DD/YYYY (e.g. 04/15/2026)
+    if (isValidCalendarYMD(year, day, month)) {
+      return formatYMD(year, day, month);
+    }
+    return null;
+  }
+
+  // Named month format e.g. "15-Apr-2026" or "15 April 2026"
+  m = s.match(/^(\d{1,2})[\s,-]+([A-Za-z]+)[\s,-]+(\d{2,4})(?:\s.*)?$/);
+  if (m) {
+    const day = parseInt(m[1], 10);
+    const month = MONTH_NAME_MAP[m[2].toLowerCase()];
+    const rawYear = parseInt(m[3], 10);
+    const year = m[3].length === 2 ? 2000 + rawYear : rawYear;
+    if (month && isValidCalendarYMD(year, month, day)) {
+      return formatYMD(year, month, day);
+    }
+    return null;
+  }
+
+  const parsedDate = new Date(s);
+  if (!isNaN(parsedDate.getTime())) {
+    const hasExplicitTz = /(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC)$/i.test(s);
+    const y = hasExplicitTz ? parsedDate.getUTCFullYear() : parsedDate.getFullYear();
+    const mo = (hasExplicitTz ? parsedDate.getUTCMonth() : parsedDate.getMonth()) + 1;
+    const d = hasExplicitTz ? parsedDate.getUTCDate() : parsedDate.getDate();
+    return isValidCalendarYMD(y, mo, d) ? formatYMD(y, mo, d) : null;
+  }
+
+  return null;
+}
+
+function isCompletelyBlankExcelRow(row: any[]): boolean {
+  if (!Array.isArray(row) || row.length === 0) return true;
+  return row.every(cell => cell === null || cell === undefined || String(cell).trim() === '');
+}
+
+app.post('/api/disconnection/upload-payment-data', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPaymentSource = String(req.body?.paymentSource || '').trim();
+    const fileName = String(req.body?.fileName || '').trim();
+    const rawBase64 = String(req.body?.fileBase64 || '').trim();
+    const requestedUploadId = String(req.body?.uploadId || '').trim();
+
+    if (rawPaymentSource !== 'Cash Desk' && rawPaymentSource !== 'Portal') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PAYMENT_SOURCE',
+        error: 'Please select a valid Payment Source (Cash Desk or Portal).'
+      });
+    }
+
+    if (!fileName || !/\.(xlsx|xls)$/i.test(fileName)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_FILE_TYPE',
+        error: 'Unsupported file format. Please upload an Excel file (.xlsx or .xls).'
+      });
+    }
+
+    if (!rawBase64) {
+      return res.status(400).json({
+        success: false,
+        code: 'EMPTY_FILE',
+        error: 'Excel file payload is empty. Please select a valid .xlsx or .xls file.'
+      });
+    }
+
+    const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+    const buffer = Buffer.from(cleanBase64, 'base64');
+    if (!buffer || buffer.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_FILE_BUFFER',
+        error: 'Unable to decode uploaded Excel file.'
+      });
+    }
+
+    // Parse Excel dynamically using column headers (never fixed column positions)
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, raw: true });
+    } catch (parseErr: any) {
+      return res.status(400).json({
+        success: false,
+        code: 'EXCEL_PARSE_ERROR',
+        error: `Failed to read Excel file: ${parseErr?.message || 'Corrupted or invalid Excel workbook'}`
+      });
+    }
+
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_WORKSHEETS',
+        error: 'The uploaded Excel file contains no worksheets.'
+      });
+    }
+
+    let matrix: any[][] = [];
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      if (!ws) continue;
+      const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: true, blankrows: true });
+      if (Array.isArray(rows) && rows.some(r => !isCompletelyBlankExcelRow(r))) {
+        matrix = rows;
+        break;
+      }
+    }
+
+    if (matrix.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'EMPTY_WORKSHEET',
+        error: 'The uploaded Excel worksheet is completely empty.'
+      });
+    }
+
+    // Locate first non-blank row as header row
+    let headerRowIdx = -1;
+    for (let i = 0; i < matrix.length; i++) {
+      if (!isCompletelyBlankExcelRow(matrix[i])) {
+        headerRowIdx = i;
+        break;
+      }
+    }
+
+    if (headerRowIdx === -1) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_HEADER_ROW',
+        error: 'No header row found in the uploaded Excel file.'
+      });
+    }
+
+    const headerRow = matrix[headerRowIdx];
+    let consumerIdCol = -1;
+    let amountCol = -1;
+    let dateCol = -1;
+
+    for (let c = 0; c < headerRow.length; c++) {
+      const norm = normalizePaymentExcelHeader(headerRow[c]);
+      if (consumerIdCol === -1 && norm === 'consumer id') {
+        consumerIdCol = c;
+      } else if (amountCol === -1 && norm === 'amount') {
+        amountCol = c;
+      } else if (dateCol === -1 && norm === 'date') {
+        dateCol = c;
+      }
+    }
+
+    const missingHeaders: string[] = [];
+    if (consumerIdCol === -1) missingHeaders.push('Consumer ID');
+    if (amountCol === -1) missingHeaders.push('Amount');
+    if (dateCol === -1) missingHeaders.push('Date');
+
+    if (missingHeaders.length > 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_REQUIRED_COLUMNS',
+        error: `Missing required Excel column header(s): ${missingHeaders.join(', ')}. Expected headers: Consumer ID, Amount, Date.`
+      });
+    }
+
+    interface ValidPaymentRecord {
+      rowNumber: number;
+      consumerId: string;
+      amount: number;
+      date: string;
+    }
+
+    interface PaymentRowResult {
+      rowNumber: number;
+      consumerId: string;
+      d2NetOs: string;
+      paidAmount: string;
+      paidDate: string;
+      paidType: string;
+      outstandingAfter: string;
+      status: 'Updated' | 'Not Found' | 'Failed';
+      message: string;
+    }
+
+    const validRecords: ValidPaymentRecord[] = [];
+    const preFailedResults: PaymentRowResult[] = [];
+    let nonBlankRecordCount = 0;
+
+    const isDate1904 = Boolean((workbook as any)?.Workbook?.WBProps?.date1904);
+
+    for (let r = headerRowIdx + 1; r < matrix.length; r++) {
+      const row = matrix[r];
+      if (isCompletelyBlankExcelRow(row)) {
+        continue; // Ignore completely blank rows
+      }
+
+      nonBlankRecordCount++;
+      const rowNumber = r + 1;
+      const rawCid = row[consumerIdCol];
+      const rawAmt = row[amountCol];
+      const rawDate = row[dateCol];
+
+      const consumerId = normalizeExcelConsumerId(rawCid);
+      const parsedAmount = parseExcelPaymentAmount(rawAmt);
+      const parsedDate = parseExcelPaymentDate(rawDate, isDate1904);
+
+      const reasons: string[] = [];
+      if (!consumerId) reasons.push('Missing or invalid Consumer ID');
+      if (parsedAmount === null) reasons.push('Invalid Amount (must be a positive number)');
+      if (!parsedDate) reasons.push('Invalid Date');
+
+      if (reasons.length > 0) {
+        preFailedResults.push({
+          rowNumber,
+          consumerId: consumerId || String(rawCid ?? '').trim(),
+          d2NetOs: '',
+          paidAmount: rawAmt !== undefined && rawAmt !== null ? String(rawAmt).trim() : '',
+          paidDate: rawDate !== undefined && rawDate !== null ? String(rawDate).trim() : '',
+          paidType: rawPaymentSource,
+          outstandingAfter: '',
+          status: 'Failed',
+          message: reasons.join('; ')
+        });
+      } else {
+        validRecords.push({
+          rowNumber,
+          consumerId,
+          amount: parsedAmount!,
+          date: parsedDate!
+        });
+      }
+    }
+
+    if (nonBlankRecordCount === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_RECORDS',
+        error: 'Excel file contains headers only and no payment data rows.'
+      });
+    }
+
+    // If every non-blank row failed client/server pre-validation, return report without calling Google Sheets
+    if (validRecords.length === 0) {
+      return res.json({
+        success: true,
+        paymentSource: rawPaymentSource,
+        fileName,
+        totalRecords: nonBlankRecordCount,
+        updatedCount: 0,
+        notFoundCount: 0,
+        failedCount: preFailedResults.length,
+        rowResults: preFailedResults,
+        message: `Validation failed for all ${preFailedResults.length} record(s). No Google Sheet rows were modified.`
+      });
+    }
+
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(`${rawPaymentSource}::${cleanBase64}`)
+      .digest('hex');
+    const effectiveUploadId = requestedUploadId || `pay-${contentHash.slice(0, 24)}`;
+
+    const cachedById = paymentUploadIdempotencyMap.get(effectiveUploadId);
+    if (cachedById && Date.now() - cachedById.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      return res.json({
+        ...cachedById.result,
+        duplicatePrevented: true
+      });
+    }
+    const cachedByHash = paymentUploadIdempotencyMap.get(`hash:${contentHash}`);
+    if (cachedByHash && Date.now() - cachedByHash.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      return res.json({
+        ...cachedByHash.result,
+        duplicatePrevented: true
+      });
+    }
+
+    const inFlight = inFlightPaymentUploads.get(effectiveUploadId) || inFlightPaymentUploads.get(`hash:${contentHash}`);
+    if (inFlight) {
+      const sharedResult = await inFlight;
+      return res.json({
+        ...sharedResult,
+        duplicatePrevented: true
+      });
+    }
+
+    const executionPromise = (async () => {
+      let gasRes = await callGoogleAppsScript(
+        'uploadDisconnectionPaymentData',
+        {
+          spreadsheetId: GOOGLE_SHEET_ID,
+          paymentSource: rawPaymentSource,
+          uploadId: effectiveUploadId,
+          records: validRecords
+        },
+        'POST',
+        60000
+      );
+
+      if (!gasRes || gasRes.success === false) {
+        const errCode = String(gasRes?.error?.code || '').trim();
+        const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
+
+        if (
+          errCode === 'UNKNOWN_POST_ACTION' ||
+          /Unrecognized POST action|Unknown POST action/i.test(errMsg)
+        ) {
+          // Live GAS deployment does not yet have uploadDisconnectionPaymentData;
+          // execute the exact same payment-only 4-column update via already-deployed live GAS 'entries' + 'updateEntry' actions.
+          const liveEntriesRes = await callGoogleAppsScript(
+            'entries',
+            { category: 'Disconnection', _t: Date.now() },
+            'GET',
+            25000
+          );
+          if (!liveEntriesRes || liveEntriesRes.success === false) {
+            const fetchErr: any = new Error(
+              liveEntriesRes?.error?.message ||
+              'Failed to read live Disconnection sheet records from Google Apps Script.'
+            );
+            fetchErr.statusCode = 502;
+            fetchErr.code = 'GAS_READ_FAILED';
+            throw fetchErr;
+          }
+
+          const liveRows: any[] = Array.isArray(liveEntriesRes.entries)
+            ? liveEntriesRes.entries
+            : Array.isArray(liveEntriesRes.data?.entries)
+              ? liveEntriesRes.data.entries
+              : Array.isArray(liveEntriesRes.data)
+                ? liveEntriesRes.data
+                : [];
+
+          const consumerMap = new Map<string, any>();
+          for (const row of liveRows) {
+            const rawRowCid = String(row?.['Consumer Id'] ?? row?.['Consumer ID'] ?? row?.consumerId ?? '').trim();
+            const key = normalizeConsumerIdKey(rawRowCid);
+            if (key && !consumerMap.has(key)) {
+              consumerMap.set(key, row);
+            }
+          }
+
+          const compatRowResults: PaymentRowResult[] = [];
+          for (const rec of validRecords) {
+            const cKey = normalizeConsumerIdKey(rec.consumerId);
+            const liveRow = cKey ? consumerMap.get(cKey) : undefined;
+            if (!liveRow) {
+              compatRowResults.push({
+                rowNumber: rec.rowNumber,
+                consumerId: rec.consumerId,
+                d2NetOs: '',
+                paidAmount: String(rec.amount),
+                paidDate: rec.date,
+                paidType: rawPaymentSource,
+                outstandingAfter: '',
+                status: 'Not Found',
+                message: 'Consumer ID not found in Disconnection sheet'
+              });
+              continue;
+            }
+
+            const rawD2 = liveRow['D2 Net O/S'] ?? liveRow['D2 Net OS'] ?? liveRow.d2NetOs ?? liveRow.outstandingDue ?? '';
+            const cleanedD2 = String(rawD2 === undefined || rawD2 === null ? '' : rawD2).replace(/[^0-9.-]/g, '').trim();
+            let d2NetOs = 0;
+            if (cleanedD2 !== '') {
+              d2NetOs = parseFloat(cleanedD2);
+              if (isNaN(d2NetOs) || !isFinite(d2NetOs)) {
+                compatRowResults.push({
+                  rowNumber: rec.rowNumber,
+                  consumerId: rec.consumerId,
+                  d2NetOs: String(rawD2),
+                  paidAmount: String(rec.amount),
+                  paidDate: rec.date,
+                  paidType: rawPaymentSource,
+                  outstandingAfter: '',
+                  status: 'Failed',
+                  message: 'Invalid existing D2 Net O/S value in Disconnection sheet'
+                });
+                continue;
+              }
+            }
+
+            const paidAmtRounded = Math.round(rec.amount * 100) / 100;
+            const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
+            const targetCid = String(liveRow['Consumer Id'] ?? liveRow['Consumer ID'] ?? liveRow.consumerId ?? rec.consumerId).trim();
+
+            // Preserve existing non-payment fields whose GAS extractFieldValue defaults are non-empty,
+            // and never send D2 Net O/S or Payment Source so they remain untouched.
+            const patch: Record<string, any> = {
+              id: targetCid,
+              consumerId: targetCid,
+              'Consumer Id': targetCid,
+              category: 'Disconnection',
+              spreadsheetId: GOOGLE_SHEET_ID,
+              'Discon Status': String(liveRow['Discon Status'] ?? liveRow.disconStatus ?? ''),
+              'Payment Status': String(liveRow['Payment Status'] ?? liveRow.paymentStatus ?? ''),
+              'Last Updated': String(liveRow['Last Updated'] ?? liveRow.lastUpdated ?? ''),
+              'Upload Date': String(liveRow['Upload Date'] ?? liveRow.uploadDate ?? ''),
+              'Paid Amount': paidAmtRounded,
+              paidAmount: paidAmtRounded,
+              'Paid Date': rec.date,
+              paidDate: rec.date,
+              'Paid Type': rawPaymentSource,
+              paidType: rawPaymentSource,
+              'Outstanding After': String(outstandingAfter),
+              outstandingAfter: String(outstandingAfter)
+            };
+
+            const upRes = await callGoogleAppsScript(
+              'updateEntry',
+              {
+                ...patch,
+                data: patch
+              },
+              'POST',
+              25000
+            );
+
+            if (upRes && upRes.success !== false) {
+              compatRowResults.push({
+                rowNumber: rec.rowNumber,
+                consumerId: rec.consumerId,
+                d2NetOs: String(d2NetOs),
+                paidAmount: String(paidAmtRounded),
+                paidDate: rec.date,
+                paidType: rawPaymentSource,
+                outstandingAfter: String(outstandingAfter),
+                status: 'Updated',
+                message: 'Payment columns updated in Disconnection sheet'
+              });
+            } else {
+              compatRowResults.push({
+                rowNumber: rec.rowNumber,
+                consumerId: rec.consumerId,
+                d2NetOs: String(d2NetOs),
+                paidAmount: String(paidAmtRounded),
+                paidDate: rec.date,
+                paidType: rawPaymentSource,
+                outstandingAfter: '',
+                status: 'Failed',
+                message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
+              });
+            }
+          }
+
+          gasRes = {
+            success: true,
+            rowResults: compatRowResults
+          };
+        } else {
+          const err: any = new Error(errMsg);
+          err.statusCode = 502;
+          err.code = errCode || 'GAS_PAYMENT_UPDATE_FAILED';
+          throw err;
+        }
+      }
+
+      const gasRowsRaw: any[] = Array.isArray(gasRes.rowResults)
+        ? gasRes.rowResults
+        : Array.isArray(gasRes.data?.rowResults)
+          ? gasRes.data.rowResults
+          : [];
+
+      const mergedRowResults: PaymentRowResult[] = [...preFailedResults];
+      const updatedByConsumerKey = new Map<string, PaymentRowResult>();
+
+      for (const r of gasRowsRaw) {
+        const st: 'Updated' | 'Not Found' | 'Failed' =
+          r.status === 'Updated'
+            ? 'Updated'
+            : r.status === 'Not Found'
+              ? 'Not Found'
+              : 'Failed';
+        const rawPaidAmt = r.paidAmount ?? r.amount;
+        const rawPaidDt = r.paidDate ?? r.date;
+        const normalizedRow: PaymentRowResult = {
+          rowNumber: Number(r.rowNumber || 0),
+          consumerId: String(r.consumerId || ''),
+          d2NetOs: r.d2NetOs !== undefined && r.d2NetOs !== null ? String(r.d2NetOs) : '',
+          paidAmount: rawPaidAmt !== undefined && rawPaidAmt !== null ? String(rawPaidAmt) : '',
+          paidDate: rawPaidDt !== undefined && rawPaidDt !== null ? String(rawPaidDt) : '',
+          paidType: r.paidType !== undefined && r.paidType !== null ? String(r.paidType) : rawPaymentSource,
+          outstandingAfter: r.outstandingAfter !== undefined && r.outstandingAfter !== null ? String(r.outstandingAfter) : '',
+          status: st,
+          message: String(r.message || r.reason || '')
+        };
+        mergedRowResults.push(normalizedRow);
+        if (st === 'Updated') {
+          const cKey = normalizeConsumerIdKey(normalizedRow.consumerId);
+          if (cKey) {
+            updatedByConsumerKey.set(cKey, normalizedRow);
+          }
+        }
+      }
+
+      mergedRowResults.sort((a, b) => a.rowNumber - b.rowNumber);
+
+      let updatedCount = 0;
+      let notFoundCount = 0;
+      let failedCount = 0;
+      for (const row of mergedRowResults) {
+        if (row.status === 'Updated') updatedCount++;
+        else if (row.status === 'Not Found') notFoundCount++;
+        else failedCount++;
+      }
+
+      // Synchronize ONLY the 4 updated payment columns into local cache if loaded (never touch D2 Net O/S or Payment Source)
+      if (updatedByConsumerKey.size > 0) {
+        gasCache.clear();
+        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+          cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
+            const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
+            const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
+            if (!matched) return task;
+            return {
+              ...task,
+              paidAmount: matched.paidAmount,
+              'Paid Amount': matched.paidAmount,
+              paidDate: matched.paidDate,
+              'Paid Date': matched.paidDate,
+              paidType: matched.paidType,
+              'Paid Type': matched.paidType,
+              outstandingAfter: matched.outstandingAfter,
+              'Outstanding After': matched.outstandingAfter
+            };
+          });
+          cachedDisconnectionState.timestamp = Date.now();
+          try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+        }
+        // Trigger a silent background refresh from Google Sheets so cache reflects live sheet values
+        refreshDisconnectionFromSheetInBackground();
+      }
+
+      const finalResult = {
+        success: true,
+        paymentSource: rawPaymentSource,
+        fileName,
+        uploadId: effectiveUploadId,
+        totalRecords: mergedRowResults.length,
+        updatedCount,
+        notFoundCount,
+        failedCount,
+        rowResults: mergedRowResults,
+        duplicate: Boolean(gasRes.duplicate),
+        updatedColumns: ['Paid Amount', 'Paid Date', 'Paid Type', 'Outstanding After'],
+        message: `Processed ${mergedRowResults.length} record(s): ${updatedCount} Updated, ${notFoundCount} Not Found, ${failedCount} Failed.`
+      };
+
+      const record = { timestamp: Date.now(), result: finalResult };
+      paymentUploadIdempotencyMap.set(effectiveUploadId, record);
+      paymentUploadIdempotencyMap.set(`hash:${contentHash}`, record);
+      return finalResult;
+    })();
+
+    inFlightPaymentUploads.set(effectiveUploadId, executionPromise);
+    inFlightPaymentUploads.set(`hash:${contentHash}`, executionPromise);
+
+    try {
+      const result = await executionPromise;
+      return res.json(result);
+    } finally {
+      inFlightPaymentUploads.delete(effectiveUploadId);
+      inFlightPaymentUploads.delete(`hash:${contentHash}`);
+    }
+  } catch (err: any) {
+    console.error('[Disconnection Payment Upload Error]', err);
+    const statusCode = Number(err?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: err?.code || 'PAYMENT_UPLOAD_ERROR',
+      error: err?.message || 'Failed to upload payment data.'
+    });
+  }
+});
+
+// ============================================================================
 // SERVER INITIALIZATION & VITE MIDDLEWARE
 // ============================================================================
 async function startServer() {
@@ -7083,12 +7901,16 @@ async function startServer() {
       console.log(`⚡ POWER server running on http://localhost:${port}`);
       console.log(`📊 Google Spreadsheet ID: ${GOOGLE_SHEET_ID}`);
       console.log(`🔗 Google Apps Script URL: ${GOOGLE_APPS_SCRIPT_URL}`);
-      // Warm up caches in background so initial login and module loads are instantaneous
+      // Warm up Users first, then stagger heavy background module caches so auth/Users calls are never blocked at startup
       setTimeout(() => {
         fetchVerifiedUsersFromSheet(false).catch(() => {});
-        refreshEntriesFromSheetInBackground();
-        refreshDisconnectionFromSheetInBackground();
-      }, 250);
+      }, 100);
+      setTimeout(() => {
+        if (activeForegroundGasCount === 0) refreshDisconnectionFromSheetInBackground();
+      }, 2500);
+      setTimeout(() => {
+        if (activeForegroundGasCount === 0) refreshEntriesFromSheetInBackground();
+      }, 5000);
     });
 
     s.on('error', (err: any) => {

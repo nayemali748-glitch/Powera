@@ -1295,11 +1295,12 @@ function updateEntry(targetId, category, updateData) {
         const cIdDigits = normCId.replace(/\D/g, '');
         const mNo = String(r['Meter'] || r.meterNumber || r['Meter No'] || r.meterNo || '').trim().toLowerCase();
         const recId = String(r['Record ID'] || r.id || r.ID || '').trim().toLowerCase();
+        const uIdNo = String(r['User ID'] || r['User Id'] || r.idNo || '').trim().toLowerCase();
         const subId = String(r['Submission ID'] || r.submissionId || '').trim().toLowerCase();
         const tId = String(r['Task ID'] || r.taskId || '').trim().toLowerCase();
         const cleanLower = cleanId.toLowerCase();
 
-        return recId === cleanLower || subId === cleanLower || tId === cleanLower ||
+        return recId === cleanLower || uIdNo === cleanLower || subId === cleanLower || tId === cleanLower ||
           (normCId && (normCId === bareId || (bareDigits && cIdDigits && bareDigits === cIdDigits))) ||
           (mNo && (mNo === cleanLower || (bareDigits && mNo.replace(/\D/g, '') === bareDigits)));
       });
@@ -1359,6 +1360,10 @@ function updateEntry(targetId, category, updateData) {
   }
 
   headers.forEach((h, colIdx) => {
+    const nh = normHeader(h);
+    if (nh === 'role' && patch.role === undefined && patch['Role'] === undefined) return;
+    if (nh === 'status' && patch.status === undefined && patch['Status'] === undefined) return;
+    if (nh === 'createdat' && patch.createdAt === undefined && patch['Created At'] === undefined) return;
     const newVal = extractFieldValue(patch, h);
     if (newVal !== undefined && newVal !== null && newVal !== '') {
       rowVals[colIdx] = newVal;
@@ -1473,6 +1478,7 @@ function queryRecords(filters) {
         const stableId = String(
           r['Record ID'] || 
           r.id || 
+          (sheetName === 'Users' ? (r['User ID'] || r['User Id'] || r.idNo) : '') ||
           r['Task ID'] || 
           r.taskId || 
           r['Submission ID'] || 
@@ -1571,7 +1577,24 @@ function queryRecords(filters) {
           'Outstanding After': String(r['Outstanding After'] || r.outstandingAfter || ''),
           'Next Payment Date': String(r['Next Payment Date'] || r.nextPaymentDate || ''),
           'Payment Source': String(r['Payment Source'] || r.paymentSource || ''),
-          'Upload Date': String(r['Upload Date'] || r.uploadDate || '')
+          'Upload Date': String(r['Upload Date'] || r.uploadDate || ''),
+          ...(sheetName === 'Users' ? {
+            idNo: String(r['User ID'] || r['User Id'] || r.idNo || stableId),
+            'User ID': String(r['User ID'] || r['User Id'] || r.idNo || stableId),
+            password: r['Password'] !== undefined && r['Password'] !== '' ? String(r['Password']) : String(r.password || ''),
+            'Password': r['Password'] !== undefined && r['Password'] !== '' ? String(r['Password']) : String(r.password || ''),
+            passwordHash: String(r['Password Hash'] || r.passwordHash || ''),
+            'Password Hash': String(r['Password Hash'] || r.passwordHash || ''),
+            phone: String(r['Phone'] || r.phone || ''),
+            'Phone': String(r['Phone'] || r.phone || ''),
+            designation: String(r['Designation'] || r.designation || ''),
+            'Designation': String(r['Designation'] || r.designation || ''),
+            badgeNo: String(r['Badge No'] || r.badgeNo || ''),
+            'Badge No': String(r['Badge No'] || r.badgeNo || ''),
+            'Role': String(r['Role'] || r.role || 'worker'),
+            'Status': String(r['Status'] || r.status || 'active'),
+            'Full Name': String(r['Full Name'] || r['Name'] || r.name || '')
+          } : {})
         };
         allRecords.push(item);
       });
@@ -2015,6 +2038,9 @@ function doPost(e) {
     // Disconnection Tasks Operations
     if (action === 'uploadDisconnectionTasks') {
       return out(handleUploadDisconnectionTasks(body), 'Disconnection tasks processed', reqId);
+    }
+    if (action === 'uploadDisconnectionPaymentData') {
+      return out(handleUploadDisconnectionPaymentData(body), 'Disconnection payment data processed', reqId);
     }
     if (action === 'submitDisconnectionReport' || action === 'submitDisconnectionTaskReport' || action === 'updateDisconnection') {
       return out(handleSubmitDisconnectionReport(body), 'Disconnection report saved', reqId);
@@ -3046,5 +3072,206 @@ function cleanupDisconnectionDuplicates() {
     lock.releaseLock();
   }
 }
+
+// ============================================================================
+// DEDICATED PAYMENT-ONLY DISCONNECTION SHEET HANDLER
+// Updates ONLY: Paid Amount, Paid Date, Paid Type, Outstanding After
+// Never modifies D2 Net O/S, Payment Source (Col 31), statuses, formulas, or headers
+// ============================================================================
+function handleUploadDisconnectionPaymentData(body) {
+  const lock = LockService.getScriptLock();
+  const hasLock = lock.tryLock(45000);
+  if (!hasLock) {
+    throw Error('Server is busy processing another transaction. Please retry in a few seconds.');
+  }
+
+  try {
+    const paymentSource = String(body.paymentSource || (body.data && body.data.paymentSource) || '').trim();
+    if (paymentSource !== 'Cash Desk' && paymentSource !== 'Portal') {
+      throw Error('Invalid Payment Source. Must be exactly "Cash Desk" or "Portal".');
+    }
+
+    const uploadId = String(body.uploadId || body.requestId || (body.data && body.data.uploadId) || '').trim();
+    const cache = CacheService.getScriptCache();
+    if (uploadId) {
+      const cached = cache.get('pay_upl_' + uploadId);
+      if (cached) {
+        const parsedCached = JSON.parse(cached);
+        parsedCached.duplicatePrevented = true;
+        return parsedCached;
+      }
+    }
+
+    const records = Array.isArray(body.records)
+      ? body.records
+      : (body.data && Array.isArray(body.data.records) ? body.data.records : []);
+
+    const s = getSheet('Disconnection');
+    if (!s) {
+      throw Error('Disconnection sheet tab not found.');
+    }
+
+    const lastRow = s.getLastRow();
+    const lastCol = s.getLastColumn();
+    if (lastRow < 1 || lastCol < 1) {
+      throw Error('Disconnection sheet is empty or has no header row.');
+    }
+
+    const allValues = s.getRange(1, 1, lastRow, lastCol).getValues();
+    const headers = allValues[0].map(function(h) { return String(h || '').trim(); });
+
+    function findRequiredCol(targetNorms) {
+      for (let c = 0; c < headers.length; c++) {
+        const nh = normHeader(headers[c]);
+        if (targetNorms.indexOf(nh) !== -1) return c;
+      }
+      return -1;
+    }
+
+    const consumerIdCol = findRequiredCol(['consumerid']);
+    const d2NetOsCol = findRequiredCol(['d2netos']);
+    const paidAmountCol = findRequiredCol(['paidamount']);
+    const paidDateCol = findRequiredCol(['paiddate']);
+    const paidTypeCol = findRequiredCol(['paidtype']);
+    const outstandingAfterCol = findRequiredCol(['outstandingafter']);
+
+    const missingCols = [];
+    if (consumerIdCol === -1) missingCols.push('Consumer Id');
+    if (d2NetOsCol === -1) missingCols.push('D2 Net O/S');
+    if (paidAmountCol === -1) missingCols.push('Paid Amount');
+    if (paidDateCol === -1) missingCols.push('Paid Date');
+    if (paidTypeCol === -1) missingCols.push('Paid Type');
+    if (outstandingAfterCol === -1) missingCols.push('Outstanding After');
+
+    if (missingCols.length > 0) {
+      throw Error('Missing required column(s) in Disconnection sheet: ' + missingCols.join(', '));
+    }
+
+    function normCid(val) {
+      if (val === undefined || val === null) return '';
+      let str = String(val).trim();
+      str = str.replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '').trim();
+      str = str.replace(/\.0+$/, '');
+      str = str.replace(/[, \-_]/g, '');
+      if (/^\d+$/.test(str)) {
+        str = str.replace(/^0+/, '') || '0';
+      }
+      return str.toLowerCase();
+    }
+
+    const consumerRowMap = {};
+    for (let r = 1; r < allValues.length; r++) {
+      const rawCid = allValues[r][consumerIdCol];
+      const nCid = normCid(rawCid);
+      if (nCid && !consumerRowMap[nCid]) {
+        consumerRowMap[nCid] = r + 1;
+      }
+    }
+
+    let updatedCount = 0;
+    let notFoundCount = 0;
+    let failedCount = 0;
+    const rowResults = [];
+
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i] || {};
+      const rowNumber = rec.rowNumber || (i + 2);
+      const rawCid = String(rec.consumerId || '').trim();
+      const nCid = normCid(rawCid);
+      const amountVal = Number(rec.amount);
+      const dateStr = String(rec.date || '').trim();
+
+      if (!nCid || isNaN(amountVal) || !isFinite(amountVal) || amountVal < 0 || !dateStr) {
+        failedCount++;
+        rowResults.push({
+          rowNumber: rowNumber,
+          consumerId: rawCid,
+          amount: rec.amount,
+          date: dateStr,
+          status: 'Failed',
+          reason: 'Invalid Consumer ID, Amount, or Date'
+        });
+        continue;
+      }
+
+      const sheetRow = consumerRowMap[nCid];
+      if (!sheetRow || sheetRow < 2) {
+        notFoundCount++;
+        rowResults.push({
+          rowNumber: rowNumber,
+          consumerId: rawCid,
+          amount: amountVal,
+          date: dateStr,
+          status: 'Not Found',
+          reason: 'Consumer ID not found in Disconnection sheet'
+        });
+        continue;
+      }
+
+      const rawD2 = allValues[sheetRow - 1][d2NetOsCol];
+      const cleanedD2 = String(rawD2 === undefined || rawD2 === null ? '' : rawD2).replace(/[^0-9.-]/g, '').trim();
+      let d2NetOs = 0;
+      if (cleanedD2 !== '') {
+        d2NetOs = parseFloat(cleanedD2);
+        if (isNaN(d2NetOs) || !isFinite(d2NetOs)) {
+          failedCount++;
+          rowResults.push({
+            rowNumber: rowNumber,
+            consumerId: rawCid,
+            amount: amountVal,
+            date: dateStr,
+            status: 'Failed',
+            reason: 'Invalid existing D2 Net O/S value in Disconnection sheet'
+          });
+          continue;
+        }
+      }
+
+      const paidAmtRounded = Math.round(amountVal * 100) / 100;
+      const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
+
+      s.getRange(sheetRow, paidAmountCol + 1).setValue(paidAmtRounded);
+      s.getRange(sheetRow, paidDateCol + 1).setValue(dateStr);
+      s.getRange(sheetRow, paidTypeCol + 1).setValue(paymentSource);
+      s.getRange(sheetRow, outstandingAfterCol + 1).setValue(outstandingAfter);
+
+      updatedCount++;
+      rowResults.push({
+        rowNumber: rowNumber,
+        consumerId: rawCid,
+        d2NetOs: d2NetOs,
+        paidAmount: paidAmtRounded,
+        paidDate: dateStr,
+        paidType: paymentSource,
+        outstandingAfter: outstandingAfter,
+        status: 'Updated'
+      });
+    }
+
+    SpreadsheetApp.flush();
+    try { cache.remove('records_cache'); } catch (e) {}
+
+    const result = {
+      success: true,
+      totalRecords: records.length,
+      updatedCount: updatedCount,
+      notFoundCount: notFoundCount,
+      failedCount: failedCount,
+      paymentSource: paymentSource,
+      updatedColumns: ['Paid Amount', 'Paid Date', 'Paid Type', 'Outstanding After'],
+      rowResults: rowResults,
+      message: 'Processed ' + records.length + ' payment record(s): ' + updatedCount + ' updated, ' + notFoundCount + ' not found, ' + failedCount + ' failed.'
+    };
+
+    if (uploadId) {
+      try { cache.put('pay_upl_' + uploadId, JSON.stringify(result), 600); } catch (e) {}
+    }
+
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 
 

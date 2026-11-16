@@ -69,6 +69,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
   const [editPasswordValue, setEditPasswordValue] = useState('');
   const [editNameValue, setEditNameValue] = useState('');
   const [editPhoneValue, setEditPhoneValue] = useState('');
+  const [editRoleValue, setEditRoleValue] = useState<'worker' | 'agency' | 'admin'>('worker');
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
 
   // Dedicated Change Password Tab States
@@ -88,10 +89,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const loadUsersList = async () => {
+  const loadUsersList = async (forceRefresh = true) => {
     setLoading(true);
     try {
-      const list = await fetchUsers();
+      const list = await fetchUsers(forceRefresh);
       setUsers(Array.isArray(list) ? list : []);
     } catch {
       setError('Failed to load user list from server.');
@@ -250,14 +251,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
 
   const isAdminAccount = (u: UserAccount): boolean => {
     const roleStr = String(u.role || '').toLowerCase();
-    const desigStr = String(u.designation || '').toLowerCase();
-    return (
-      roleStr === 'admin' ||
-      roleStr === 'supervisor' ||
-      desigStr.includes('admin') ||
-      desigStr.includes('প্রকৌশলী') ||
-      desigStr.includes('engineer')
-    );
+    return roleStr === 'admin' || roleStr === 'supervisor';
   };
 
   const handleDeleteUserClick = (user: UserAccount) => {
@@ -367,6 +361,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
     setEditPasswordValue(user.password || '');
     setEditNameValue(user.name || '');
     setEditPhoneValue(user.phone || '');
+    const r = String(user.role || 'worker').toLowerCase();
+    setEditRoleValue(r === 'admin' ? 'admin' : r === 'agency' ? 'agency' : 'worker');
     setError(null);
     setSuccess(null);
   };
@@ -384,17 +380,18 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
         password: editPasswordValue.trim(),
         name: editNameValue.trim() || user.name,
         phone: editPhoneValue.trim(),
+        role: editRoleValue,
       });
       if (res.success) {
-        setSuccess(`Updated credentials for "${editNameValue.trim() || user.name}" (ID: ${user.idNo}) — New Password: "${editPasswordValue.trim()}"!`);
+        setSuccess(`Updated credentials for "${editNameValue.trim() || user.name}" (ID: ${user.idNo}) — Role: ${editRoleValue.toUpperCase()}, Password: "${editPasswordValue.trim()}"!`);
         setEditingUserId(null);
         setRevealedPasswords(prev => ({ ...prev, [user.idNo]: true }));
-        await loadUsersList();
+        await loadUsersList(true);
       } else {
         setError(res.message || 'Failed to update user details.');
       }
-    } catch {
-      setError('Failed to connect to the server.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to connect to the server.');
     } finally {
       setLoading(false);
     }
@@ -657,7 +654,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
                 <span>Update Profile & Password (ID: {u.idNo})</span>
               </span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               <div>
                 <label className="block text-[10px] font-bold text-slate-600 mb-0.5">New Password / PIN</label>
                 <input
@@ -687,6 +684,18 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
                   className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-semibold text-slate-900"
                   placeholder="Phone Number"
                 />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Account Role</label>
+                <select
+                  value={editRoleValue}
+                  onChange={(e) => setEditRoleValue(e.target.value as 'worker' | 'agency' | 'admin')}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900"
+                >
+                  <option value="worker">Worker</option>
+                  <option value="agency">Agency</option>
+                  <option value="admin">Admin</option>
+                </select>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-1">
@@ -1468,7 +1477,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ isOpen
 
                   <button
                     type="button"
-                    onClick={loadUsersList}
+                    onClick={() => loadUsersList(true)}
                     className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer shrink-0"
                     title="Reload users"
                   >
