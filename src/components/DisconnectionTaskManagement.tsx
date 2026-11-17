@@ -248,6 +248,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const deletedConsumerIdsRef = useRef<Set<string>>(new Set());
   const localReissueDecisionsRef = useRef<Map<string, { action: 'APPROVED' | 'REJECTED' | 'REQUEST' | 'CLEAR'; notes: string; timestamp: number }>>(new Map());
   const localRecentUpdatesRef = useRef<Map<string, { task: DisconnectionTask; timestamp: number }>>(new Map());
+  const onTasksChangeRef = useRef(onTasksChange);
+  onTasksChangeRef.current = onTasksChange;
+  const hasExternalTasksRef = useRef(Array.isArray(externalTasks) && externalTasks.length > 0);
+  hasExternalTasksRef.current = Array.isArray(externalTasks) && externalTasks.length > 0;
 
   const normalizeDiscKey = useCallback((item: Partial<DisconnectionTask> | any): string => {
     return String(item?.consumerId || item?.['Consumer Id'] || item?.taskId || '')
@@ -385,6 +389,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         }
 
         setTasks(prev => {
+          if (dedupedIncoming.length === 0 && prev.length > 0 && !forceSheetRefresh) {
+            return prev;
+          }
           const hasChanged =
             dedupedIncoming.length !== prev.length ||
             dedupedIncoming.some((item, idx) => {
@@ -416,11 +423,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             return prev;
           }
 
-          setCachedDisconnectionTasksSync(dedupedIncoming);
+          if (dedupedIncoming.length > 0) {
+            setCachedDisconnectionTasksSync(dedupedIncoming);
+          }
           return dedupedIncoming;
         });
 
-        if (onTasksChange) onTasksChange(dedupedIncoming.length);
+        if (onTasksChangeRef.current) onTasksChangeRef.current(dedupedIncoming.length);
         if (discResult.stats) {
           setStats(discResult.stats);
         }
@@ -432,7 +441,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [currentUser?.role, currentUser?.idNo, currentUser?.name, onTasksChange, applyLocalReissueDecision]);
+  }, [currentUser?.role, currentUser?.idNo, currentUser?.name, applyLocalReissueDecision, applyLocalRecentUpdate, normalizeDiscKey]);
 
   // Sync with parent 10-second auto-refresh state when provided
   useEffect(() => {
@@ -525,11 +534,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   // Initial load when component mounts + background sync + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
     // Only fetch if externalTasks was not provided by parent App
-    if (!Array.isArray(externalTasks) || externalTasks.length === 0) {
+    if (!hasExternalTasksRef.current) {
       loadData(false, false);
     }
     const interval = setInterval(() => {
-      if (!document.hidden && !inFlightRef.current && (!externalTasks || externalTasks.length === 0)) {
+      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current) {
         loadData(true, false);
       }
     }, 10000);
@@ -538,7 +547,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       loadData(true, true);
     };
     const onFocusOrVisible = () => {
-      if (!document.hidden && !inFlightRef.current && (!externalTasks || externalTasks.length === 0)) {
+      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current) {
         loadData(true, false);
       }
     };
@@ -551,7 +560,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [loadData, externalTasks]);
+  }, [loadData]);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
@@ -630,7 +639,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         }
         deduped.push(item);
       }
-      setCachedDisconnectionTasksSync(deduped);
+      if (!isAgency) {
+        setCachedDisconnectionTasksSync(deduped);
+      }
       return deduped;
     });
   };
@@ -748,7 +759,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             }
           : t
       );
-      setCachedDisconnectionTasksSync(next);
+      if (!isAgency) {
+        setCachedDisconnectionTasksSync(next);
+      }
       return next;
     });
 
@@ -1264,7 +1277,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
-                        if (isAdmin) setActiveTab('REPORT');
+                        if (isAdmin || isAgency) setActiveTab('REPORT');
                       }}
                       className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-blue-600 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
@@ -1295,7 +1308,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
-                        if (isAdmin) setActiveTab('REPORT');
+                        if (isAdmin || isAgency) setActiveTab('REPORT');
                       }}
                       className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
@@ -1832,13 +1845,40 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           )}
 
           {/* SECTION 3: REPORT */}
-          {activeTab === 'REPORT' && isAdmin && (
-            <DisconnectionReport
-              tasks={tasks}
-              onRefresh={() => loadData(true)}
-              isRefreshing={isRefreshing}
-              lang={lang}
-            />
+          {activeTab === 'REPORT' && (isAdmin || isAgency) && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-sm">
+                <div className="flex items-center gap-2.5 text-white">
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                    <FileSpreadsheet className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-bold leading-tight">
+                      {lang === 'bn' ? 'ডিসকানেকশন হিস্ট্রি ও আপডেট রিপোর্ট' : 'History & Agency Updates Report'}
+                    </h3>
+                    <p className="text-[10px] text-slate-400">
+                      {lang === 'bn' ? 'লাইভ আপডেট ইতিহাস ও পেমেন্ট রসিদ' : 'Live field updates history & payment receipts'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('VIEW_LIST')}
+                  className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? 'উপভোক্তা তালিকায় যান' : 'Go to Consumer List'}</span>
+                </button>
+              </div>
+
+              <DisconnectionReport
+                tasks={isAgency ? userScopedTasks : tasks}
+                onRefresh={() => loadData(true)}
+                isRefreshing={isRefreshing}
+                isAdmin={isAdmin}
+                lang={lang}
+              />
+            </div>
           )}
 
           {/* SECTION 4: VIEW LIST */}
@@ -2355,6 +2395,15 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                                   <button
                                     key={cls}
                                     type="button"
+                                    title={
+                                      cls === 'DOMESTIC'
+                                        ? 'D - Domestic'
+                                        : cls === 'COMMERCIAL'
+                                        ? 'C - Commercial'
+                                        : cls === 'INDUSTRIAL'
+                                        ? 'I - Industrial'
+                                        : 'S - Agriculture'
+                                    }
                                     onClick={() => {
                                       setClassFilter(cls);
                                       setShowThreeDotMenu(false);
@@ -2574,7 +2623,9 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
             idNo: currentUser?.idNo,
             username: currentUser?.username,
             name: currentUser?.name,
-            role: isAdmin ? 'admin' : currentUser?.role
+            role: isAdmin ? 'admin' : isAgency ? 'agency' : currentUser?.role,
+            agencyName: (currentUser as any)?.agencyName,
+            designation: currentUser?.designation
           }}
           availableWorkers={availableWorkers}
           lang={lang}
@@ -2585,7 +2636,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       <DisconnectionDailyReportModal
         isOpen={isDailyReportModalOpen}
         onClose={() => setIsDailyReportModalOpen(false)}
-        tasks={tasks}
+        tasks={userScopedTasks}
         activeClassFilter={classFilter}
         onClassFilterChange={setClassFilter}
         activeStatusFilter={statusFilter}

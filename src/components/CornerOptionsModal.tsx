@@ -64,8 +64,64 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
     ptwSigned: false,
     dischargingTested: true,
   });
+  const [cpOldPass, setCpOldPass] = useState('');
+  const [cpNewPass, setCpNewPass] = useState('');
+  const [cpConfirmPass, setCpConfirmPass] = useState('');
+  const [cpLoading, setCpLoading] = useState(false);
+  const [cpMessage, setCpMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   if (!activeOption || (activeOption === 'admin_portal' && !isAdmin)) return null;
+
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cpLoading) return;
+    setCpMessage(null);
+    if (!cpOldPass.trim() || !cpNewPass.trim()) {
+      setCpMessage({ type: 'error', text: 'Enter current and new password' });
+      return;
+    }
+    if (cpNewPass.trim() !== cpConfirmPass.trim()) {
+      setCpMessage({ type: 'error', text: 'New password and confirm password do not match' });
+      return;
+    }
+    let sessionIdNo = '';
+    try {
+      const saved = localStorage.getItem('power_user_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        sessionIdNo = String(parsed?.idNo || parsed?.userId || parsed?.loginId || '').trim();
+      }
+    } catch {}
+    if (!sessionIdNo) {
+      setCpMessage({ type: 'error', text: 'No active login session found' });
+      return;
+    }
+    setCpLoading(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idNo: sessionIdNo,
+          oldPassword: cpOldPass.trim(),
+          newPassword: cpNewPass.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setCpMessage({ type: 'error', text: data.error || 'Failed to update password' });
+      } else {
+        setCpMessage({ type: 'success', text: 'Password updated successfully!' });
+        setCpOldPass('');
+        setCpNewPass('');
+        setCpConfirmPass('');
+      }
+    } catch (err: any) {
+      setCpMessage({ type: 'error', text: err?.message || 'Network error while updating password' });
+    } finally {
+      setCpLoading(false);
+    }
+  };
 
   const handleAdminPinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,6 +239,7 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
                 {activeOption === 'emergency_safety' && '2. Emergency Helpline & Safety Protocol'}
                 {activeOption === 'export_reports' && '3. Data Export & Daily Sheets'}
                 {activeOption === 'app_settings' && 'App Settings'}
+                {activeOption === 'change_password' && 'Change Password'}
               </div>
             </div>
           </div>
@@ -539,6 +596,79 @@ export const CornerOptionsModal: React.FC<CornerOptionsModalProps> = ({
               Close
             </button>
           </div>
+        )}
+
+        {/* Option 5: Change Password */}
+        {activeOption === 'change_password' && (
+          <form onSubmit={handleChangePasswordSubmit} className="p-5 space-y-4">
+            <div className="space-y-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">
+                  Current Password / PIN
+                </label>
+                <input
+                  type="password"
+                  value={cpOldPass}
+                  onChange={(e) => setCpOldPass(e.target.value)}
+                  placeholder="Enter current password"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">
+                  New Password / PIN
+                </label>
+                <input
+                  type="password"
+                  value={cpNewPass}
+                  onChange={(e) => setCpNewPass(e.target.value)}
+                  placeholder="Enter new password"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={cpConfirmPass}
+                  onChange={(e) => setCpConfirmPass(e.target.value)}
+                  placeholder="Confirm new password"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {cpMessage && (
+              <div
+                className={`p-3 rounded-xl text-xs font-bold border ${
+                  cpMessage.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {cpMessage.text}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-bold rounded-lg text-xs cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="submit"
+                disabled={cpLoading}
+                className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-xs cursor-pointer disabled:opacity-60"
+              >
+                {cpLoading ? 'Updating...' : 'Save New Password'}
+              </button>
+            </div>
+          </form>
         )}
       </div>
     </div>

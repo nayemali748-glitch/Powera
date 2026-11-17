@@ -76,7 +76,9 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
   onDeleteTask,
   currentUser
 }) => {
-  const effectiveUser = currentUser || { role: isAdmin ? 'admin' : 'agency', idNo: '8695716192', name: isAdmin ? 'Admin Controller' : 'Agency' };
+  const effectiveUser = currentUser
+    ? { ...currentUser, role: isAdmin ? 'admin' : (currentUser.role || 'agency') }
+    : { role: isAdmin ? 'admin' : 'agency', idNo: isAdmin ? '8695716192' : 'AGENCY', name: isAdmin ? 'Admin Controller' : 'Agency' };
   const [isBreakdownOpen, setIsBreakdownOpen] = useState<boolean>(true);
   const [selectedAgency, setSelectedAgency] = useState<string>('All');
   const [selectedPhase, setSelectedPhase] = useState<PhaseFilterType>('ALL');
@@ -768,6 +770,15 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
                                 <button
                                   key={clsKey}
                                   type="button"
+                                  title={
+                                    clsKey === 'DOMESTIC'
+                                      ? 'D - Domestic'
+                                      : clsKey === 'COMMERCIAL'
+                                      ? 'C - Commercial'
+                                      : clsKey === 'INDUSTRIAL'
+                                      ? 'I - Industrial'
+                                      : 'S - Agriculture'
+                                  }
                                   onClick={() => setSelectedConnClass(clsKey)}
                                   className={`w-7 h-7 rounded-lg text-[11px] font-black flex items-center justify-center cursor-pointer border transition-all ${
                                     selectedConnClass === clsKey
@@ -1230,8 +1241,11 @@ export const DisconnectionPerformanceDashboard: React.FC<DisconnectionPerformanc
           task={selectedTaskForUpdate}
           isOpen={Boolean(selectedTaskForUpdate)}
           onClose={() => setSelectedTaskForUpdate(null)}
-          onUpdateSuccess={() => {
+          onUpdateSuccess={(updatedTask) => {
             setSelectedTaskForUpdate(null);
+            try {
+              window.dispatchEvent(new CustomEvent('power-disconnection-task-updated', { detail: updatedTask }));
+            } catch {}
             if (onRefresh) onRefresh();
           }}
           currentUser={effectiveUser}

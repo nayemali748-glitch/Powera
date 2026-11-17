@@ -24,11 +24,13 @@ import { DisconnectionTask } from '../../types';
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY } from '../../utils/dateTimeFormat';
 import { cleanWorkerOrAgencyName, cleanDisconnectionNotes } from '../../utils/disconnectionClassifier';
 import { PaymentReceiptModal } from './PaymentReceiptModal';
+import { ZoomablePhotoModal } from './ZoomablePhotoModal';
 
 interface DisconnectionReportProps {
   tasks: DisconnectionTask[];
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  isAdmin?: boolean;
   lang?: 'en' | 'bn';
 }
 
@@ -36,6 +38,7 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
   tasks,
   onRefresh,
   isRefreshing = false,
+  isAdmin = true,
   lang = 'en'
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -553,54 +556,16 @@ export const DisconnectionReport: React.FC<DisconnectionReportProps> = ({
         </div>
       )}
 
-      {/* Lightbox Modal */}
-      {previewPhoto && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setPreviewPhoto(null)}
-        >
-          <div
-            className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-              <div>
-                <h4 className="font-bold text-slate-900 text-sm">{previewPhoto.title}</h4>
-                {previewPhoto.meta && <p className="text-xs text-slate-500">{previewPhoto.meta}</p>}
-              </div>
-              <button
-                onClick={() => setPreviewPhoto(null)}
-                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 bg-slate-900 flex items-center justify-center max-h-[70vh] overflow-hidden">
-              <img
-                src={previewPhoto.url}
-                alt="Evidence Full Preview"
-                referrerPolicy="no-referrer"
-                className="max-h-[65vh] w-auto object-contain rounded-lg"
-              />
-            </div>
-
-            <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs">
-              <span className="text-slate-500">WBSEDCL Geotagged Field Evidence</span>
-              <a
-                href={previewPhoto.url}
-                target="_blank"
-                rel="noreferrer"
-                download="disconnection_evidence.jpg"
-                className="px-3 py-1.5 bg-slate-900 text-white rounded-lg font-bold flex items-center gap-1.5 hover:bg-slate-800"
-              >
-                <Download className="w-3.5 h-3.5 text-amber-400" />
-                <span>Download</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Lightbox Modal (Zoom enabled for Admin) */}
+      <ZoomablePhotoModal
+        isOpen={Boolean(previewPhoto)}
+        imageUrl={previewPhoto?.url || ''}
+        title={previewPhoto?.title}
+        subtitle={previewPhoto?.meta}
+        enableZoom={isAdmin}
+        downloadFileName="disconnection_evidence.jpg"
+        onClose={() => setPreviewPhoto(null)}
+      />
 
       {selectedReceiptTask && (
         <PaymentReceiptModal

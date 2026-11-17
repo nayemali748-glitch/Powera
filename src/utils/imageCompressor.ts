@@ -162,9 +162,9 @@ export async function compressImageFile(
   options: CompressionOptions = {}
 ): Promise<string> {
   // Always enforce HD minimum resolution and quality so Evidence photos are never blurry
-  const targetMaxDim = Math.max(options.maxDimension || 1920, 1600);
-  const targetQuality = Math.max(options.quality || 0.92, 0.88);
-  const maxBase64Length = Math.max(options.maxBase64Length || 2400000, 1800000);
+  const targetMaxDim = Math.max(options.maxDimension || 2560, 1920);
+  const targetQuality = Math.max(options.quality || 0.95, 0.92);
+  const maxBase64Length = Math.max(options.maxBase64Length || 4500000, 3200000);
   const { watermarkText, subText, addressText } = options;
 
   if (!file) {
@@ -253,8 +253,8 @@ export async function compressImageFile(
           let attempts = 0;
           while (compressedDataUrl.length > maxBase64Length && attempts < 4) {
             attempts++;
-            curQual = Math.max(0.82, curQual - 0.04);
-            curDim = Math.max(1280, Math.round(curDim * 0.88));
+            curQual = Math.max(0.88, curQual - 0.03);
+            curDim = Math.max(1920, Math.round(curDim * 0.90));
             compressedDataUrl = renderAtScale(curDim, curQual);
           }
 

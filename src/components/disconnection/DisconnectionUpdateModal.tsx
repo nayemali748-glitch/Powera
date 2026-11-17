@@ -25,9 +25,10 @@ import { DisconnectionTask, DisconnectionTaskStatus } from '../../types';
 import { compressImageFile } from '../../utils/imageCompressor';
 import { submitDisconnectionTaskReport, fetchDisconnectionHistory } from '../../services/api';
 import { formatDateDDMMYYYY, formatTime12Hour, getNowDateDDMMYYYY, getNowTime12Hour } from '../../utils/dateTimeFormat';
-import { cleanDisconnectionNotes, cleanWorkerOrAgencyName } from '../../utils/disconnectionClassifier';
+import { cleanDisconnectionNotes, cleanWorkerOrAgencyName, isAgencyUserSession } from '../../utils/disconnectionClassifier';
 import { getTodayYMD, parseTaskDateToYMD } from './DisconnectionDailyReportModal';
 import { GpsCameraModal } from '../GpsCameraModal';
+import { ZoomablePhotoModal } from './ZoomablePhotoModal';
 
 interface DisconnectionUpdateModalProps {
   task: DisconnectionTask;
@@ -39,6 +40,8 @@ interface DisconnectionUpdateModalProps {
     username?: string;
     name?: string;
     role?: string;
+    agencyName?: string;
+    designation?: string;
   };
   availableWorkers: Array<{ idNo: string; name: string }>;
   lang?: 'en' | 'bn';
@@ -215,7 +218,12 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     currentUser?.idNo === 'ADMIN' ||
     currentUser?.idNo === '8695716192';
 
-  const statusButtons: {
+  const isAgencyUser =
+    !isAdminOrSupervisor &&
+    (String(currentUser?.role || '').toLowerCase().includes('agency') ||
+      isAgencyUserSession(currentUser, [task]));
+
+  const allStatusButtons: {
     status: DisconnectionTaskStatus;
     label: string;
     icon: React.ComponentType<{ className?: string }>;
@@ -265,6 +273,10 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
     }
   ];
 
+  const statusButtons = isAgencyUser
+    ? allStatusButtons.filter(btn => btn.status !== 'NOT FOUND')
+    : allStatusButtons;
+
   const isRemarksRequired =
     selectedStatus === 'DISCONNECT' ||
     selectedStatus === 'DISPUTE' ||
@@ -288,8 +300,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const addrText = String(task.consumerAddress || (task as any)['Address'] || '').trim();
 
       const compressed = await compressImageFile(file, {
-        maxDimension: 1920,
-        quality: 0.92,
+        maxDimension: 2560,
+        quality: 0.95,
         watermarkText,
         subText,
         addressText: addrText || undefined
@@ -1002,6 +1014,14 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                       src={photoDataUrl}
                       alt="HD Evidence"
                       referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        const url = target.src;
+                        const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+                        if (idMatch && idMatch[1] && !url.includes('/api/drive-proxy/')) {
+                          target.src = `/api/drive-proxy/${idMatch[1]}`;
+                        }
+                      }}
                       className="w-full h-full object-contain bg-slate-950"
                     />
                     <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-600/90 text-white text-[10px] font-black tracking-wide shadow-xs">
@@ -1215,28 +1235,15 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         </div>
       )}
 
-      {/* Fullscreen Photo Lightbox Preview */}
-      {showPhotoPreview && photoDataUrl && (
-        <div
-          className="fixed inset-0 z-60 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setShowPhotoPreview(false)}
-        >
-          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
-            <button
-              onClick={() => setShowPhotoPreview(false)}
-              className="absolute -top-10 right-0 p-1 text-white hover:text-slate-300 cursor-pointer"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            <img
-              src={photoDataUrl}
-              alt="HD Evidence Preview"
-              referrerPolicy="no-referrer"
-              className="w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-slate-700 bg-black"
-            />
-          </div>
-        </div>
-      )}
+      {/* Fullscreen Photo Lightbox Preview (Zoom enabled for Admin) */}
+      <ZoomablePhotoModal
+        isOpen={Boolean(showPhotoPreview && photoDataUrl)}
+        imageUrl={photoDataUrl || ''}
+        title={`CONSUMER: ${task.consumerId || (task as any)['Consumer Id'] || ''}`}
+        subtitle={task.consumerName || (task as any)['Name'] || undefined}
+        enableZoom={Boolean(isAdminOrSupervisor)}
+        onClose={() => setShowPhotoPreview(false)}
+      />
 
       {/* Live Full HD GPS Camera Modal */}
       <GpsCameraModal

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import appLogo from './assets/images/power_round_logo_1787860440979.jpg';
 import { Header } from './components/Header';
 import { CategorySelector } from './components/CategorySelector';
@@ -196,9 +196,12 @@ export default function App() {
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>(() => getCachedEntriesSync());
   const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
+  const disconnectionTasksRef = useRef<DisconnectionTask[]>(disconnectionTasks);
+  disconnectionTasksRef.current = disconnectionTasks;
   const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>(() => getCachedWorkOrdersSync());
   const [loading, setLoading] = useState<boolean>(false);
   const lastDataHashRef = useRef<string>('');
+  const loadDataRef = useRef<((silent?: boolean | unknown, forceRefresh?: boolean, throwOnError?: boolean) => Promise<void>) | null>(null);
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
   });
@@ -356,7 +359,7 @@ export default function App() {
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
-      if (!isSilent && entries.length === 0 && disconnectionTasks.length === 0) setLoading(true);
+      if (!isSilent && entries.length === 0 && disconnectionTasksRef.current.length === 0) setLoading(true);
 
       const [data, orders, discRes] = await Promise.all([
         fetchEntries({ refresh: forceRefresh }),
@@ -410,11 +413,16 @@ export default function App() {
         return t;
       });
 
-      const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(validDiscTasks)}`;
+      const safeDiscTasks =
+        validDiscTasks.length > 0 || throwOnError
+          ? validDiscTasks
+          : disconnectionTasksRef.current;
 
-      if (forceRefresh || newHash !== lastDataHashRef.current || (disconnectionTasks.length === 0 && validDiscTasks.length > 0)) {
+      const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(safeDiscTasks)}`;
+
+      if (forceRefresh || newHash !== lastDataHashRef.current || (disconnectionTasksRef.current.length === 0 && safeDiscTasks.length > 0)) {
         lastDataHashRef.current = newHash;
-        setDisconnectionTasks(validDiscTasks);
+        setDisconnectionTasks(safeDiscTasks);
         setEntries(rawEntries);
       }
       if (Array.isArray(orders)) {
@@ -439,6 +447,11 @@ export default function App() {
       setLoading(false);
     }
   };
+  loadDataRef.current = loadData;
+
+  const handleDisconnectionTasksChange = useCallback(() => {
+    loadDataRef.current?.(true, false);
+  }, []);
 
   useEffect(() => {
     if (!currentUser) {
@@ -455,23 +468,26 @@ export default function App() {
 
     lastDataHashRef.current = '';
     lastOrdersHashRef.current = '';
-    setEntries(getCachedEntriesSync());
-    setDisconnectionTasks(getCachedDisconnectionTasksSync());
-    setWorkOrders(getCachedWorkOrdersSync());
+    const cachedEnt = getCachedEntriesSync();
+    const cachedDisc = getCachedDisconnectionTasksSync();
+    const cachedOrd = getCachedWorkOrdersSync();
+    if (cachedEnt.length > 0) setEntries(cachedEnt);
+    if (cachedDisc.length > 0) setDisconnectionTasks(cachedDisc);
+    if (cachedOrd.length > 0) setWorkOrders(cachedOrd);
     loadData(true, false);
 
-    // Single active 10-second background timer per authenticated app session (POWER APP & SHEETS REFRESH)
+    // Single active 10-second non-blocking background timer per authenticated app session (POWER APP & SHEETS REFRESH)
     const interval = setInterval(() => {
       if (!document.hidden && !inFlightRef.current) {
-        loadData(true, true);
+        loadData(true, false);
       }
     }, 10000);
 
     const onFocus = () => {
-      if (!inFlightRef.current) loadData(true, true);
+      if (!inFlightRef.current) loadData(true, false);
     };
     const onVisibilityChange = () => {
-      if (!document.hidden && !inFlightRef.current) loadData(true, true);
+      if (!document.hidden && !inFlightRef.current) loadData(true, false);
     };
 
     window.addEventListener('focus', onFocus);
@@ -632,6 +648,13 @@ export default function App() {
           isAgencyUserSession(session, getCachedDisconnectionTasksSync())
         )))
     );
+
+    const cachedDiscSync = getCachedDisconnectionTasksSync();
+    if (cachedDiscSync.length > 0) setDisconnectionTasks(cachedDiscSync);
+    const cachedEntSync = getCachedEntriesSync();
+    if (cachedEntSync.length > 0) setEntries(cachedEntSync);
+    const cachedOrdSync = getCachedWorkOrdersSync();
+    if (cachedOrdSync.length > 0) setWorkOrders(cachedOrdSync);
 
     setIsAdmin(isUserAdmin);
     if (isUserAdmin) {
@@ -927,7 +950,7 @@ export default function App() {
             </div>
             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
               theme === 'night' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-900 font-extrabold border border-amber-300'
-            }`}>Live</span>
+            }`}>{isAgencyUser ? 'Coming Soon' : 'Live'}</span>
           </button>
 
           <button
@@ -1537,12 +1560,14 @@ export default function App() {
                               <h3 className={`text-sm sm:text-base font-extrabold tracking-tight ${theme === 'night' ? 'text-amber-300' : 'text-slate-900'}`}>
                                 {t.workOrders || 'ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata)'}
                               </h3>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white shadow-2xs">
-                                {workOrders.filter(w => isAdmin || !w.isHidden).length} Live
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full text-white shadow-2xs ${isAgencyUser ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                                {isAgencyUser ? 'Coming Soon' : `${workOrders.filter(w => isAdmin || !w.isHidden).length} Live`}
                               </span>
                             </div>
                             <p className={`text-xs mt-0.5 font-medium ${theme === 'night' ? 'text-slate-300' : 'text-slate-600'}`}>
-                              {t.workOrderNoticeDesc}
+                              {isAgencyUser
+                                ? (currentLanguage === 'bn' ? 'এজেন্সি অ্যাকাউন্টের জন্য ওয়ার্ক অর্ডার ও খাতা শীঘ্রই আসছে (Coming Soon)' : 'Work Order & Khata for Agency accounts is Coming Soon.')
+                                : t.workOrderNoticeDesc}
                             </p>
                           </div>
                         </div>
@@ -1553,7 +1578,11 @@ export default function App() {
                             className="w-full sm:w-auto px-4 py-2 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
                           >
                             <FileSpreadsheet className="w-4 h-4" />
-                            <span>{currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata'}</span>
+                            <span>
+                              {isAgencyUser
+                                ? 'Coming Soon'
+                                : (currentLanguage === 'bn' ? 'ওয়ার্ক অর্ডার ও খাতা খুলুন' : 'Open Work Order & Khata')}
+                            </span>
                           </button>
                         </div>
                       </div>
@@ -1643,7 +1672,7 @@ export default function App() {
                               setActiveFormCategory(null);
                               setActiveTab('entry');
                             }}
-                            onTasksChange={() => loadData(true)}
+                            onTasksChange={handleDisconnectionTasksChange}
                             externalTasks={userVisibleDisconnectionTasks}
                           />
                         </div>
@@ -1851,21 +1880,50 @@ export default function App() {
               {/* VIEW 4: OFFICIAL WORK ORDER & KHATA NOTICE BOARD */}
               {activeTab === 'work-orders' && (
                 <div className="space-y-6 animate-in fade-in duration-200">
-                  <WorkOrderNoticeSection
-                    category="ALL"
-                    currentUser={currentUser}
-                    isAdmin={isAdmin}
-                    lang={currentLanguage}
-                    standalonePage={true}
-                    syncMode="auto"
-                    onStartWorkWithNotice={(notice) => {
-                      setSelectedWorkOrderForEntry(notice);
-                      const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
-                      setSelectedCategory(targetCat);
-                      setActiveFormCategory(targetCat);
-                      setActiveTab('entry');
-                    }}
-                  />
+                  {isAgencyUser ? (
+                    <div className="bg-white dark:bg-slate-900 border-2 border-amber-300 dark:border-amber-500/40 rounded-3xl p-8 sm:p-12 text-center shadow-lg max-w-xl mx-auto mt-6 space-y-5">
+                      <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-xs">
+                        <Clock className="w-8 h-8" />
+                      </div>
+                      <div className="space-y-2">
+                        <span className="inline-block px-3 py-1 rounded-full bg-amber-500 text-slate-950 text-[11px] font-black uppercase tracking-widest shadow-2xs">
+                          Coming Soon
+                        </span>
+                        <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                          {t.workOrders || 'Work Order & Khata'}
+                        </h2>
+                        <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-md mx-auto leading-relaxed font-medium">
+                          {currentLanguage === 'bn'
+                            ? 'এজেন্সি অ্যাকাউন্টের জন্য ওয়ার্ক অর্ডার ও খাতা (Work Order & Khata) ফিচারটি খুব শীঘ্রই আসছে।'
+                            : 'Work Order & Khata feature is Coming Soon for Agency accounts.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('disconnection')}
+                        className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-400 text-white dark:text-slate-950 font-bold rounded-xl text-xs inline-flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        <span>{currentLanguage === 'bn' ? 'Disconnection মডিউলে ফিরে যান' : 'Back to Disconnection'}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <WorkOrderNoticeSection
+                      category="ALL"
+                      currentUser={currentUser}
+                      isAdmin={isAdmin}
+                      lang={currentLanguage}
+                      standalonePage={true}
+                      syncMode="auto"
+                      onStartWorkWithNotice={(notice) => {
+                        setSelectedWorkOrderForEntry(notice);
+                        const targetCat = (notice.category === 'ALL' || !notice.category ? 'NSC' : notice.category) as CategoryType;
+                        setSelectedCategory(targetCat);
+                        setActiveFormCategory(targetCat);
+                        setActiveTab('entry');
+                      }}
+                    />
+                  )}
                 </div>
               )}
 
@@ -1877,7 +1935,7 @@ export default function App() {
                     lang={currentLanguage}
                     initialTab={disconnectionInitialTab}
                     onBack={() => setActiveTab('entry')}
-                    onTasksChange={() => loadData(true)}
+                    onTasksChange={handleDisconnectionTasksChange}
                     externalTasks={userVisibleDisconnectionTasks}
                   />
                 </div>

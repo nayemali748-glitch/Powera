@@ -29,6 +29,7 @@ import {
 } from '../../utils/disconnectionClassifier';
 import { LiveOutstandingModal } from './LiveOutstandingModal';
 import { PaymentReceiptModal } from './PaymentReceiptModal';
+import { ZoomablePhotoModal } from './ZoomablePhotoModal';
 
 interface DisconnectionConsumerCardProps {
   task: DisconnectionTask;
@@ -522,6 +523,14 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
                   src={task.photoUrl}
                   alt="Site Evidence"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    const url = target.src;
+                    const idMatch = url.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+                    if (idMatch && idMatch[1] && !url.includes('/api/drive-proxy/')) {
+                      target.src = `/api/drive-proxy/${idMatch[1]}`;
+                    }
+                  }}
                   className="w-14 h-14 object-cover rounded-lg border border-slate-300 shadow-2xs group-hover:ring-2 group-hover:ring-emerald-500 transition-all"
                 />
                 <div>
@@ -716,29 +725,15 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
         </div>
       )}
 
-      {/* Full HD Evidence Lightbox Modal */}
-      {showHdPhotoModal && task.photoUrl && (
-        <div
-          className="fixed inset-0 z-70 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setShowHdPhotoModal(false)}
-        >
-          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
-            <button
-              type="button"
-              onClick={() => setShowHdPhotoModal(false)}
-              className="absolute -top-10 right-0 p-1.5 text-white hover:text-slate-300 cursor-pointer"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            <img
-              src={task.photoUrl}
-              alt="Full HD Evidence"
-              referrerPolicy="no-referrer"
-              className="w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-slate-700 bg-black"
-            />
-          </div>
-        </div>
-      )}
+      {/* Full HD Evidence Lightbox Modal (Zoom enabled for Admin) */}
+      <ZoomablePhotoModal
+        isOpen={Boolean(showHdPhotoModal && task.photoUrl)}
+        imageUrl={task.photoUrl || ''}
+        title={`${task.consumerName || 'Consumer'} (${displayId})`}
+        subtitle={agencyOrWorkerName ? `Updated by: ${agencyOrWorkerName}` : undefined}
+        enableZoom={isAdmin}
+        onClose={() => setShowHdPhotoModal(false)}
+      />
       {showLiveCheckModal && (
         <LiveOutstandingModal
           task={task}

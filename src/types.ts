@@ -120,7 +120,7 @@ export type ActiveTab = 'entry' | 'admin' | 'my-submissions' | 'performance' | '
 
 export type SyncMode = 'auto' | 'manual';
 
-export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_reports' | 'app_settings' | null;
+export type CornerOptionKey = 'admin_portal' | 'emergency_safety' | 'export_reports' | 'app_settings' | 'change_password' | null;
 
 export interface UserSession {
   id: string;

@@ -88,47 +88,64 @@ function normalizeDisconnectionClassValue(rawVal: unknown): 'DOMESTIC' | 'COMMER
   const normalized = String(rawVal).trim().toLowerCase().replace(/\s+/g, ' ');
   if (!normalized) return '';
 
-  // Exact normalized logical matching (including Rural/Urban suffixes and WBSEDCL Base Class codes in Google Sheets)
+  // Exact normalized logical matching (single-letter WBSEDCL Class codes D/C/I/S/A + full names + Phase suffixes)
   if (
+    normalized === 'd' ||
+    normalized === 'dom' ||
     normalized === 'domestic' ||
     normalized === 'domestic rural' ||
     normalized === 'domestic urban' ||
-    /^d\s*-\s*[13]\s*phase$/.test(normalized) ||
-    /^a\s*-\s*[13]\s*phase$/.test(normalized)
+    normalized.startsWith('domestic ') ||
+    /^d\s*[-_/]\s*[13]?\s*(ph|phase)?/.test(normalized) ||
+    /^d\s*\(/.test(normalized)
   ) {
     return 'DOMESTIC';
   }
 
   if (
+    normalized === 'c' ||
+    normalized === 'comm' ||
     normalized === 'commercial' ||
     normalized === 'commercial rural' ||
     normalized === 'commercial urban' ||
-    /^c\s*-\s*[13]\s*phase$/.test(normalized)
+    normalized.startsWith('commercial ') ||
+    /^c\s*[-_/]\s*[13]?\s*(ph|phase)?/.test(normalized) ||
+    /^c\s*\(/.test(normalized)
   ) {
     return 'COMMERCIAL';
   }
 
   if (
+    normalized === 'i' ||
+    normalized === 'ind' ||
     normalized === 'industrial' ||
     normalized === 'industrial rural' ||
     normalized === 'industrial urban' ||
-    /^i\s*-\s*[13]\s*phase$/.test(normalized)
+    normalized.startsWith('industrial ') ||
+    /^i\s*[-_/]\s*[13]?\s*(ph|phase)?/.test(normalized) ||
+    /^i\s*\(/.test(normalized)
   ) {
     return 'INDUSTRIAL';
   }
 
   if (
+    normalized === 's' ||
+    normalized === 'a' ||
+    normalized === 'agri' ||
     normalized === 'agriculture' ||
     normalized === 'agriculture rural' ||
     normalized === 'agriculture urban' ||
-    normalized === 'stw'
+    normalized.startsWith('agriculture ') ||
+    normalized === 'stw' ||
+    /^[as]\s*[-_/]\s*[13]?\s*(ph|phase)?/.test(normalized) ||
+    /^[as]\s*\(/.test(normalized)
   ) {
     return 'STW';
   }
 
   // Whole-word exact token match (never partial substring match)
   const words = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-  if (words.includes('agriculture') || words.includes('stw')) return 'STW';
+  if (words.includes('agriculture') || words.includes('agri') || words.includes('stw')) return 'STW';
   if (words.includes('industrial')) return 'INDUSTRIAL';
   if (words.includes('commercial')) return 'COMMERCIAL';
   if (words.includes('domestic')) return 'DOMESTIC';

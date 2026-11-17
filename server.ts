@@ -1219,10 +1219,10 @@ async function fetchVerifiedUsersFromSheet(forceRefresh = false): Promise<any[]>
   }
   if (cachedUsersState && Array.isArray(cachedUsersState.users) && cachedUsersState.users.length > 0) {
     const isExpired = Date.now() - cachedUsersState.timestamp >= USERS_STATE_TTL_MS;
-    if (!isExpired) {
-      return cachedUsersState.users;
+    if (isExpired) {
+      refreshVerifiedUsersFromSheetNow().catch(() => {});
     }
-    return await refreshVerifiedUsersFromSheetNow();
+    return cachedUsersState.users;
   }
   return await refreshVerifiedUsersFromSheetNow();
 }
@@ -5836,10 +5836,11 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const workerId = String(query.workerId || '').toLowerCase().trim();
   const workerName = String(query.workerName || '').toLowerCase().trim();
   const forceRefresh = query.refresh === 'true' || query.force === 'true';
+  const blockingRefresh = query.blocking === 'true';
 
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-    const isStale = Date.now() - cachedDisconnectionState.timestamp > 3000;
-    if (forceRefresh || isStale) {
+    const isStale = Date.now() - cachedDisconnectionState.timestamp > 8000;
+    if (blockingRefresh) {
       gasCache.delete('getDisconnectionTasks_{}');
       gasCache.delete('entries_{"category":"Disconnection"}');
       gasCache.delete('entries:{"category":"Disconnection"}');
@@ -5854,6 +5855,9 @@ app.get('/api/disconnection-tasks', async (req, res) => {
         tasks: freshTasks,
         stats
       });
+    }
+    if (forceRefresh || isStale) {
+      refreshDisconnectionFromSheetInBackground();
     }
     const cleanList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState.tasks);
     const stats = computeLocalStats(cleanList, workerId, workerName);
@@ -7907,7 +7911,7 @@ async function startServer() {
       }, 100);
       setTimeout(() => {
         if (activeForegroundGasCount === 0) refreshDisconnectionFromSheetInBackground();
-      }, 2500);
+      }, 1200);
       setTimeout(() => {
         if (activeForegroundGasCount === 0) refreshEntriesFromSheetInBackground();
       }, 5000);

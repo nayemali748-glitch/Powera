@@ -179,8 +179,8 @@ export const GpsCameraModal: React.FC<GpsCameraModalProps> = ({
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: mode },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 }
+          width: { ideal: 2560, min: 1280 },
+          height: { ideal: 1440, min: 720 }
         },
         audio: false
       };
@@ -189,11 +189,22 @@ export const GpsCameraModal: React.FC<GpsCameraModalProps> = ({
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch {
-        // Fallback to standard constraints if Full HD constraint is rejected by device
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: mode },
-          audio: false
-        });
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: mode },
+              width: { ideal: 1920, min: 1280 },
+              height: { ideal: 1080, min: 720 }
+            },
+            audio: false
+          });
+        } catch {
+          // Fallback to standard constraints if Full HD constraint is rejected by device
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: mode },
+            audio: false
+          });
+        }
       }
 
       streamRef.current = mediaStream;
@@ -244,8 +255,8 @@ export const GpsCameraModal: React.FC<GpsCameraModalProps> = ({
       let width = video.videoWidth || 1920;
       let height = video.videoHeight || 1080;
 
-      // Cap max dimension at 1920px while preserving aspect ratio
-      const maxDim = 1920;
+      // Preserve up to 2560px crisp resolution while maintaining aspect ratio
+      const maxDim = 2560;
       if (width > height && width > maxDim) {
         height = Math.round((height * maxDim) / width);
         width = maxDim;
@@ -279,7 +290,7 @@ export const GpsCameraModal: React.FC<GpsCameraModalProps> = ({
         subText: `WORKER: ${workerName} | ${dateStr} ${timeStr}`
       });
 
-      const hdDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const hdDataUrl = canvas.toDataURL('image/jpeg', 0.95);
       setCapturedPreview(hdDataUrl);
       stopCameraStream();
     } catch (err) {
@@ -298,8 +309,8 @@ export const GpsCameraModal: React.FC<GpsCameraModalProps> = ({
       const dateStr = getNowDateDDMMYYYY();
       const timeStr = getNowTime12Hour();
       const hdCompressed = await compressImageFile(file, {
-        maxDimension: 1920,
-        quality: 0.92,
+        maxDimension: 2560,
+        quality: 0.95,
         watermarkText: watermarkTitle,
         gpsText: formattedGpsLine,
         addressText: resolvedAddress || addressHint || undefined,

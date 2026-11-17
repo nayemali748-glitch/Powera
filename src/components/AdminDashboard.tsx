@@ -57,6 +57,7 @@ import { EditEntryModal } from './EditEntryModal';
 import { WorkOrderNoticeSection } from './WorkOrderNoticeSection';
 import { DisconnectionPerformanceDashboard } from './DisconnectionPerformanceDashboard';
 import { UploadPaymentDataScreen } from './UploadPaymentDataScreen';
+import { ZoomablePhotoModal } from './disconnection/ZoomablePhotoModal';
 import { Language, translations } from '../utils/translations';
 import { cleanNameOnly } from '../utils/entryNormalizer';
 import { getReissueLockState, cleanDisconnectionNotes } from '../utils/disconnectionClassifier';
@@ -101,6 +102,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   forceRefreshState = 'idle',
   onForceSystemRefresh,
 }) => {
+  const [zoomEntryPhotoUrl, setZoomEntryPhotoUrl] = useState<string | null>(null);
   const t = translations[lang] || translations.en;
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
@@ -2804,7 +2806,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         Captured by Lineman / Staff at field location
                       </div>
                     </div>
-                    <div className="relative group rounded-lg overflow-hidden border border-emerald-300 bg-slate-950">
+                    <div
+                      onClick={() => setZoomEntryPhotoUrl(selectedEntry.photoUrl || null)}
+                      className="relative group rounded-lg overflow-hidden border border-emerald-300 bg-slate-950 cursor-zoom-in"
+                      title="Click to Zoom HD Photo"
+                    >
                       <img 
                         src={selectedEntry.photoUrl} 
                         alt="Field evidence" 
@@ -2819,6 +2825,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           }
                         }}
                       />
+                      <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-white text-[10px] font-bold opacity-90 group-hover:opacity-100">
+                        🔍 Click to Zoom HD
+                      </span>
                     </div>
                   </div>
                 )}
@@ -2868,6 +2877,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      <ZoomablePhotoModal
+        isOpen={Boolean(zoomEntryPhotoUrl)}
+        imageUrl={zoomEntryPhotoUrl || ''}
+        title={selectedEntry?.consumerName || selectedEntry?.id || 'Field Evidence'}
+        subtitle={selectedEntry?.workerName ? `Updated by: ${selectedEntry.workerName}` : undefined}
+        enableZoom={true}
+        onClose={() => setZoomEntryPhotoUrl(null)}
+      />
 
       {/* Admin Edit / Correction Modal */}
       <EditEntryModal
