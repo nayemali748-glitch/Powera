@@ -346,10 +346,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   return (
     <div
       style={{
-        paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)',
-        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)',
+        paddingTop: 'max(env(safe-area-inset-top, 0px), 8px)',
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10px)',
       }}
-      className="fixed inset-0 h-dvh w-full bg-[#020917] text-white flex flex-col items-center overflow-y-auto overflow-x-hidden overscroll-y-contain px-3 sm:px-4 font-sans select-none"
+      className="fixed inset-0 h-dvh w-full bg-[#020917] text-white flex flex-col items-center overflow-y-auto overflow-x-hidden overscroll-y-contain px-2 sm:px-4 md:px-6 font-sans select-none"
     >
       {/* Ambient Desktop Surround Backdrop */}
       <div className="fixed inset-0 pointer-events-none z-0 bg-[#020917]">
@@ -361,8 +361,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         />
       </div>
 
-      {/* Main Portrait Viewport Precision Matching Original Photo */}
-      <div className="relative z-10 my-auto w-full max-w-[440px] shrink-0 rounded-[32px] sm:rounded-[36px] flex flex-col justify-between items-center px-5 sm:px-6 pt-5 pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
+      {/* Main Responsive Viewport Container: Fits Mobile, Tablet, Laptop & Computer */}
+      <div className="relative z-10 my-auto w-full max-w-[440px] sm:max-w-[500px] md:max-w-[560px] lg:max-w-[920px] xl:max-w-[980px] shrink-0 rounded-[26px] sm:rounded-[34px] flex flex-col justify-between items-center px-3.5 sm:px-6 lg:px-8 pt-3.5 sm:pt-5 pb-4 sm:pb-6 bg-[#030c1d] shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 overflow-hidden">
         {/* ================================================================= */}
         {/* BACKGROUND ARTWORK: STORMY SKY, PYLONS, LIGHTNING, NEON WAVES     */}
         {/* ================================================================= */}
@@ -507,79 +507,85 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         {/* ================================================================= */}
         {/* TOP BAR: PLAY STORE INSTALL BUTTON & LANGUAGE SELECTOR PILL       */}
         {/* ================================================================= */}
-        <div className="relative z-20 w-full flex items-center justify-between pt-0.5 mb-1">
+        <div className="relative z-20 w-full flex items-center justify-between pt-0.5 mb-2 lg:mb-4">
           <PWAInstallButton lang={lang} variant="login-pill" />
           <button
             type="button"
             onClick={onOpenLanguageModal}
-            className="px-3.5 py-1.5 rounded-full bg-[#04152d]/85 hover:bg-[#082246] text-white border-[1.5px] border-[#00e5ff]/85 shadow-[0_0_14px_rgba(0,229,255,0.38)] flex items-center gap-1.5 text-[13px] font-bold transition-all cursor-pointer backdrop-blur-md active:scale-95 ml-auto"
+            className="px-3 sm:px-3.5 py-1.5 rounded-full bg-[#04152d]/85 hover:bg-[#082246] text-white border-[1.5px] border-[#00e5ff]/85 shadow-[0_0_14px_rgba(0,229,255,0.38)] flex items-center gap-1.5 text-xs sm:text-[13px] font-bold transition-all cursor-pointer backdrop-blur-md active:scale-95 ml-auto"
             title="Change Language"
           >
-            <Globe className="w-[17px] h-[17px] text-[#00e5ff]" />
+            <Globe className="w-4 h-4 sm:w-[17px] sm:h-[17px] text-[#00e5ff]" />
             <span className="uppercase tracking-wider">{lang}</span>
-            <ChevronDown className="w-4 h-4 text-white/90 stroke-[2.5]" />
+            <ChevronDown className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white/90 stroke-[2.5]" />
           </button>
         </div>
 
         {/* ================================================================= */}
         {/* CENTER EMBLEM, TITLE, SUBTITLES & NEON GLASS LOGIN CARD           */}
+        {/* Responsive: Stacked on Mobile/Tablet, 2-Column on Laptop/Desktop  */}
         {/* ================================================================= */}
-        <div className="relative z-10 w-full flex flex-col items-center my-auto py-2">
-          {/* =============================================================== */}
-          {/* EXACT CIRCULAR "POWER OF CONSTRUCTION" EMBLEM                   */}
-          {/* =============================================================== */}
-          <div className="relative mb-3 flex items-center justify-center shrink-0">
-            {/* Top Orange-Gold Neon Aura & Bottom Electric-Cyan Neon Aura */}
-            <div
-              className="absolute -inset-2.5 rounded-full blur-md opacity-95 pointer-events-none"
-              style={{
-                background:
-                  'linear-gradient(180deg, rgba(251,191,36,0.92) 0%, rgba(245,158,11,0.55) 52%, rgba(0,229,255,0.92) 100%)',
-              }}
-            />
-
-            {/* Exact Circular Emblem Photo */}
-            <div className="relative w-[120px] h-[120px] sm:w-[136px] sm:h-[136px] rounded-full overflow-hidden shadow-[0_0_30px_rgba(251,191,36,0.6),0_10px_24px_rgba(0,229,255,0.6)] bg-[#041428] flex items-center justify-center">
-              <img
-                src={powerEmblemLogo}
-                alt="POWER OF CONSTRUCTION"
-                className="w-full h-full object-cover scale-[1.21] rounded-full select-none pointer-events-none"
-                referrerPolicy="no-referrer"
+        <div className="relative z-10 w-full flex flex-col lg:grid lg:grid-cols-12 lg:items-center lg:gap-8 my-auto py-1 sm:py-2">
+          {/* Brand Column (Top on Mobile/Tablet, Left on Laptop/Desktop) */}
+          <div className="lg:col-span-5 flex flex-col items-center text-center w-full">
+            {/* Circular Emblem */}
+            <div className="relative mb-2 sm:mb-3 lg:mb-4 flex items-center justify-center shrink-0">
+              <div
+                className="absolute -inset-2 sm:-inset-2.5 rounded-full blur-md opacity-95 pointer-events-none"
+                style={{
+                  background:
+                    'linear-gradient(180deg, rgba(251,191,36,0.92) 0%, rgba(245,158,11,0.55) 52%, rgba(0,229,255,0.92) 100%)',
+                }}
               />
+
+              <div className="relative w-[86px] h-[86px] sm:w-[114px] sm:h-[114px] lg:w-[152px] lg:h-[152px] xl:w-[164px] xl:h-[164px] rounded-full overflow-hidden shadow-[0_0_30px_rgba(251,191,36,0.6),0_10px_24px_rgba(0,229,255,0.6)] bg-[#041428] flex items-center justify-center">
+                <img
+                  src={powerEmblemLogo}
+                  alt="POWER OF CONSTRUCTION"
+                  className="w-full h-full object-cover scale-[1.21] rounded-full select-none pointer-events-none"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Main Title: Power of Construction */}
-          <h1 className="text-[28px] sm:text-[33px] font-black tracking-tight leading-none text-center flex items-center justify-center gap-2 whitespace-nowrap mt-1 shrink-0">
-            <span className="text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
-              Power of
-            </span>
-            <span
-              className="text-[#29b6f6]"
-              style={{
-                textShadow: '0 0 20px rgba(41, 182, 246, 0.65)',
-              }}
-            >
-              Construction
-            </span>
-          </h1>
+            {/* Main Title: Power of Construction */}
+            <h1 className="text-[clamp(1.3rem,5.4vw,1.9rem)] sm:text-[29px] lg:text-[31px] xl:text-[34px] font-black tracking-tight leading-tight text-center flex flex-wrap items-center justify-center gap-x-1.5 sm:gap-x-2 mt-0.5 shrink-0">
+              <span className="text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
+                Power of
+              </span>
+              <span
+                className="text-[#29b6f6]"
+                style={{
+                  textShadow: '0 0 20px rgba(41, 182, 246, 0.65)',
+                }}
+              >
+                Construction
+              </span>
+            </h1>
 
-          {/* Subtitle 1: App Developed By Nayem with Flanking Golden Lines */}
-          <div className="w-full flex items-center justify-center gap-2 mt-2.5 mb-4 shrink-0">
-            <span className="h-[1.5px] w-12 sm:w-16 bg-gradient-to-r from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
-            <span className="text-[13.5px] sm:text-[14.5px] font-bold text-[#fbbf24] tracking-wide whitespace-nowrap drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
-              App Developed By Nayem
-            </span>
-            <span className="h-[1.5px] w-12 sm:w-16 bg-gradient-to-l from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
+            {/* Subtitle 1: App Developed By Nayem with Flanking Golden Lines */}
+            <div className="w-full flex items-center justify-center gap-2 mt-1.5 sm:mt-2 mb-3 lg:mb-3 shrink-0">
+              <span className="h-[1.5px] w-8 sm:w-12 lg:w-10 bg-gradient-to-r from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
+              <span className="text-xs sm:text-[13.5px] lg:text-[14px] font-bold text-[#fbbf24] tracking-wide whitespace-nowrap drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
+                App Developed By Nayem
+              </span>
+              <span className="h-[1.5px] w-8 sm:w-12 lg:w-10 bg-gradient-to-l from-transparent via-[#f59e0b] to-[#fbbf24] rounded-full" />
+            </div>
+
+            {/* Desktop/Laptop Showcase Tagline Pill */}
+            <div className="hidden lg:inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#061833]/85 border border-[#38bdf8]/40 text-xs font-semibold text-cyan-200 shadow-[0_0_16px_rgba(0,229,255,0.18)]">
+              <Zap className="w-3.5 h-3.5 text-[#fbbf24] fill-[#fbbf24]" />
+              <span>WBSEDCL Field &amp; Agency Operations Portal</span>
+            </div>
           </div>
 
           {/* =============================================================== */}
           {/* NEON DUAL GOLD & CYAN BORDERED FROSTED GLASS LOGIN CARD         */}
           {/* =============================================================== */}
-          <div className="w-full relative rounded-[24px] p-[2px] shadow-[0_16px_40px_rgba(0,0,0,0.78),0_0_24px_rgba(0,210,255,0.2)]">
+          <div className="lg:col-span-7 w-full relative rounded-[22px] sm:rounded-[24px] p-[2px] shadow-[0_16px_40px_rgba(0,0,0,0.78),0_0_24px_rgba(0,210,255,0.2)]">
             {/* Dual Gold (Top-Left & Bottom-Right) + Cyan (Top-Right & Bottom-Left) Border */}
             <div
-              className="absolute inset-0 rounded-[24px] pointer-events-none"
+              className="absolute inset-0 rounded-[22px] sm:rounded-[24px] pointer-events-none"
               style={{
                 background:
                   'linear-gradient(135deg, #fde047 0%, #f59e0b 16%, #22d3ee 36%, #00e5ff 50%, #38bdf8 68%, #f59e0b 86%, #fde047 100%)',
@@ -594,7 +600,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
             {/* Inner Frosted Dark Navy Card */}
             <div
-              className="relative rounded-[22px] px-4 sm:px-6 py-5 sm:py-6 space-y-4 backdrop-blur-xl"
+              className="relative rounded-[20px] sm:rounded-[22px] px-3.5 sm:px-6 py-4 sm:py-5 space-y-3 sm:space-y-3.5 backdrop-blur-xl"
               style={{
                 background:
                   'linear-gradient(180deg, rgba(10, 30, 64, 0.86) 0%, rgba(6, 18, 42, 0.92) 100%)',
@@ -656,7 +662,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               {/* METHOD (A): USER ID + PASSWORD / PIN */}
               {loginMethod === 'password' ? (
-                <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
+                <form onSubmit={handleSubmit} autoComplete="off" className="space-y-3 sm:space-y-3.5">
                   {/* Hidden dummy inputs to prevent browser autofill */}
                   <input
                     type="text"
@@ -674,12 +680,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   />
 
                   {/* Field 1: User ID / Phone Number */}
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label
                       htmlFor="auth_login_id"
-                      className="flex items-center gap-2.5 text-[15px] font-semibold text-white tracking-wide"
+                      className="flex items-center gap-2 text-xs sm:text-[14.5px] font-semibold text-white tracking-wide"
                     >
-                      <User className="w-[19px] h-[19px] text-[#00e5ff] stroke-[2.2]" />
+                      <User className="w-4 h-4 sm:w-[18px] sm:h-[18px] text-[#00e5ff] stroke-[2.2]" />
                       <span>
                         User ID / Phone Number{' '}
                         <span className="text-[#ef4444] font-bold">*</span>
@@ -687,7 +693,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     </label>
 
                     <div className="relative">
-                      <User className="w-5 h-5 text-[#94a3b8] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#94a3b8] absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         type="text"
                         name="auth_login_id"
@@ -700,22 +706,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                         autoCorrect="off"
                         autoCapitalize="none"
                         spellCheck={false}
-                        className="w-full h-[52px] pl-12 pr-4 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-wider"
+                        className="w-full h-[46px] sm:h-[50px] pl-10 sm:pl-12 pr-4 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[14px] sm:rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-wider"
                       />
                     </div>
                   </div>
 
                   {/* Field 2: Password / PIN */}
-                  <div className="space-y-2 pt-0.5">
+                  <div className="space-y-1.5 pt-0.5">
                     <label
                       htmlFor="auth_login_pwd"
-                      className="flex items-center gap-2.5 text-[15px] font-semibold text-white tracking-wide"
+                      className="flex items-center gap-2 text-xs sm:text-[14.5px] font-semibold text-white tracking-wide"
                     >
                       {/* Key Icon Oriented Exactly Like Photo (Bow Top-Right, Blade Bottom-Left) */}
                       <svg
                         viewBox="0 0 24 24"
                         fill="none"
-                        className="w-[19px] h-[19px] text-[#00e5ff] shrink-0"
+                        className="w-4 h-4 sm:w-[18px] sm:h-[18px] text-[#00e5ff] shrink-0"
                         stroke="currentColor"
                         strokeWidth="2.2"
                         strokeLinecap="round"
@@ -731,7 +737,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     </label>
 
                     <div className="relative">
-                      <Lock className="w-5 h-5 text-[#94a3b8] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Lock className="w-4 h-4 sm:w-5 sm:h-5 text-[#94a3b8] absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         type={showPassword ? 'text' : 'password'}
                         name="auth_login_pwd"
@@ -741,24 +747,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder=""
                         autoComplete="new-password"
-                        className="w-full h-[52px] pl-12 pr-12 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-wider"
+                        className="w-full h-[46px] sm:h-[50px] pl-10 sm:pl-12 pr-11 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[14px] sm:rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-wider"
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-white cursor-pointer"
+                        className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-white cursor-pointer"
                         tabIndex={-1}
                       >
                         {showPassword ? (
-                          <EyeOff className="w-5 h-5" />
+                          <EyeOff className="w-4 h-4 sm:w-5 sm:h-5" />
                         ) : (
-                          <Eye className="w-5 h-5" />
+                          <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
                         )}
                       </button>
                     </div>
 
                     {/* Forgot Password Link */}
-                    <div className="flex justify-end pt-1">
+                    <div className="flex justify-end pt-0.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -779,15 +785,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   </div>
 
                   {/* Glowing Electric Cyan-Blue Pill Sign In Button with Specular Top/Bottom Flares */}
-                  <div className="pt-2 relative">
+                  <div className="pt-1 relative">
                     {/* Top & Bottom Specular Light Flares on Button Rim */}
-                    <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-28 h-2 bg-cyan-200/90 blur-xs rounded-full pointer-events-none z-10" />
+                    <div className="absolute top-0.5 left-1/2 -translate-x-1/2 w-28 h-2 bg-cyan-200/90 blur-xs rounded-full pointer-events-none z-10" />
                     <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-32 h-2.5 bg-cyan-300/95 blur-xs rounded-full pointer-events-none z-10" />
 
                     <button
                       type="submit"
                       disabled={loading}
-                      className="w-full h-[56px] px-6 rounded-full text-white font-bold text-[18px] tracking-wide transition-all flex items-center justify-center gap-2.5 active:scale-[0.99] cursor-pointer disabled:opacity-60 border-[1.5px] border-[#a5f3fc] relative overflow-hidden"
+                      className="w-full h-[48px] sm:h-[54px] px-6 rounded-full text-white font-bold text-base sm:text-[18px] tracking-wide transition-all flex items-center justify-center gap-2.5 active:scale-[0.99] cursor-pointer disabled:opacity-60 border-[1.5px] border-[#a5f3fc] relative overflow-hidden"
                       style={{
                         background:
                           'linear-gradient(90deg, #00e1ff 0%, #0088ff 48%, #0044ff 100%)',
@@ -813,14 +819,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 </form>
               ) : (
                 /* METHOD (B): MOBILE NUMBER + OTP (2FACTOR SMS) */
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-3.5">
                   {/* Field 1: Registered Mobile Number */}
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label
                       htmlFor="auth_otp_mobile"
-                      className="flex items-center gap-2.5 text-[15px] font-semibold text-white tracking-wide"
+                      className="flex items-center gap-2 text-xs sm:text-[14.5px] font-semibold text-white tracking-wide"
                     >
-                      <Phone className="w-[19px] h-[19px] text-[#00e5ff] stroke-[2.2]" />
+                      <Phone className="w-4 h-4 sm:w-[18px] sm:h-[18px] text-[#00e5ff] stroke-[2.2]" />
                       <span>
                         Registered Mobile Number{' '}
                         <span className="text-[#ef4444] font-bold">*</span>
@@ -828,7 +834,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     </label>
 
                     <div className="relative">
-                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[#38bdf8] font-bold text-sm pointer-events-none font-mono">
+                      <div className="absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 text-[#38bdf8] font-bold text-sm pointer-events-none font-mono">
                         +91
                       </div>
                       <input
@@ -841,20 +847,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                           setMobileNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
                         }
                         placeholder="10-digit mobile number"
-                        className="w-full h-[52px] pl-14 pr-4 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-widest disabled:opacity-75"
+                        className="w-full h-[46px] sm:h-[50px] pl-12 sm:pl-14 pr-4 bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[14px] sm:rounded-[16px] text-sm sm:text-base font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-widest disabled:opacity-75"
                       />
                     </div>
                   </div>
 
                   {/* Field 2: 6-Digit OTP (Shown after OTP is dispatched) */}
                   {otpSent && (
-                    <div className="space-y-2 pt-0.5 animate-in fade-in duration-200">
+                    <div className="space-y-1.5 pt-0.5 animate-in fade-in duration-200">
                       <div className="flex items-center justify-between">
                         <label
                           htmlFor="auth_otp_code"
-                          className="flex items-center gap-2 text-[15px] font-semibold text-white tracking-wide"
+                          className="flex items-center gap-2 text-xs sm:text-[14.5px] font-semibold text-white tracking-wide"
                         >
-                          <Key className="w-[18px] h-[18px] text-[#00e5ff]" />
+                          <Key className="w-4 h-4 sm:w-[18px] sm:h-[18px] text-[#00e5ff]" />
                           <span>Enter 6-Digit OTP</span>
                         </label>
                         <button
@@ -880,11 +886,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                           onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                           placeholder="• • • • • •"
                           autoFocus
-                          className="w-full h-[52px] px-4 text-center bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[16px] text-xl font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-[0.45em]"
+                          className="w-full h-[46px] sm:h-[50px] px-4 text-center bg-[#0d264c]/80 border-[1.5px] border-[#38bdf8]/50 rounded-[14px] sm:rounded-[16px] text-lg sm:text-xl font-bold text-white focus:bg-[#102e5c] focus:outline-none focus:border-[#00e5ff] focus:shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all font-mono tracking-[0.45em]"
                         />
                       </div>
 
-                      <div className="flex justify-between items-center pt-1 text-xs">
+                      <div className="flex justify-between items-center pt-0.5 text-xs">
                         <span className="text-slate-400">Didn't receive code?</span>
                         <button
                           type="button"
@@ -902,15 +908,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   )}
 
                   {/* OTP Action Button */}
-                  <div className="pt-2 relative">
-                    <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-28 h-2 bg-cyan-200/90 blur-xs rounded-full pointer-events-none z-10" />
+                  <div className="pt-1 relative">
+                    <div className="absolute top-0.5 left-1/2 -translate-x-1/2 w-28 h-2 bg-cyan-200/90 blur-xs rounded-full pointer-events-none z-10" />
                     <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-32 h-2.5 bg-cyan-300/95 blur-xs rounded-full pointer-events-none z-10" />
 
                     <button
                       type="button"
                       disabled={loading || (otpSent && otp.length < 4) || (!otpSent && mobileNumber.length !== 10)}
                       onClick={otpSent ? handleVerifyLoginOtp : handleSendLoginOtp}
-                      className="w-full h-[56px] px-6 rounded-full text-white font-bold text-[18px] tracking-wide transition-all flex items-center justify-center gap-2.5 active:scale-[0.99] cursor-pointer disabled:opacity-60 border-[1.5px] border-[#a5f3fc] relative overflow-hidden"
+                      className="w-full h-[48px] sm:h-[54px] px-6 rounded-full text-white font-bold text-base sm:text-[18px] tracking-wide transition-all flex items-center justify-center gap-2.5 active:scale-[0.99] cursor-pointer disabled:opacity-60 border-[1.5px] border-[#a5f3fc] relative overflow-hidden"
                       style={{
                         background:
                           'linear-gradient(90deg, #00e1ff 0%, #0088ff 48%, #0044ff 100%)',
@@ -944,12 +950,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               )}
 
                 {/* Authorized users only • Security Notice Box */}
-                <div className="pt-1.5">
-                  <div className="px-4 py-3.5 bg-[#06152d]/80 border border-[#94a3b8]/45 rounded-[16px] flex items-center gap-3.5 text-[13.5px] sm:text-[14px] text-[#e2e8f0]">
+                <div className="pt-1">
+                  <div className="px-3.5 sm:px-4 py-2.5 sm:py-3 bg-[#06152d]/80 border border-[#94a3b8]/45 rounded-[14px] sm:rounded-[16px] flex items-center gap-3 text-xs sm:text-[13.5px] text-[#e2e8f0]">
                     <svg
                       viewBox="0 0 24 24"
                       fill="none"
-                      className="w-6 h-6 text-[#22c55e] shrink-0"
+                      className="w-5 h-5 sm:w-6 sm:h-6 text-[#22c55e] shrink-0"
                       stroke="currentColor"
                       strokeWidth="2.2"
                       strokeLinecap="round"
@@ -958,12 +964,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                       <path d="m9 12 2 2 4-4" />
                     </svg>
-                    <div className="h-8 w-[1px] bg-[#94a3b8]/45 shrink-0" />
-                    <div className="leading-snug text-left">
+                    <div className="h-7 w-[1px] bg-[#94a3b8]/45 shrink-0" />
+                    <div className="leading-snug text-left min-w-0">
                       <div className="font-bold text-white">
                         Authorized users only
                       </div>
-                      <div className="text-xs sm:text-[12.5px] text-slate-300 font-normal">
+                      <div className="text-[11px] sm:text-xs text-slate-300 font-normal">
                         Keep your credentials safe and secure.
                       </div>
                     </div>
@@ -976,69 +982,69 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         {/* ================================================================= */}
         {/* FOOTER: 4-COLUMN SYSTEM STATUS, APP VERSION, SUPPORT, COPYRIGHT   */}
         {/* ================================================================= */}
-        <div className="relative z-10 mt-6 w-full max-w-[440px] flex flex-col items-center">
+        <div className="relative z-10 mt-3.5 sm:mt-5 w-full flex flex-col items-center">
           {/* Glowing 4-Column Bar with Golden/Cyan Border */}
           <div
-            className="w-full rounded-t-[20px] sm:rounded-t-[22px] px-2 py-3 bg-[#030e22]/95 backdrop-blur-xl border-t-[1.5px] border-x-[1.5px] border-[#facc15]/85"
+            className="w-full rounded-t-[18px] sm:rounded-t-[22px] px-1.5 sm:px-4 py-2.5 sm:py-3 bg-[#030e22]/95 backdrop-blur-xl border-t-[1.5px] border-x-[1.5px] border-[#facc15]/85"
             style={{
               boxShadow:
                 '0 -4px 22px rgba(250, 204, 21, 0.22), 0 0 16px rgba(0, 229, 255, 0.16)',
             }}
           >
-            <div className="flex items-center justify-between divide-x divide-[#38bdf8]/35">
+            <div className="grid grid-cols-4 divide-x divide-[#38bdf8]/35">
               {/* Column 1: SYSTEM STATUS */}
-              <div className="flex-1 flex flex-col items-center justify-center px-1 text-center min-w-0">
-                <Activity className="w-[17px] h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
-                <span className="text-[9px] sm:text-[9.5px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
+              <div className="flex flex-col items-center justify-center px-1 text-center min-w-0">
+                <Activity className="w-4 h-4 sm:w-[17px] sm:h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
+                <span className="text-[8px] sm:text-[9.5px] lg:text-[10px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
                   SYSTEM STATUS
                 </span>
-                <div className="flex items-center justify-center gap-1 text-[10px] sm:text-[10.5px] font-bold text-[#22c55e] leading-tight mt-0.5">
+                <div className="flex items-center justify-center gap-1 text-[9.5px] sm:text-[10.5px] lg:text-[11px] font-bold text-[#22c55e] leading-tight mt-0.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] shadow-[0_0_6px_#22c55e]" />
                   <span>Online</span>
                 </div>
-                <span className="text-[7.5px] sm:text-[8px] text-slate-400 leading-tight mt-0.5 truncate max-w-full">
+                <span className="hidden sm:block text-[8px] lg:text-[9px] text-slate-400 leading-tight mt-0.5 truncate max-w-full">
                   Service is operational
                 </span>
               </div>
 
               {/* Column 2: APP VERSION */}
-              <div className="flex-1 flex flex-col items-center justify-center px-1 text-center min-w-0">
-                <Code2 className="w-[17px] h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
-                <span className="text-[9px] sm:text-[9.5px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
+              <div className="flex flex-col items-center justify-center px-1 text-center min-w-0">
+                <Code2 className="w-4 h-4 sm:w-[17px] sm:h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
+                <span className="text-[8px] sm:text-[9.5px] lg:text-[10px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
                   APP VERSION
                 </span>
-                <span className="text-[10px] sm:text-[10.5px] font-bold text-slate-100 leading-tight mt-0.5">
+                <span className="text-[9.5px] sm:text-[10.5px] lg:text-[11px] font-bold text-slate-100 leading-tight mt-0.5">
                   v1.0.0
                 </span>
-                <span className="text-[7.5px] sm:text-[8px] text-slate-400 leading-tight mt-0.5 truncate max-w-full">
+                <span className="hidden sm:block text-[8px] lg:text-[9px] text-slate-400 leading-tight mt-0.5 truncate max-w-full">
                   Latest version
                 </span>
               </div>
 
               {/* Column 3: SUPPORT */}
-              <div className="flex-1 flex flex-col items-center justify-center px-1 text-center min-w-0">
-                <Headphones className="w-[17px] h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
-                <span className="text-[9px] sm:text-[9.5px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
+              <div className="flex flex-col items-center justify-center px-1 text-center min-w-0">
+                <Headphones className="w-4 h-4 sm:w-[17px] sm:h-[17px] text-[#00e5ff] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]" />
+                <span className="text-[8px] sm:text-[9.5px] lg:text-[10px] font-bold text-slate-200 tracking-wider uppercase leading-tight">
                   SUPPORT
                 </span>
-                <span className="text-[8.5px] sm:text-[9px] text-slate-300 leading-tight mt-0.5">
+                <span className="hidden sm:block text-[8.5px] lg:text-[9.5px] text-slate-300 leading-tight mt-0.5">
                   Need help?
                 </span>
                 <a
                   href="tel:8695716192"
-                  className="text-[8.5px] sm:text-[9px] font-semibold text-[#00e5ff] hover:underline leading-tight mt-0.5 truncate max-w-full cursor-pointer"
+                  className="text-[8.5px] sm:text-[9.5px] lg:text-[10px] font-semibold text-[#00e5ff] hover:underline leading-tight mt-0.5 truncate max-w-full cursor-pointer"
                 >
                   Contact support
                 </a>
               </div>
 
               {/* Column 4: COPYRIGHT */}
-              <div className="flex-1 flex flex-col items-center justify-center px-1 text-center min-w-0">
-                <Copyright className="w-[17px] h-[17px] text-[#facc15] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(250,204,21,0.8)]" />
-                <span className="text-[7.5px] sm:text-[8px] text-slate-300 leading-tight text-center">
+              <div className="flex flex-col items-center justify-center px-1 text-center min-w-0">
+                <Copyright className="w-4 h-4 sm:w-[17px] sm:h-[17px] text-[#facc15] stroke-[2.2] mb-1 drop-shadow-[0_0_6px_rgba(250,204,21,0.8)]" />
+                <span className="text-[7.5px] sm:text-[8.5px] lg:text-[9.5px] text-slate-300 leading-tight text-center">
                   © 2026 Power of Construction.
                 </span>
-                <span className="text-[7px] sm:text-[7.5px] text-slate-400 leading-tight mt-0.5 whitespace-nowrap">
+                <span className="text-[7px] sm:text-[8px] lg:text-[9px] text-slate-400 leading-tight mt-0.5 whitespace-nowrap">
                   All Rights Reserved.
                 </span>
               </div>
@@ -1046,15 +1052,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </div>
 
           {/* Centered Yellow Tagline with Lightning Bolt */}
-          <div className="flex items-center justify-center gap-2 mt-2.5 mb-1 w-full px-2">
-            <span className="h-[1px] flex-1 max-w-[80px] bg-gradient-to-r from-transparent to-[#f59e0b]/90" />
+          <div className="flex items-center justify-center gap-2 mt-2 mb-0.5 w-full px-2">
+            <span className="h-[1px] flex-1 max-w-[90px] bg-gradient-to-r from-transparent to-[#f59e0b]/90" />
             <div className="flex items-center gap-1.5 text-[#fbbf24]">
               <Zap className="w-3.5 h-3.5 text-[#fbbf24] fill-[#fbbf24] drop-shadow-[0_0_6px_rgba(251,191,36,0.9)]" />
               <span className="text-[11px] sm:text-xs font-semibold tracking-wide text-[#fbbf24] drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] whitespace-nowrap">
                 Powering Every Connection.
               </span>
             </div>
-            <span className="h-[1px] flex-1 max-w-[80px] bg-gradient-to-l from-transparent to-[#f59e0b]/90" />
+            <span className="h-[1px] flex-1 max-w-[90px] bg-gradient-to-l from-transparent to-[#f59e0b]/90" />
           </div>
         </div>
 
@@ -1062,8 +1068,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         {/* FORGOT PASSWORD MODAL (2FACTOR OTP VERIFICATION)                  */}
         {/* ================================================================= */}
         {showForgotPassword && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-            <div className="relative w-full max-w-[420px] rounded-[24px] p-[2px] shadow-2xl overflow-hidden font-sans">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="relative w-full max-w-[420px] max-h-[90dvh] rounded-[24px] p-[2px] shadow-2xl overflow-hidden font-sans">
               {/* Dual Gold & Cyan Neon Border */}
               <div
                 className="absolute inset-0 rounded-[24px] pointer-events-none"
@@ -1072,7 +1078,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 }}
               />
 
-              <div className="relative rounded-[22px] bg-[#030d22] px-5 sm:px-6 py-6 space-y-4">
+              <div className="relative rounded-[22px] bg-[#030d22] px-4 sm:px-6 py-5 sm:py-6 space-y-3.5 max-h-[calc(90dvh-4px)] overflow-y-auto">
                 {/* Header with Close */}
                 <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
                   <div className="flex items-center gap-2 text-white">

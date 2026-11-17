@@ -84,6 +84,7 @@ import {
   getDeduplicatedUpdatedTasks,
   getTodayYMD
 } from './disconnection/DisconnectionDailyReportModal';
+import { AgencyLastUpdatesModal } from './disconnection/AgencyLastUpdatesModal';
 
 export type DisconnectionTab = 'DASHBOARD' | 'UPLOAD' | 'REPORT' | 'VIEW_LIST';
 
@@ -95,6 +96,7 @@ interface DisconnectionTaskManagementProps {
   initialTab?: DisconnectionTab;
   onTabChange?: (tab: DisconnectionTab) => void;
   externalTasks?: DisconnectionTask[];
+  allExternalTasks?: DisconnectionTask[];
 }
 
 export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementProps> = ({
@@ -104,7 +106,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   onTasksChange,
   initialTab = 'VIEW_LIST',
   onTabChange,
-  externalTasks
+  externalTasks,
+  allExternalTasks
 }) => {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || currentUser?.idNo === 'ADMIN' || currentUser?.idNo === '8695716192';
   const isAgency = !isAdmin && (
@@ -147,6 +150,12 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     if (Array.isArray(externalTasks) && externalTasks.length > 0) return externalTasks;
     return getCachedDisconnectionTasksSync();
   });
+  // Full cross-agency task state used by shared Agency Last Updates view
+  const [allUnscopedTasks, setAllUnscopedTasks] = useState<DisconnectionTask[]>(() => {
+    if (Array.isArray(allExternalTasks) && allExternalTasks.length > 0) return allExternalTasks;
+    if (Array.isArray(externalTasks) && externalTasks.length > 0) return externalTasks;
+    return getCachedDisconnectionTasksSync();
+  });
   const [stats, setStats] = useState<DisconnectionStats>({
     totalTasks: 0,
     completedTasks: 0,
@@ -157,7 +166,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     myPendingTasks: 0,
     myCompletionPercentage: 0
   });
-  const [availableWorkers, setAvailableWorkers] = useState<Array<{ id: string; idNo: string; name: string }>>([]);
+  const [availableWorkers, setAvailableWorkers] = useState<Array<{ id: string; idNo: string; name: string; role?: string }>>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,6 +184,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const [showThreeDotMenu, setShowThreeDotMenu] = useState<boolean>(false);
   const [showHeaderThreeDotMenu, setShowHeaderThreeDotMenu] = useState<boolean>(false);
   const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState<boolean>(false);
+  const [isAgencyLastUpdatesOpen, setIsAgencyLastUpdatesOpen] = useState<boolean>(false);
   const [dailyReportFromDate, setDailyReportFromDate] = useState<string>('');
   const [dailyReportToDate, setDailyReportToDate] = useState<string>('');
   const [isStandaloneLiveCheckOpen, setIsStandaloneLiveCheckOpen] = useState<boolean>(false);
@@ -184,6 +194,94 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, statusFilter, phaseFilter, classFilter, agencyFilter, sortBy, workerOnlyFilter]);
+
+  const resolveFullAgencyTitle = useCallback((rawName: string): string => {
+    const cleaned = cleanWorkerOrAgencyName(rawName).trim();
+    if (!cleaned) return '';
+    const normRaw = cleaned
+      .toLowerCase()
+      .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normRaw) return cleaned.toUpperCase();
+
+    const nonAdminWorkers = availableWorkers.filter(w => {
+      const r = String(w.role || '').trim().toLowerCase();
+      return !['admin', 'superadmin', 'controller'].includes(r);
+    });
+
+    const exact = nonAdminWorkers.find(w => {
+      const wNorm = cleanWorkerOrAgencyName(w.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return wNorm === normRaw;
+    });
+    if (exact) return cleanWorkerOrAgencyName(exact.name).toUpperCase();
+
+    const stripSuffix = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(
+          /\b(enterprise|enterprises|agency|associates|traders|construction|electric|electrical|electricals|electro|electronic|india|pvt|ltd|private|limited|co|company|wbsedcl|partner)\b/gi,
+          ' '
+        )
+        .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const rawCore = stripSuffix(normRaw);
+    const brandMatches = nonAdminWorkers.filter(w => {
+      const wNorm = cleanWorkerOrAgencyName(w.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!wNorm) return false;
+      if (wNorm.startsWith(`${normRaw} `) || normRaw.startsWith(`${wNorm} `)) return true;
+      const wCore = stripSuffix(wNorm);
+      return Boolean(rawCore && wCore && rawCore.length >= 3 && wCore === rawCore);
+    });
+
+    if (brandMatches.length === 1) {
+      return cleanWorkerOrAgencyName(brandMatches[0].name).toUpperCase();
+    }
+
+    return cleaned.toUpperCase();
+  }, [availableWorkers]);
+
+  const dailyReportAgencyTitle = useMemo(() => {
+    if (isAgency) {
+      const myRaw = String(
+        (currentUser as any)?.agencyName ||
+        currentUser?.name ||
+        currentUser?.username ||
+        ''
+      ).trim();
+      const myId = String(currentUser?.idNo || '').trim();
+      if (myId) {
+        const matchedById = availableWorkers.find(
+          w =>
+            String(w.idNo || '').trim() === myId &&
+            !['admin', 'superadmin', 'controller'].includes(String(w.role || '').trim().toLowerCase())
+        );
+        if (matchedById) {
+          const matchedClean = cleanWorkerOrAgencyName(matchedById.name);
+          if (matchedClean && matchedClean.length >= cleanWorkerOrAgencyName(myRaw).length) {
+            return matchedClean.toUpperCase();
+          }
+        }
+      }
+      const resolved = resolveFullAgencyTitle(myRaw);
+      if (resolved) return resolved;
+    }
+    if (agencyFilter !== 'ALL') {
+      const resolved = resolveFullAgencyTitle(agencyFilter);
+      if (resolved) return resolved;
+    }
+    return undefined;
+  }, [isAgency, currentUser, availableWorkers, agencyFilter, resolveFullAgencyTitle]);
 
   const triggerDailyReportPdfDownload = () => {
     const updatedOnly = getDeduplicatedUpdatedTasks(filteredTasks);
@@ -208,7 +306,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
 
     const fromDot = formatYMDToDotDate(effectiveFrom);
     const toDot = formatYMDToDotDate(effectiveTo);
-    downloadDailyDisconnectionReportPdf(rangeFiltered, fromDot, toDot);
+    downloadDailyDisconnectionReportPdf(rangeFiltered, fromDot, toDot, dailyReportAgencyTitle);
   };
 
   const triggerDailyReportPrint = () => {
@@ -388,6 +486,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           dedupedIncoming.push(item);
         }
 
+        if (dedupedIncoming.length > 0) {
+          setAllUnscopedTasks(dedupedIncoming);
+        }
+
         setTasks(prev => {
           if (dedupedIncoming.length === 0 && prev.length > 0 && !forceSheetRefresh) {
             return prev;
@@ -415,7 +517,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 item.outstandingDue !== p.outstandingDue ||
                 item.meterNumber !== p.meterNumber ||
                 item.deviceType !== p.deviceType ||
-                item.photoUrl !== p.photoUrl
+                item.photoUrl !== p.photoUrl ||
+                item.lastUpdated !== p.lastUpdated ||
+                item.disconDate !== p.disconDate ||
+                item.paidDate !== p.paidDate
               );
             });
 
@@ -500,13 +605,42 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               item.outstandingDue !== p.outstandingDue ||
               item.meterNumber !== p.meterNumber ||
               item.deviceType !== p.deviceType ||
-              item.photoUrl !== p.photoUrl
+              item.photoUrl !== p.photoUrl ||
+              item.lastUpdated !== p.lastUpdated ||
+              item.disconDate !== p.disconDate ||
+              item.paidDate !== p.paidDate
             );
           });
         return hasChanged ? dedupedIncoming : prev;
       });
     }
   }, [externalTasks, applyLocalReissueDecision, applyLocalRecentUpdate, normalizeDiscKey]);
+
+  // Keep full cross-agency task pool synced with App.tsx unfiltered disconnectionTasks
+  useEffect(() => {
+    if (Array.isArray(allExternalTasks) && allExternalTasks.length > 0) {
+      const cleanIncoming = allExternalTasks
+        .filter(t => {
+          if (!isValidDisconnectionTaskOrRow(t)) return false;
+          const cId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
+          const tId = String(t.taskId || '').trim();
+          if (cId && deletedConsumerIdsRef.current.has(cId)) return false;
+          if (tId && deletedConsumerIdsRef.current.has(tId)) return false;
+          return true;
+        })
+        .map((item, idx) =>
+          applyLocalRecentUpdate(
+            applyLocalReissueDecision({
+              ...item,
+              serialNumber: item.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+            })
+          )
+        );
+      if (cleanIncoming.length > 0) {
+        setAllUnscopedTasks(cleanIncoming);
+      }
+    }
+  }, [allExternalTasks, applyLocalReissueDecision, applyLocalRecentUpdate]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {
@@ -521,7 +655,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               return {
                 id: idStr,
                 idNo: idStr,
-                name: cleanAgencyOrUser
+                name: cleanAgencyOrUser,
+                role: String(u.role || '').trim().toLowerCase()
               };
             })
             .filter(u => u.name !== '');
@@ -643,6 +778,26 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         setCachedDisconnectionTasksSync(deduped);
       }
       return deduped;
+    });
+
+    setAllUnscopedTasks(prev => {
+      const normUpdatedKey = normalizeDiscKey(updatedTask);
+      let matched = false;
+      const next = prev.map(t => {
+        const normTKey = normalizeDiscKey(t);
+        const isMatch =
+          (normUpdatedKey && normTKey === normUpdatedKey) ||
+          (t.taskId && updatedTask.taskId && t.taskId === updatedTask.taskId);
+        if (isMatch) {
+          matched = true;
+          return {
+            ...t,
+            ...updatedTask
+          };
+        }
+        return t;
+      });
+      return matched ? next : [updatedTask, ...next];
     });
   };
 
@@ -1295,8 +1450,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                       type="button"
                       onClick={() => {
                         setShowHeaderThreeDotMenu(false);
-                        setSortBy('NEWEST');
-                        setActiveTab('VIEW_LIST');
+                        setIsAgencyLastUpdatesOpen(true);
                       }}
                       className="w-full px-4 py-2 text-left text-xs sm:text-sm font-medium text-slate-900 hover:bg-slate-50 flex items-center gap-3 cursor-pointer transition-colors"
                     >
@@ -2637,6 +2791,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         isOpen={isDailyReportModalOpen}
         onClose={() => setIsDailyReportModalOpen(false)}
         tasks={userScopedTasks}
+        agencyTitle={dailyReportAgencyTitle}
         activeClassFilter={classFilter}
         onClassFilterChange={setClassFilter}
         activeStatusFilter={statusFilter}
@@ -2644,6 +2799,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         toDate={dailyReportToDate || undefined}
         onFromDateChange={setDailyReportFromDate}
         onToDateChange={setDailyReportToDate}
+      />
+
+      {/* AGENCY LAST UPDATES SUMMARY MODAL (VISIBLE TO ADMIN, AGENCY & WORKER) */}
+      <AgencyLastUpdatesModal
+        isOpen={isAgencyLastUpdatesOpen}
+        onClose={() => setIsAgencyLastUpdatesOpen(false)}
+        tasks={allUnscopedTasks.length > 0 ? allUnscopedTasks : tasks}
+        availableUsers={availableWorkers}
+        currentUser={currentUser}
+        onRefresh={() => loadData(true, true)}
+        isRefreshing={isRefreshing}
+        lang={lang}
       />
 
       {/* STANDALONE WBSEDCL LIVE OSD & BILL CHECK MODAL */}

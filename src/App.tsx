@@ -1674,6 +1674,7 @@ export default function App() {
                             }}
                             onTasksChange={handleDisconnectionTasksChange}
                             externalTasks={userVisibleDisconnectionTasks}
+                            allExternalTasks={disconnectionTasks}
                           />
                         </div>
                       ) : (
@@ -1937,6 +1938,7 @@ export default function App() {
                     onBack={() => setActiveTab('entry')}
                     onTasksChange={handleDisconnectionTasksChange}
                     externalTasks={userVisibleDisconnectionTasks}
+                    allExternalTasks={disconnectionTasks}
                   />
                 </div>
               )}

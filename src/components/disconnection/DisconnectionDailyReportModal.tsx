@@ -15,6 +15,7 @@ interface DisconnectionDailyReportModalProps {
   isOpen: boolean;
   onClose: () => void;
   tasks: DisconnectionTask[];
+  agencyTitle?: string;
   activeClassFilter?: ConnectionClassFilterType;
   onClassFilterChange?: (cls: ConnectionClassFilterType) => void;
   activeStatusFilter?: string;
@@ -485,7 +486,8 @@ export function formatGeneratedTimestamp(date = new Date()): string {
 export function downloadDailyDisconnectionReportPdf(
   reportTasks: DisconnectionTask[],
   fromDateDot: string,
-  toDateDot: string
+  toDateDot: string,
+  agencyTitle?: string
 ) {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -562,7 +564,10 @@ export function downloadDailyDisconnectionReportPdf(
         .map(a => a.toUpperCase())
     )
   );
-  doc.text(uniquePdfAgencies.length === 1 ? uniquePdfAgencies[0] : 'BISHAL ENTERPRISE', pageWidth / 2, y, { align: 'center' });
+  const resolvedPdfAgencyHeading =
+    (agencyTitle && agencyTitle.trim().toUpperCase()) ||
+    (uniquePdfAgencies.length === 1 ? uniquePdfAgencies[0] : 'BISHAL ENTERPRISE');
+  doc.text(resolvedPdfAgencyHeading, pageWidth / 2, y, { align: 'center' });
 
   y += 6;
   doc.setFont('helvetica', 'normal');
@@ -759,6 +764,7 @@ export function downloadDailyDisconnectionReportPdf(
 
 interface ReportDocumentViewProps {
   tasks: DisconnectionTask[];
+  agencyTitle?: string;
   fromDot: string;
   toDot: string;
   summaryEntries: Array<[string, { count: number; amount: number }]>;
@@ -769,6 +775,7 @@ interface ReportDocumentViewProps {
 
 const ReportDocumentView: React.FC<ReportDocumentViewProps> = ({
   tasks,
+  agencyTitle,
   fromDot,
   toDot,
   summaryEntries,
@@ -788,6 +795,9 @@ const ReportDocumentView: React.FC<ReportDocumentViewProps> = ({
           </div>
           <h1 className="text-xl sm:text-2xl font-black tracking-wider text-slate-950 uppercase pt-1">
             {(() => {
+              if (agencyTitle && agencyTitle.trim()) {
+                return agencyTitle.trim().toUpperCase();
+              }
               const uniqueAgencies = Array.from(
                 new Set(
                   tasks
@@ -941,6 +951,7 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
   isOpen,
   onClose,
   tasks,
+  agencyTitle,
   activeClassFilter = 'ALL',
   onClassFilterChange,
   activeStatusFilter = 'ALL',
@@ -1064,6 +1075,7 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
           <div className="print-only-report">
             <ReportDocumentView
               tasks={filteredReportTasks}
+              agencyTitle={agencyTitle}
               fromDot={effectiveDateRange.fromDot}
               toDot={effectiveDateRange.toDot}
               summaryEntries={summaryData.entries}
@@ -1179,7 +1191,8 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
                   downloadDailyDisconnectionReportPdf(
                     filteredReportTasks,
                     effectiveDateRange.fromDot,
-                    effectiveDateRange.toDot
+                    effectiveDateRange.toDot,
+                    agencyTitle
                   )
                 }
                 className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer border border-slate-700"
@@ -1203,6 +1216,7 @@ export const DisconnectionDailyReportModal: React.FC<DisconnectionDailyReportMod
           <div className="w-full max-w-4xl bg-white text-slate-900 shadow-2xl px-6 sm:px-12 py-8 sm:py-12 min-h-[840px]">
             <ReportDocumentView
               tasks={filteredReportTasks}
+              agencyTitle={agencyTitle}
               fromDot={effectiveDateRange.fromDot}
               toDot={effectiveDateRange.toDot}
               summaryEntries={summaryData.entries}
