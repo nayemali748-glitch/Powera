@@ -5847,6 +5847,21 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
   return false;
 }
 
+function computeServerDiscDigest(tasks: any[]): string {
+  if (!Array.isArray(tasks) || tasks.length === 0) return '0';
+  let h = 2166136261 ^ tasks.length;
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (!t) continue;
+    const sig = `${t.consumerId || t['Consumer Id'] || ''}|${t.taskStatus || t.disconStatus || t['Discon Status'] || ''}|${t.disconDate || t['Discon Date'] || ''}|${t.paidDate || t['Paid Date'] || ''}|${t.Agency || t.agency || ''}|${t.submittedBy || ''}|${t.notes || t['Notes'] || ''}|${t.lastUpdated || t['Last Updated'] || ''}`;
+    for (let j = 0; j < sig.length; j++) {
+      h ^= sig.charCodeAt(j);
+      h = Math.imul(h, 16777619);
+    }
+  }
+  return `${tasks.length}_${(h >>> 0).toString(36)}`;
+}
+
 async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   try {
     if (activeGasWriteCount > 0) {
@@ -5888,23 +5903,28 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
     }
 
     if (rawTasks.length > 0) {
-      const prevLen = cachedDisconnectionState?.tasks?.length || 0;
+      const prevTasks = cachedDisconnectionState?.tasks || [];
+      const prevLen = prevTasks.length;
+      const prevDigest = computeServerDiscDigest(prevTasks);
       const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
       const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
 
       const merged = mergeSheetDisconnectionTasksWithOverlay(convertedList);
+      const nextDigest = computeServerDiscDigest(merged);
       cachedDisconnectionState = {
         tasks: merged,
         timestamp: Date.now()
       };
-      invalidateDiscSnapshotCache();
-      scheduleDiscCacheDiskWrite();
-      if (prevLen === 0 || Math.abs(prevLen - merged.length) > 0 || discSseClients.size > 0) {
-        broadcastDisconnectionEvent('tasks_synced', {
-          version: discSnapshotVersion,
-          count: merged.length,
-          ts: Date.now()
-        });
+      if (prevLen === 0 || prevDigest !== nextDigest) {
+        invalidateDiscSnapshotCache();
+        scheduleDiscCacheDiskWrite();
+        if (discSseClients.size > 0) {
+          broadcastDisconnectionEvent('tasks_synced', {
+            version: discSnapshotVersion,
+            count: merged.length,
+            ts: Date.now()
+          });
+        }
       }
 
       // If any local overlay records haven't been synced to the sheet yet, push them gently in background
@@ -5938,9 +5958,12 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
   return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
 }
 
+let lastBgDiscRefreshStartedAt = 0;
 function refreshDisconnectionFromSheetInBackground() {
-  if (isRefreshingDiscInBg || activeGasWriteCount > 0) return;
+  if (isRefreshingDiscInBg && Date.now() - lastBgDiscRefreshStartedAt < 35000) return;
+  if (activeGasWriteCount > 0) return;
   isRefreshingDiscInBg = true;
+  lastBgDiscRefreshStartedAt = Date.now();
   (async () => {
     try {
       await fetchDisconnectionTasksFromGoogleSheet();

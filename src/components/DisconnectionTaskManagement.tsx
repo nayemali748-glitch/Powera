@@ -541,7 +541,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
                 item.photoUrl !== p.photoUrl ||
                 item.lastUpdated !== p.lastUpdated ||
                 item.disconDate !== p.disconDate ||
-                item.paidDate !== p.paidDate
+                item.paidDate !== p.paidDate ||
+                item.submittedBy !== p.submittedBy ||
+                (item as any)['Discon Status'] !== (p as any)['Discon Status'] ||
+                (item as any)['Discon Date'] !== (p as any)['Discon Date'] ||
+                (item as any)['Paid Date'] !== (p as any)['Paid Date']
               );
             });
 
@@ -555,7 +559,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
           return dedupedIncoming;
         });
 
-        if (onTasksChangeRef.current) onTasksChangeRef.current(dedupedIncoming.length);
+        if (dedupedIncoming.length > 0 && hasExternalTasksRef.current) {
+          try {
+            window.dispatchEvent(new CustomEvent('power-disconnection-live-synced', { detail: dedupedIncoming }));
+          } catch {}
+        } else if (onTasksChangeRef.current) {
+          onTasksChangeRef.current(dedupedIncoming.length);
+        }
         if (discResult.stats) {
           setStats(discResult.stats);
         }
@@ -631,7 +641,11 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
               item.photoUrl !== p.photoUrl ||
               item.lastUpdated !== p.lastUpdated ||
               item.disconDate !== p.disconDate ||
-              item.paidDate !== p.paidDate
+              item.paidDate !== p.paidDate ||
+              item.submittedBy !== p.submittedBy ||
+              (item as any)['Discon Status'] !== (p as any)['Discon Status'] ||
+              (item as any)['Discon Date'] !== (p as any)['Discon Date'] ||
+              (item as any)['Paid Date'] !== (p as any)['Paid Date']
             );
           });
         return hasChanged ? dedupedIncoming : prev;
@@ -734,6 +748,17 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
   }, [loadData, isAgency, isAdmin, currentUser]);
+
+  // Keep Agency Last Updates automatically synced live with Google Sheets while the modal is open
+  useEffect(() => {
+    if (!isAgencyLastUpdatesOpen) return;
+    const liveModalInterval = setInterval(() => {
+      if (!document.hidden && !inFlightRef.current) {
+        loadData(false, true);
+      }
+    }, 8000);
+    return () => clearInterval(liveModalInterval);
+  }, [isAgencyLastUpdatesOpen, loadData]);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
@@ -2848,13 +2873,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         currentUser={currentUser}
         onRefresh={() => loadData(true, true)}
         onOpenModal={() => {
-          if (hasExternalTasksRef.current) {
-            try {
-              window.dispatchEvent(new CustomEvent('power-disconnection-live-ping'));
-            } catch {}
-          } else if (!inFlightRef.current && Date.now() - lastBackupPollTsRef.current >= 4000) {
-            loadData(true, false);
-          }
+          loadData(true, true);
         }}
         isRefreshing={isRefreshing}
         lang={lang}

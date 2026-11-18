@@ -2735,9 +2735,9 @@ export async function fetchDisconnectionTasks(params: {
     if (params.refresh) query.set('refresh', 'true');
     if (params.blocking) query.set('blocking', 'true');
 
-    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    const headers: Record<string, string> = { 'Accept': 'application/json', 'Cache-Control': 'no-cache' };
 
-    const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, { headers });
+    const res = await fetch(`/api/disconnection-tasks?${query.toString()}`, { headers, cache: 'no-store' });
     const ct = res.headers.get('content-type') || '';
     if (res.ok && ct.includes('application/json')) {
       const data = await res.json();

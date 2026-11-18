@@ -96,10 +96,10 @@ function computeJsonChangeHash(data: unknown): string {
     const item: any = data[i];
     if (!item) continue;
     const idVal = String(item.id || item.consumerId || item['Consumer Id'] || '');
-    const stVal = String(item.status || item.disconStatus || item.taskStatus || '');
+    const stVal = String(item['Discon Status'] || item.status || item.disconStatus || item.taskStatus || '');
     const remVal = String(item.notes || item.workerRemarks || '');
-    const agVal = String(item['Agency'] || item.Agency || item.agency || item.assignedAgency || item.agencyName || item.assignedWorkerName || '');
-    const dtVal = String(item.disconDate || item.paidDate || item.updatedAt || item.date || '');
+    const agVal = `${item['Agency'] || item.Agency || item.agency || item.assignedAgency || item.agencyName || item.assignedWorkerName || ''}|${item.submittedBy || ''}|${item.workerName || ''}`;
+    const dtVal = `${item.disconDate || item['Discon Date'] || ''}|${item.paidDate || item['Paid Date'] || ''}|${item.reportDate || ''}|${item.lastUpdated || item.updatedAt || item.date || ''}`;
     const flagVal = (item.reissueRequested ? 1 : 0) | (item.reissueApproved ? 2 : 0) | (item.reissueRejected ? 4 : 0);
     h = mixHashStr(h, idVal);
     h ^= 58 | (flagVal << 8);
@@ -416,19 +416,74 @@ export default function App() {
       });
     };
 
-    const onLivePing = () => {
-      if (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 4000) {
-        loadDataRef.current?.(true, false);
+    const onLivePing = (e: Event) => {
+      const blocking = Boolean((e as CustomEvent<any>)?.detail?.blocking);
+      if (blocking || (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500)) {
+        loadDataRef.current?.(true, blocking);
       }
+    };
+
+    const onLiveSyncedList = (e: Event) => {
+      const incomingList = (e as CustomEvent<DisconnectionTask[]>)?.detail;
+      if (!Array.isArray(incomingList) || incomingList.length === 0) return;
+      const mergedList =
+        recentDiscUpdatesRef.current.size === 0
+          ? incomingList
+          : incomingList.map((t) => {
+              const k = normKey(t);
+              const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
+              if (rec && Date.now() - rec.timestamp < 180000) {
+                const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
+                const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
+                const inRem = String(t.workerRemarks || t.notes || '').trim();
+                const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
+                const inDate = String(t.disconDate || t.paidDate || '').trim();
+                const locDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
+                const inAgency = String((t as any)['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
+                const locAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
+                if (inSt !== locSt || inRem !== locRem || inDate !== locDate || (locAgency && inAgency !== locAgency)) {
+                  return {
+                    ...t,
+                    taskStatus: rec.task.taskStatus,
+                    disconStatus: rec.task.disconStatus,
+                    'Discon Status': rec.task['Discon Status'],
+                    workerRemarks: rec.task.workerRemarks,
+                    workerReport: rec.task.workerReport,
+                    notes: rec.task.notes,
+                    Notes: rec.task.Notes,
+                    disconDate: rec.task.disconDate || t.disconDate,
+                    'Discon Date': rec.task['Discon Date'] || (t as any)['Discon Date'],
+                    paidDate: rec.task.paidDate || t.paidDate,
+                    'Paid Date': rec.task['Paid Date'] || (t as any)['Paid Date'],
+                    agency: rec.task.agency || t.agency,
+                    Agency: rec.task.Agency || t.Agency,
+                    assignedAgency: rec.task.assignedAgency || t.assignedAgency,
+                    submittedBy: rec.task.submittedBy || t.submittedBy,
+                    lastUpdated: rec.task.lastUpdated || t.lastUpdated,
+                    updatedAt: rec.task.updatedAt || t.updatedAt,
+                    statusHistory: rec.task.statusHistory || t.statusHistory
+                  };
+                }
+              }
+              return t;
+            });
+      const nextHash = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(mergedList)}`;
+      lastDataHashRef.current = nextHash;
+      lastAutoPollTsRef.current = Date.now();
+      setDisconnectionTasks(mergedList);
+      setCachedDisconnectionTasksSync(mergedList);
+      setLastSyncedAt(new Date());
     };
 
     window.addEventListener('power-disconnection-task-updated', onTaskUpdated);
     window.addEventListener('power-disconnection-sse-update', onSseTaskUpdated);
     window.addEventListener('power-disconnection-live-ping', onLivePing);
+    window.addEventListener('power-disconnection-live-synced', onLiveSyncedList);
     return () => {
       window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
       window.removeEventListener('power-disconnection-sse-update', onSseTaskUpdated);
       window.removeEventListener('power-disconnection-live-ping', onLivePing);
+      window.removeEventListener('power-disconnection-live-synced', onLiveSyncedList);
     };
   }, []);
 
@@ -446,7 +501,8 @@ export default function App() {
         role: currentUser?.role,
         workerId: currentUser?.idNo,
         workerName: currentUser?.name,
-        refresh: forceRefresh
+        refresh: forceRefresh,
+        blocking: forceRefresh
       }).then((res) => {
         const list: DisconnectionTask[] = Array.isArray(res)
           ? res
@@ -623,9 +679,47 @@ export default function App() {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    let lastKnownVersion = 0;
+    let pendingSyncVersion = 0;
+    let pendingSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flushPendingSync = () => {
+      if (pendingSyncTimer) {
+        clearTimeout(pendingSyncTimer);
+        pendingSyncTimer = null;
+      }
+      if (pendingSyncVersion <= lastKnownVersion) return;
+      if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500) {
+        lastKnownVersion = pendingSyncVersion;
+        pendingSyncVersion = 0;
+        loadData(true, false);
+      } else {
+        pendingSyncTimer = setTimeout(flushPendingSync, 1500);
+      }
+    };
+
+    const onFocusOrPending = () => {
+      if (pendingSyncVersion > lastKnownVersion) {
+        flushPendingSync();
+      } else {
+        onFocus();
+      }
+    };
+    const onVisibilityOrPending = () => {
+      if (!document.hidden && pendingSyncVersion > lastKnownVersion) {
+        flushPendingSync();
+      } else {
+        onVisibilityChange();
+      }
+    };
+
+    window.removeEventListener('focus', onFocus);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocusOrPending);
+    document.addEventListener('visibilitychange', onVisibilityOrPending);
+
     // Real-time Server-Sent Events subscription for instant zero-refresh multi-user updates
     let eventSource: EventSource | null = null;
-    let lastKnownVersion = 0;
     try {
       if (typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
         eventSource = new EventSource('/api/disconnection-events');
@@ -633,10 +727,18 @@ export default function App() {
           try {
             const payload = JSON.parse(evt.data || '{}');
             const v = Number(payload?.version || 0);
-            if (lastKnownVersion > 0 && v > lastKnownVersion && !inFlightRef.current) {
-              loadData(true, false);
+            if (lastKnownVersion > 0 && v > lastKnownVersion) {
+              if (!inFlightRef.current) {
+                lastKnownVersion = v;
+                pendingSyncVersion = 0;
+                loadData(true, false);
+              } else {
+                pendingSyncVersion = Math.max(pendingSyncVersion, v);
+                if (!pendingSyncTimer) pendingSyncTimer = setTimeout(flushPendingSync, 1500);
+              }
+            } else if (v > 0 && lastKnownVersion === 0) {
+              lastKnownVersion = v;
             }
-            if (v > 0) lastKnownVersion = v;
           } catch {}
         });
         eventSource.addEventListener('task_updated', (evt: MessageEvent) => {
@@ -654,9 +756,15 @@ export default function App() {
             const payload = JSON.parse(evt.data || '{}');
             const v = Number(payload?.version || 0);
             if (v <= lastKnownVersion) return;
-            lastKnownVersion = v;
-            if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 2500) {
+            if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500) {
+              lastKnownVersion = v;
+              pendingSyncVersion = 0;
               loadData(true, false);
+            } else {
+              pendingSyncVersion = Math.max(pendingSyncVersion, v);
+              if (!pendingSyncTimer) {
+                pendingSyncTimer = setTimeout(flushPendingSync, 1500);
+              }
             }
           } catch {}
         });
@@ -666,8 +774,9 @@ export default function App() {
     return () => {
       cancelled = true;
       clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (pendingSyncTimer) clearTimeout(pendingSyncTimer);
+      window.removeEventListener('focus', onFocusOrPending);
+      document.removeEventListener('visibilitychange', onVisibilityOrPending);
       try {
         eventSource?.close();
       } catch {}
