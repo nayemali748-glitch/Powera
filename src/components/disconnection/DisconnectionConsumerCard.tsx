@@ -42,7 +42,7 @@ interface DisconnectionConsumerCardProps {
   lang?: 'en' | 'bn';
 }
 
-export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps> = ({
+export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps> = React.memo(({
   task,
   onUpdateStatus,
   onRequestReissue,
@@ -752,5 +752,5 @@ export const DisconnectionConsumerCard: React.FC<DisconnectionConsumerCardProps>
       )}
     </div>
   );
-};
+});
 

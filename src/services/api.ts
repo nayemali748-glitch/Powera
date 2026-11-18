@@ -2095,6 +2095,160 @@ export async function deleteWorkOrder(id: string): Promise<boolean> {
 export const DISCONNECTION_TASKS_CACHE_KEY = 'power_disconnection_tasks_cache';
 export const DISCONNECTION_CLIENT_OVERLAY_KEY = 'power_disconnection_client_overlay_v1';
 
+const DISC_IDB_NAME = 'power_construction_idb_v1';
+const DISC_IDB_STORE = 'kv';
+const DISC_IDB_KEY = 'disconnection_tasks_v1';
+let pendingDiscCacheTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingDiscCacheTasks: DisconnectionTask[] | null = null;
+
+function openDiscIdb(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const req = window.indexedDB.open(DISC_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        try {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(DISC_IDB_STORE)) {
+            db.createObjectStore(DISC_IDB_STORE);
+          }
+        } catch {}
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function toCompactCachedDiscTask(t: any): Record<string, any> {
+  if (!t || typeof t !== 'object') return t;
+  const rawPhoto = String(t.photoUrl || t['Image'] || t.imageUrl || '').trim();
+  const safePhoto = rawPhoto.startsWith('data:') && rawPhoto.length > 2000 ? '' : rawPhoto;
+  const rawStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
+  const effectiveStatus = !rawStatus || rawStatus === 'CONNECTED' || rawStatus === 'COMPLETED' ? 'PENDING' : rawStatus;
+  const agency = String(
+    t['Agency'] || t.Agency || t.agency || t.assignedAgency ||
+    (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') || ''
+  ).trim();
+  const remarks = String(t.workerRemarks ?? t.workerReport ?? t.notes ?? t['Notes'] ?? '').trim();
+
+  const compact: Record<string, any> = {
+    taskId: t.taskId || (t.consumerId ? `TASK-DISC-${t.consumerId}` : ''),
+    consumerId: String(t.consumerId || t['Consumer Id'] || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim(),
+    consumerName: t.consumerName || t['Name'] || t['Consumer Name'] || '',
+    consumerAddress: t.consumerAddress || t['Address'] || '',
+    phoneNumber: t.phoneNumber || t.mobileNumber || t.mobile || '',
+    offCode: t.offCode ?? t['off_code'] ?? '',
+    mru: t.mru ?? t['MRU'] ?? t.mruSection ?? '',
+    baseClass: t.baseClass ?? t['Base Class'] ?? '',
+    classType: t.classType ?? t['Class'] ?? '',
+    deviceType: t.deviceType ?? t.device ?? t['Device'] ?? '',
+    meterNumber: t.meterNumber || t['Number'] || '',
+    dueDateRange: t.dueDateRange || t['O/S Duedate Range'] || '',
+    outstandingDue: t.outstandingDue ?? t['D2 Net O/S'] ?? '',
+    priority: t.priority || t['Priority'] || 'NORMAL',
+    taskStatus: effectiveStatus,
+    disconStatus: effectiveStatus,
+    agency,
+    assignedWorkerId: t.assignedWorkerId || t['Worker ID'] || '',
+    submittedBy: t.submittedBy || t.workerName || '',
+    workerRemarks: remarks,
+    disconDate: t.disconDate || t['Discon Date'] || t.reportDate || '',
+    paidDate: t.paidDate || t['Paid Date'] || t.paymentDate || '',
+    paidAmount: t.paidAmount || t['Paid Amount'] || '',
+    paidType: t.paidType || t['Paid Type'] || t.paymentReference || '',
+    outstandingAfter: t.outstandingAfter || t['Outstanding After'] || '',
+    nextPaymentDate: t.nextPaymentDate || t['Next Payment Date'] || '',
+    paymentStatus: t.paymentStatus || t['Payment Status'] || '',
+    paymentSource: t.paymentSource || t['Payment Source'] || '',
+    reading: t.reading || t.meterReading || t['Reading'] || '',
+    gisPole: t.gisPole || t['Gis Pole'] || '',
+    photoUrl: safePhoto,
+    serialNumber: t.serialNumber || '',
+    lastUpdated: t.lastUpdated || t['Last Updated'] || '',
+    updatedAt: t.updatedAt || '',
+    reissueRequested: Boolean(t.reissueRequested),
+    reissueApproved: Boolean(t.reissueApproved),
+    reissueRejected: Boolean(t.reissueRejected)
+  };
+  if (t.reissueRequestedBy) compact.reissueRequestedBy = t.reissueRequestedBy;
+  if (t.reissueRequestedAt) compact.reissueRequestedAt = t.reissueRequestedAt;
+  if (Array.isArray(t.statusHistory) && t.statusHistory.length > 0) {
+    compact.statusHistory = t.statusHistory.slice(0, 5);
+  }
+  return compact;
+}
+
+export async function clearDiscTasksFromIdb(): Promise<void> {
+  try {
+    const db = await openDiscIdb();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(DISC_IDB_STORE, 'readwrite');
+        tx.objectStore(DISC_IDB_STORE).delete(DISC_IDB_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+    try { db.close(); } catch {}
+  } catch {}
+}
+
+async function saveDiscTasksToIdb(compactTasks: any[]): Promise<void> {
+  try {
+    const db = await openDiscIdb();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(DISC_IDB_STORE, 'readwrite');
+        tx.objectStore(DISC_IDB_STORE).put(compactTasks, DISC_IDB_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+    try { db.close(); } catch {}
+  } catch {}
+}
+
+export async function loadDiscTasksFromIdb(): Promise<DisconnectionTask[]> {
+  try {
+    if (!hasActiveUserSession()) return [];
+    const db = await openDiscIdb();
+    if (!db) return [];
+    const raw = await new Promise<any[]>((resolve) => {
+      try {
+        const tx = db.transaction(DISC_IDB_STORE, 'readonly');
+        const req = tx.objectStore(DISC_IDB_STORE).get(DISC_IDB_KEY);
+        req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+        req.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+    try { db.close(); } catch {}
+    if (!raw || raw.length === 0) return [];
+    const hydrated: DisconnectionTask[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const t = raw[i];
+      if (isValidDisconnectionTaskOrRow(t)) {
+        hydrated.push(fastNormalizeServerDisconnectionTask(t, hydrated.length));
+      }
+    }
+    return mergeClientDisconnectionOverlay(hydrated);
+  } catch {
+    return [];
+  }
+}
+
 export function saveClientDisconnectionOverlay(consumerId: string, patch: Record<string, any>) {
   try {
     const key = String(consumerId || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim().toLowerCase();
@@ -2226,43 +2380,156 @@ function purgeAllLocalDisconnectionCacheKeys() {
         localStorage.removeItem(k);
       }
     }
+    clearDiscTasksFromIdb().catch(() => {});
   } catch {}
+}
+
+export function fastNormalizeServerDisconnectionTask(t: any, idx = 0): DisconnectionTask {
+  if (!t || typeof t !== 'object') return t;
+  // If raw GAS object missing canonical keys, fallback to full cleaner
+  if (!t.taskId || !t.consumerId || (t.disconStatus === undefined && t['Discon Status'] === undefined)) {
+    return {
+      ...cleanDisconnectionTask(t),
+      serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
+    };
+  }
+  const cId = String(t.consumerId).trim();
+  const cName = String(t.consumerName ?? t['Name'] ?? '').trim();
+  const cAddr = String(t.consumerAddress ?? t['Address'] ?? '').trim();
+  const phone = String(t.phoneNumber ?? t.mobileNumber ?? '').trim();
+  const rawSt = String(t.disconStatus || t['Discon Status'] || t.taskStatus || 'PENDING').trim().toUpperCase();
+  const normSt = !rawSt || rawSt === 'CONNECTED' || rawSt === 'COMPLETED' ? 'PENDING' : rawSt;
+  const reissueApproved = Boolean(t.reissueApproved || normSt === 'REISSUE');
+  const effectiveStatus = reissueApproved ? 'REISSUE' : normSt;
+  const remarks = String(t.workerRemarks ?? t.notes ?? t['Notes'] ?? '').trim();
+  const agency = String(
+    t['Agency'] || t.Agency || t.agency || t.assignedAgency ||
+    (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') || ''
+  ).trim();
+  const offCode = String(t.offCode ?? t['off_code'] ?? '').trim();
+  const mru = String(t.mru ?? t['MRU'] ?? t.mruSection ?? '').trim();
+  const baseClass = String(t.baseClass ?? t['Base Class'] ?? '').trim();
+  const classType = String(t.classType ?? t['Class'] ?? '').trim();
+  const device = String(t.deviceType ?? t.device ?? t['Device'] ?? '').trim();
+  const meterNum = String(t.meterNumber ?? t['Number'] ?? '').trim();
+  const dueRange = String(t.dueDateRange ?? t['O/S Duedate Range'] ?? '').trim();
+  const osDue = String(t.outstandingDue ?? t['D2 Net O/S'] ?? '').trim();
+  const disconDate = String(t.disconDate ?? t['Discon Date'] ?? t.reportDate ?? '').trim();
+  const paidDate = String(t.paidDate ?? t['Paid Date'] ?? t.paymentDate ?? '').trim();
+  const paidAmount = String(t.paidAmount ?? t['Paid Amount'] ?? '').trim();
+  const paidType = String(t.paidType ?? t['Paid Type'] ?? t.paymentReference ?? '').trim();
+  const gisPole = String(t.gisPole ?? t['Gis Pole'] ?? '').trim();
+  const reading = String(t.reading ?? t.meterReading ?? t['Reading'] ?? '').trim();
+  const photo = String(t.photoUrl ?? t['Image'] ?? '').trim();
+
+  return {
+    ...t,
+    serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`,
+    taskId: t.taskId || `TASK-DISC-${cId}`,
+    consumerId: cId,
+    'Consumer Id': t['Consumer Id'] || cId,
+    consumerName: cName,
+    Name: t.Name || cName,
+    consumerAddress: cAddr,
+    Address: t.Address || cAddr,
+    phoneNumber: phone,
+    mobileNumber: phone,
+    offCode,
+    'off_code': offCode,
+    mru,
+    mruSection: mru,
+    'MRU': mru,
+    baseClass,
+    'Base Class': baseClass,
+    classType,
+    'Class': classType,
+    device,
+    deviceType: device,
+    'Device': device,
+    meterNumber: meterNum,
+    'Number': meterNum,
+    dueDateRange: dueRange,
+    'O/S Duedate Range': dueRange,
+    outstandingDue: osDue,
+    'D2 Net O/S': osDue,
+    disconDate,
+    'Discon Date': disconDate,
+    paidDate,
+    'Paid Date': paidDate,
+    paidAmount,
+    'Paid Amount': paidAmount,
+    paidType,
+    'Paid Type': paidType,
+    gisPole,
+    'Gis Pole': gisPole,
+    reading,
+    meterReading: reading,
+    'Reading': reading,
+    Agency: agency,
+    agency,
+    assignedAgency: agency,
+    assignedWorkerName: t.assignedWorkerName || agency,
+    workerName: t.workerName || t.submittedBy || agency,
+    submittedBy: t.submittedBy || t.workerName || '',
+    taskStatus: effectiveStatus as DisconnectionTaskStatus,
+    disconStatus: effectiveStatus,
+    'Discon Status': effectiveStatus,
+    workerRemarks: remarks,
+    workerReport: remarks,
+    notes: remarks,
+    Notes: remarks,
+    photoUrl: photo,
+    Image: photo,
+    reissueRequested: Boolean(t.reissueRequested),
+    reissueApproved,
+    reissueRejected: Boolean(!reissueApproved && t.reissueRejected)
+  };
 }
 
 export function getCachedDisconnectionTasksSync(): DisconnectionTask[] {
   try {
     const raw = readCache<DisconnectionTask[]>(getDisconnectionCacheKey(), []);
     if (Array.isArray(raw) && raw.length > 0) {
-      const valid = raw
-        .filter((t: any) => isValidDisconnectionTaskOrRow(t))
-        .map((t, idx) => ({
-          ...cleanDisconnectionTask(t),
-          serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-        }));
-      return mergeClientDisconnectionOverlay(valid);
+      const hydrated: DisconnectionTask[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const t = raw[i];
+        if (isValidDisconnectionTaskOrRow(t)) {
+          hydrated.push(fastNormalizeServerDisconnectionTask(t, hydrated.length));
+        }
+      }
+      return mergeClientDisconnectionOverlay(hydrated);
     }
   } catch {}
   return [];
 }
 
 export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
-  try {
-    const valid = mergeClientDisconnectionOverlay(
-      (Array.isArray(tasks) ? tasks : []).filter((t: any) => isValidDisconnectionTaskOrRow(t))
-    );
-    // Strip heavy base64 images before writing to localStorage so quota is never exceeded
-    const light = valid.map(t => {
-      const clone: any = { ...t };
-      if (typeof clone.photoUrl === 'string' && clone.photoUrl.startsWith('data:') && clone.photoUrl.length > 2000) {
-        clone.photoUrl = '';
+  pendingDiscCacheTasks = Array.isArray(tasks) ? tasks : [];
+  if (pendingDiscCacheTimer) return;
+  pendingDiscCacheTimer = setTimeout(() => {
+    pendingDiscCacheTimer = null;
+    const latest = pendingDiscCacheTasks;
+    pendingDiscCacheTasks = null;
+    if (!latest) return;
+    try {
+      const compact: any[] = [];
+      for (let i = 0; i < latest.length; i++) {
+        const t = latest[i];
+        if (isValidDisconnectionTaskOrRow(t)) {
+          compact.push(toCompactCachedDiscTask(t));
+        }
       }
-      if (typeof clone.Image === 'string' && clone.Image.startsWith('data:') && clone.Image.length > 2000) {
-        clone.Image = '';
+      const cacheKey = getDisconnectionCacheKey();
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(compact));
+      } catch {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(compact.slice(0, 1500)));
+        } catch {}
       }
-      return clone;
-    });
-    writeCache(getDisconnectionCacheKey(), light);
-  } catch {}
+      saveDiscTasksToIdb(compact).catch(() => {});
+    } catch {}
+  }, 0);
 }
 
 export function cleanDisconnectionTask(t: any): DisconnectionTask {
@@ -2453,6 +2720,7 @@ export async function fetchDisconnectionTasks(params: {
   status?: string;
   includeArchived?: boolean;
   refresh?: boolean;
+  blocking?: boolean;
 } = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
   const session = getActiveUserSessionSync();
   // Step 1: Call Backend API (/api/disconnection-tasks)
@@ -2465,6 +2733,7 @@ export async function fetchDisconnectionTasks(params: {
     if (params.status) query.set('status', params.status);
     if (params.includeArchived) query.set('includeArchived', 'true');
     if (params.refresh) query.set('refresh', 'true');
+    if (params.blocking) query.set('blocking', 'true');
 
     const headers: Record<string, string> = { 'Accept': 'application/json' };
 
@@ -2473,16 +2742,18 @@ export async function fetchDisconnectionTasks(params: {
     if (res.ok && ct.includes('application/json')) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.tasks)) {
-        const validTasks = data.tasks.filter(isValidDisconnectionTaskOrRow);
-        const mappedList = validTasks.map((t: any, idx: number) => ({
-          ...cleanDisconnectionTask(t),
-          serialNumber: t.serialNumber || `SL ${String(idx + 1).padStart(3, '0')}`
-        }));
+        const mappedList: DisconnectionTask[] = [];
+        for (let i = 0; i < data.tasks.length; i++) {
+          const t = data.tasks[i];
+          if (isValidDisconnectionTaskOrRow(t)) {
+            mappedList.push(fastNormalizeServerDisconnectionTask(t, mappedList.length));
+          }
+        }
         const cleaned = mergeClientDisconnectionOverlay(mappedList);
         if (!params.search && (!params.status || params.status === 'ALL')) {
           setCachedDisconnectionTasksSync(cleaned);
         }
-        return { tasks: cleaned, stats: computeStats(cleaned) };
+        return { tasks: cleaned, stats: data.stats || computeStats(cleaned) };
       }
     }
   } catch (apiErr) {

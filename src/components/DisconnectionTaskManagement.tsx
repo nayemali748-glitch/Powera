@@ -52,6 +52,7 @@ import {
   submitDisconnectionTaskReport,
   getCachedDisconnectionTasksSync,
   setCachedDisconnectionTasksSync,
+  loadDiscTasksFromIdb,
   isValidDisconnectionTaskOrRow
 } from '../services/api';
 import { Language } from '../utils/translations';
@@ -360,21 +361,28 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       .toLowerCase();
   }, []);
 
+  const hasRecentUpdatesRef = localRecentUpdatesRef;
+  const lastDedupedExternalRef = useRef<{ source: DisconnectionTask[] | undefined; result: DisconnectionTask[] }>({ source: undefined, result: [] });
+  const lastBackupPollTsRef = useRef<number>(0);
+
   const applyLocalRecentUpdate = useCallback((item: DisconnectionTask): DisconnectionTask => {
+    if (hasRecentUpdatesRef.current.size === 0) return item;
     const k = normalizeDiscKey(item);
     if (!k) return item;
-    const rec = localRecentUpdatesRef.current.get(k);
+    const rec = hasRecentUpdatesRef.current.get(k);
     if (!rec) return item;
     if (Date.now() - rec.timestamp > 60000) {
-      localRecentUpdatesRef.current.delete(k);
+      hasRecentUpdatesRef.current.delete(k);
       return item;
     }
     const incomingSt = String(item.taskStatus || item.disconStatus || (item as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
     const localSt = String(rec.task.taskStatus || rec.task.disconStatus || (rec.task as any)['Discon Status'] || 'PENDING').trim().toUpperCase();
     const incomingNotes = String(item.workerRemarks || item.notes || '').trim();
     const localNotes = String(rec.task.workerRemarks || rec.task.notes || '').trim();
-    // If incoming already matches our local update, keep incoming; otherwise preserve our just-saved status & remarks
-    if (incomingSt === localSt && incomingNotes === localNotes) {
+    const incomingDate = String(item.disconDate || item.paidDate || '').trim();
+    const localDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
+    // If incoming already matches our local update, keep incoming; otherwise preserve our just-saved status, date, agency & remarks
+    if (incomingSt === localSt && incomingNotes === localNotes && incomingDate === localDate) {
       return item;
     }
     return {
@@ -386,6 +394,15 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       workerReport: rec.task.workerReport,
       notes: rec.task.notes,
       Notes: rec.task.Notes,
+      disconDate: rec.task.disconDate || item.disconDate,
+      'Discon Date': rec.task['Discon Date'] || (item as any)['Discon Date'],
+      paidDate: rec.task.paidDate || item.paidDate,
+      'Paid Date': rec.task['Paid Date'] || (item as any)['Paid Date'],
+      agency: rec.task.agency || item.agency,
+      Agency: rec.task.Agency || item.Agency,
+      assignedAgency: rec.task.assignedAgency || item.assignedAgency,
+      submittedBy: rec.task.submittedBy || item.submittedBy,
+      lastUpdated: rec.task.lastUpdated || item.lastUpdated,
       updatedAt: rec.task.updatedAt || item.updatedAt,
       statusHistory: rec.task.statusHistory || item.statusHistory
     };
@@ -442,6 +459,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
   const loadData = useCallback(async (showRefreshingSpinner = false, forceSheetRefresh = false) => {
     if (inFlightRef.current && !showRefreshingSpinner && !forceSheetRefresh) return;
     inFlightRef.current = true;
+    lastBackupPollTsRef.current = Date.now();
     if (showRefreshingSpinner) {
       setIsRefreshing(true);
     }
@@ -452,7 +470,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         role: currentUser?.role,
         workerId: currentUser?.idNo,
         workerName: currentUser?.name,
-        refresh: showRefreshingSpinner || forceSheetRefresh
+        refresh: showRefreshingSpinner || forceSheetRefresh,
+        blocking: forceSheetRefresh
       });
 
       if (discResult && Array.isArray(discResult.tasks)) {
@@ -581,6 +600,8 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         dedupedIncoming.push(item);
       }
 
+      lastDedupedExternalRef.current = { source: externalTasks, result: dedupedIncoming };
+
       setTasks(prev => {
         const hasChanged =
           dedupedIncoming.length !== prev.length ||
@@ -616,9 +637,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     }
   }, [externalTasks, applyLocalReissueDecision, applyLocalRecentUpdate, normalizeDiscKey]);
 
-  // Keep full cross-agency task pool synced with App.tsx unfiltered disconnectionTasks
+  // Keep full cross-agency task pool synced with App.tsx unfiltered disconnectionTasks (reuse deduped array when identical)
   useEffect(() => {
     if (Array.isArray(allExternalTasks) && allExternalTasks.length > 0) {
+      if (allExternalTasks === externalTasks && lastDedupedExternalRef.current.source === allExternalTasks && lastDedupedExternalRef.current.result.length > 0) {
+        setAllUnscopedTasks(lastDedupedExternalRef.current.result);
+        return;
+      }
       const cleanIncoming = allExternalTasks
         .filter(t => {
           if (!isValidDisconnectionTaskOrRow(t)) return false;
@@ -640,7 +665,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         setAllUnscopedTasks(cleanIncoming);
       }
     }
-  }, [allExternalTasks, applyLocalReissueDecision, applyLocalRecentUpdate]);
+  }, [allExternalTasks, externalTasks, applyLocalReissueDecision, applyLocalRecentUpdate]);
 
   // Load users in parallel without blocking Disconnection list rendering
   useEffect(() => {
@@ -666,8 +691,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       .catch(() => {});
   }, []);
 
-  // Initial load when component mounts + background sync + listen for explicit Power App & Sheets Refresh button clicks
+  // Initial load & IndexedDB instant fallback + background sync + listen for explicit Power App & Sheets Refresh button clicks
   useEffect(() => {
+    let cancelled = false;
+    loadDiscTasksFromIdb().then(idbTasks => {
+      if (cancelled || idbTasks.length === 0) return;
+      setAllUnscopedTasks(prev => (prev.length < idbTasks.length ? idbTasks : prev));
+      if (!hasExternalTasksRef.current) {
+        const scoped = isAgency || !isAdmin ? filterDisconnectionTasksForUser(idbTasks, currentUser) : idbTasks;
+        setTasks(prev => (prev.length < scoped.length ? scoped : prev));
+      }
+    }).catch(() => {});
+
     // Only fetch if externalTasks was not provided by parent App
     if (!hasExternalTasksRef.current) {
       loadData(false, false);
@@ -676,13 +711,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current) {
         loadData(true, false);
       }
-    }, 10000);
+    }, 30000);
     const onGlobalRefresh = () => {
       inFlightRef.current = false;
       loadData(true, true);
     };
     const onFocusOrVisible = () => {
-      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current) {
+      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current && Date.now() - lastBackupPollTsRef.current >= 8000) {
         loadData(true, false);
       }
     };
@@ -690,12 +725,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     window.addEventListener('focus', onFocusOrVisible);
     document.addEventListener('visibilitychange', onFocusOrVisible);
     return () => {
+      cancelled = true;
       clearInterval(interval);
       window.removeEventListener('power-app-sheets-refresh', onGlobalRefresh);
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [loadData]);
+  }, [loadData, isAgency, isAdmin, currentUser]);
 
   // Handle task update from modal (keeps consumer details unchanged; updates status badge, remark & backend sheet)
   const handleTaskUpdated = (updatedTask: DisconnectionTask) => {
@@ -774,7 +810,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         }
         deduped.push(item);
       }
-      if (!isAgency) {
+      if (!hasExternalTasksRef.current && !isAgency) {
         setCachedDisconnectionTasksSync(deduped);
       }
       return deduped;

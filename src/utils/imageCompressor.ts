@@ -14,12 +14,17 @@ export interface CompressionOptions {
   maxBase64Length?: number;
 }
 
-export async function getBrowserGpsCoordinates(timeoutMs = 4500): Promise<{
+let cachedGpsResult: { lat: number; lng: number; accuracy?: number; formatted: string; ts: number } | null = null;
+
+export async function getBrowserGpsCoordinates(timeoutMs = 800): Promise<{
   lat: number;
   lng: number;
   accuracy?: number;
   formatted: string;
 } | null> {
+  if (cachedGpsResult && Date.now() - cachedGpsResult.ts < 90000) {
+    return cachedGpsResult;
+  }
   if (typeof navigator === 'undefined' || !navigator.geolocation) {
     return null;
   }
@@ -28,7 +33,7 @@ export async function getBrowserGpsCoordinates(timeoutMs = 4500): Promise<{
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        resolve(null);
+        resolve(cachedGpsResult || null);
       }
     }, timeoutMs);
 
@@ -43,7 +48,9 @@ export async function getBrowserGpsCoordinates(timeoutMs = 4500): Promise<{
         const latDir = lat >= 0 ? 'N' : 'S';
         const lngDir = lng >= 0 ? 'E' : 'W';
         const formatted = `LAT: ${Math.abs(lat).toFixed(6)}° ${latDir}, LON: ${Math.abs(lng).toFixed(6)}° ${lngDir}${acc ? ` (±${acc}m)` : ''}`;
-        resolve({ lat, lng, accuracy: acc, formatted });
+        const res = { lat, lng, accuracy: acc, formatted };
+        cachedGpsResult = { ...res, ts: Date.now() };
+        resolve(res);
       },
       () => {
         if (settled) return;
@@ -161,10 +168,10 @@ export async function compressImageFile(
   file: File | Blob,
   options: CompressionOptions = {}
 ): Promise<string> {
-  // Always enforce HD minimum resolution and quality so Evidence photos are never blurry
-  const targetMaxDim = Math.max(options.maxDimension || 2560, 1920);
-  const targetQuality = Math.max(options.quality || 0.95, 0.92);
-  const maxBase64Length = Math.max(options.maxBase64Length || 4500000, 3200000);
+  // Enforce sharp Full HD resolution & quality while keeping file sizes fast for mobile uploads
+  const targetMaxDim = options.maxDimension || 1920;
+  const targetQuality = options.quality || 0.88;
+  const maxBase64Length = options.maxBase64Length || 1400000;
   const { watermarkText, subText, addressText } = options;
 
   if (!file) {
@@ -181,10 +188,10 @@ export async function compressImageFile(
     });
   }
 
-  // Obtain live GPS coordinates if not already passed in options
+  // Obtain live GPS coordinates quickly (cached for 90s, 800ms cold limit)
   let effectiveGpsText = options.gpsText || '';
   if (!effectiveGpsText && (watermarkText || subText)) {
-    const gps = await getBrowserGpsCoordinates(2500);
+    const gps = await getBrowserGpsCoordinates(800);
     if (gps) {
       effectiveGpsText = gps.formatted;
     }

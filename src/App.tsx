@@ -23,7 +23,11 @@ import {
   fetchDisconnectionTasks,
   getCachedEntriesSync,
   getCachedDisconnectionTasksSync,
-  getCachedWorkOrdersSync
+  getCachedWorkOrdersSync,
+  loadDiscTasksFromIdb,
+  clearDiscTasksFromIdb,
+  setCachedDisconnectionTasksSync,
+  saveClientDisconnectionOverlay
 } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
@@ -76,18 +80,35 @@ function formatTimeHHMMSS(date: Date | null): string {
  * Used for change-tracking in loadData to verify if server data has actually updated
  * before triggering a React state update, preventing unnecessary component re-renders and UI lag.
  */
-function computeJsonChangeHash(data: unknown): string {
-  if (!Array.isArray(data)) return '0_empty';
-  if (data.length === 0) return '0_empty';
-  let sig = `${data.length}`;
-  for (let i = 0; i < data.length; i++) {
-    const item = data[i];
-    if (item) {
-      const agencyVal = item['Agency'] || item.Agency || item.agency || item.assignedAgency || item.agencyName || '';
-      sig += `|${item.id || item.consumerId || item['Consumer Id'] || ''}:${item.status || ''}:${item.disconStatus || item.taskStatus || ''}:${item.notes || item.workerRemarks || ''}:${agencyVal}:${item.assignedWorkerName || ''}:${item.photoUrl || item['Image'] || ''}:${item.reissueRequested ? '1' : '0'}:${item.reissueApproved ? '1' : '0'}:${item.reissueRejected ? '1' : '0'}:${item.updatedAt || item.date || ''}`;
-    }
+function mixHashStr(h: number, s: string): number {
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  return sig;
+  return h;
+}
+
+function computeJsonChangeHash(data: unknown): string {
+  if (!Array.isArray(data) || data.length === 0) return '0_empty';
+  let h = 2166136261 ^ data.length;
+  for (let i = 0; i < data.length; i++) {
+    const item: any = data[i];
+    if (!item) continue;
+    const idVal = String(item.id || item.consumerId || item['Consumer Id'] || '');
+    const stVal = String(item.status || item.disconStatus || item.taskStatus || '');
+    const remVal = String(item.notes || item.workerRemarks || '');
+    const agVal = String(item['Agency'] || item.Agency || item.agency || item.assignedAgency || item.agencyName || item.assignedWorkerName || '');
+    const dtVal = String(item.disconDate || item.paidDate || item.updatedAt || item.date || '');
+    const flagVal = (item.reissueRequested ? 1 : 0) | (item.reissueApproved ? 2 : 0) | (item.reissueRejected ? 4 : 0);
+    h = mixHashStr(h, idVal);
+    h ^= 58 | (flagVal << 8);
+    h = mixHashStr(h, stVal);
+    h = mixHashStr(h, remVal);
+    h = mixHashStr(h, agVal);
+    h = mixHashStr(h, dtVal);
+    h = mixHashStr(h, String(item.photoUrl || item['Image'] || ''));
+  }
+  return `${data.length}_${(h >>> 0).toString(36)}`;
 }
 
 export default function App() {
@@ -195,12 +216,15 @@ export default function App() {
   });
   const [selectedWorkOrderForEntry, setSelectedWorkOrderForEntry] = useState<WorkOrderNotice | null>(null);
   const [entries, setEntries] = useState<PowerEntry[]>(() => getCachedEntriesSync());
+  const entriesRef = useRef<PowerEntry[]>(entries);
+  entriesRef.current = entries;
   const [disconnectionTasks, setDisconnectionTasks] = useState<DisconnectionTask[]>(() => getCachedDisconnectionTasksSync());
   const disconnectionTasksRef = useRef<DisconnectionTask[]>(disconnectionTasks);
   disconnectionTasksRef.current = disconnectionTasks;
   const [workOrders, setWorkOrders] = useState<WorkOrderNotice[]>(() => getCachedWorkOrdersSync());
   const [loading, setLoading] = useState<boolean>(false);
   const lastDataHashRef = useRef<string>('');
+  const lastAutoPollTsRef = useRef<number>(0);
   const loadDataRef = useRef<((silent?: boolean | unknown, forceRefresh?: boolean, throwOnError?: boolean) => Promise<void>) | null>(null);
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
@@ -336,40 +360,64 @@ export default function App() {
       const k = normKey(updated);
       if (k) {
         recentDiscUpdatesRef.current.set(k, { task: updated, timestamp: Date.now() });
+        saveClientDisconnectionOverlay(
+          String(updated.consumerId || (updated as any)['Consumer Id'] || updated.taskId || ''),
+          updated
+        );
       }
       setDisconnectionTasks((prev) => {
+        let matchedAny = false;
         const next = prev.map((t) => {
           const tk = normKey(t);
           const match = (k && tk === k) || (t.taskId && updated.taskId && t.taskId === updated.taskId);
-          return match ? { ...t, ...updated } : t;
+          if (match) {
+            matchedAny = true;
+            return { ...t, ...updated };
+          }
+          return t;
         });
-        lastDataHashRef.current = `${computeJsonChangeHash(entries)}_disc:${computeJsonChangeHash(next)}`;
-        return next;
+        const finalNext = matchedAny ? next : [updated, ...next];
+        lastDataHashRef.current = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(finalNext)}`;
+        setCachedDisconnectionTasksSync(finalNext);
+        return finalNext;
       });
     };
 
     window.addEventListener('power-disconnection-task-updated', onTaskUpdated);
     return () => window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
-  }, [entries]);
+  }, []);
 
   const loadData = async (silent: boolean | unknown = false, forceRefresh = false, throwOnError = false) => {
     if (!currentUser) return;
     if (inFlightRef.current && !forceRefresh) return;
     inFlightRef.current = true;
+    lastAutoPollTsRef.current = Date.now();
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
       if (!isSilent && entries.length === 0 && disconnectionTasksRef.current.length === 0) setLoading(true);
 
+      const discPromise = fetchDisconnectionTasks({
+        role: currentUser?.role,
+        workerId: currentUser?.idNo,
+        workerName: currentUser?.name,
+        refresh: forceRefresh
+      }).then((res) => {
+        const list: DisconnectionTask[] = Array.isArray(res)
+          ? res
+          : Array.isArray((res as any)?.tasks)
+            ? (res as any).tasks
+            : [];
+        if (list.length > 0 && disconnectionTasksRef.current.length === 0) {
+          setDisconnectionTasks(list);
+        }
+        return res;
+      });
+
       const [data, orders, discRes] = await Promise.all([
         fetchEntries({ refresh: forceRefresh }),
         fetchWorkOrders(),
-        fetchDisconnectionTasks({
-          role: currentUser?.role,
-          workerId: currentUser?.idNo,
-          workerName: currentUser?.name,
-          refresh: forceRefresh
-        })
+        discPromise
       ]);
       const rawEntries = (Array.isArray(data) ? data : []).filter((e) => {
         const catUp = String(e?.category || '').toUpperCase().trim();
@@ -382,36 +430,50 @@ export default function App() {
           ? (discRes as any).tasks
           : [];
 
-      const validDiscTasks: DisconnectionTask[] = rawValidDiscTasks.map((t) => {
-        const k = String(t?.consumerId || (t as any)?.['Consumer Id'] || t?.taskId || '')
-          .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
-          .replace(/\.0+$/, '')
-          .replace(/[, \-_]/g, '')
-          .trim()
-          .toLowerCase();
-        const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
-        if (rec && Date.now() - rec.timestamp < 60000) {
-          const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
-          const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
-          const inRem = String(t.workerRemarks || t.notes || '').trim();
-          const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
-          if (inSt !== locSt || inRem !== locRem) {
-            return {
-              ...t,
-              taskStatus: rec.task.taskStatus,
-              disconStatus: rec.task.disconStatus,
-              'Discon Status': rec.task['Discon Status'],
-              workerRemarks: rec.task.workerRemarks,
-              workerReport: rec.task.workerReport,
-              notes: rec.task.notes,
-              Notes: rec.task.Notes,
-              updatedAt: rec.task.updatedAt || t.updatedAt,
-              statusHistory: rec.task.statusHistory || t.statusHistory
-            };
-          }
-        }
-        return t;
-      });
+      const validDiscTasks: DisconnectionTask[] =
+        recentDiscUpdatesRef.current.size === 0
+          ? rawValidDiscTasks
+          : rawValidDiscTasks.map((t) => {
+              const k = String(t?.consumerId || (t as any)?.['Consumer Id'] || t?.taskId || '')
+                .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+                .replace(/\.0+$/, '')
+                .replace(/[, \-_]/g, '')
+                .trim()
+                .toLowerCase();
+              const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
+              if (rec && Date.now() - rec.timestamp < 60000) {
+                const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
+                const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
+                const inRem = String(t.workerRemarks || t.notes || '').trim();
+                const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
+                const inDate = String(t.disconDate || t.paidDate || '').trim();
+                const locDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
+                if (inSt !== locSt || inRem !== locRem || inDate !== locDate) {
+                  return {
+                    ...t,
+                    taskStatus: rec.task.taskStatus,
+                    disconStatus: rec.task.disconStatus,
+                    'Discon Status': rec.task['Discon Status'],
+                    workerRemarks: rec.task.workerRemarks,
+                    workerReport: rec.task.workerReport,
+                    notes: rec.task.notes,
+                    Notes: rec.task.Notes,
+                    disconDate: rec.task.disconDate || t.disconDate,
+                    'Discon Date': rec.task['Discon Date'] || (t as any)['Discon Date'],
+                    paidDate: rec.task.paidDate || t.paidDate,
+                    'Paid Date': rec.task['Paid Date'] || (t as any)['Paid Date'],
+                    agency: rec.task.agency || t.agency,
+                    Agency: rec.task.Agency || t.Agency,
+                    assignedAgency: rec.task.assignedAgency || t.assignedAgency,
+                    submittedBy: rec.task.submittedBy || t.submittedBy,
+                    lastUpdated: rec.task.lastUpdated || t.lastUpdated,
+                    updatedAt: rec.task.updatedAt || t.updatedAt,
+                    statusHistory: rec.task.statusHistory || t.statusHistory
+                  };
+                }
+              }
+              return t;
+            });
 
       const safeDiscTasks =
         validDiscTasks.length > 0 || throwOnError
@@ -449,8 +511,15 @@ export default function App() {
   };
   loadDataRef.current = loadData;
 
+  const discChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleDisconnectionTasksChange = useCallback(() => {
-    loadDataRef.current?.(true, false);
+    if (discChangeTimerRef.current) clearTimeout(discChangeTimerRef.current);
+    discChangeTimerRef.current = setTimeout(() => {
+      discChangeTimerRef.current = null;
+      if (!inFlightRef.current) {
+        loadDataRef.current?.(true, false);
+      }
+    }, 350);
   }, []);
 
   useEffect(() => {
@@ -462,6 +531,7 @@ export default function App() {
       return;
     }
 
+    let cancelled = false;
     try {
       localStorage.setItem('power_sync_mode', 'auto');
     } catch {}
@@ -474,26 +544,40 @@ export default function App() {
     if (cachedEnt.length > 0) setEntries(cachedEnt);
     if (cachedDisc.length > 0) setDisconnectionTasks(cachedDisc);
     if (cachedOrd.length > 0) setWorkOrders(cachedOrd);
+
+    // Hydrate full dataset from IndexedDB in ~5-10ms if localStorage cache was partial/empty
+    loadDiscTasksFromIdb().then((idbTasks) => {
+      if (cancelled || idbTasks.length === 0) return;
+      if (disconnectionTasksRef.current.length < idbTasks.length) {
+        setDisconnectionTasks(idbTasks);
+      }
+    }).catch(() => {});
+
     loadData(true, false);
 
-    // Single active 10-second non-blocking background timer per authenticated app session (POWER APP & SHEETS REFRESH)
+    // Non-blocking background sync every 30 seconds to keep UI butter-smooth
     const interval = setInterval(() => {
       if (!document.hidden && !inFlightRef.current) {
         loadData(true, false);
       }
-    }, 10000);
+    }, 30000);
 
     const onFocus = () => {
-      if (!inFlightRef.current) loadData(true, false);
+      if (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 8000) {
+        loadData(true, false);
+      }
     };
     const onVisibilityChange = () => {
-      if (!document.hidden && !inFlightRef.current) loadData(true, false);
+      if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 8000) {
+        loadData(true, false);
+      }
     };
 
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -534,6 +618,7 @@ export default function App() {
         localStorage.removeItem('power_disconnection_tasks_cache_v2');
         localStorage.removeItem('power_disconnection_client_overlay_v1');
         localStorage.removeItem('power_work_orders_local_v1');
+        clearDiscTasksFromIdb().catch(() => {});
       } catch {}
       lastDataHashRef.current = '';
       lastOrdersHashRef.current = '';
@@ -770,22 +855,24 @@ export default function App() {
     return isAgencyUserSession(currentUser, disconnectionTasks);
   }, [isAdmin, currentUser, disconnectionTasks]);
 
-  const userVisibleDisconnectionTasks = isAdmin
-    ? disconnectionTasks
-    : filterDisconnectionTasksForUser(disconnectionTasks, currentUser);
+  const userVisibleDisconnectionTasks = useMemo(
+    () => (isAdmin ? disconnectionTasks : filterDisconnectionTasksForUser(disconnectionTasks, currentUser)),
+    [isAdmin, disconnectionTasks, currentUser]
+  );
 
-  const userVisibleEntries = isAdmin
-    ? entries
-    : filterEntriesForUser(entries, currentUser);
+  const userVisibleEntries = useMemo(
+    () => (isAdmin ? entries : filterEntriesForUser(entries, currentUser)),
+    [isAdmin, entries, currentUser]
+  );
 
   // Helper count badges (strictly 1-to-1 per backend Google Sheet tab, scoped for Agency accounts)
-  const categoryCounts: Record<CategoryType, number> = {
+  const categoryCounts: Record<CategoryType, number> = useMemo(() => ({
     'NSC': userVisibleEntries.filter(e => e.category === 'NSC').length,
     'DISCONNECTION': userVisibleDisconnectionTasks.length,
     'POLE CASE': userVisibleEntries.filter(e => e.category === 'POLE CASE').length,
     'METER REPLESMENT': userVisibleEntries.filter(e => e.category === 'METER REPLESMENT').length,
     'DTR REPLESMENT': userVisibleEntries.filter(e => e.category === 'DTR REPLESMENT').length,
-  };
+  }), [userVisibleEntries, userVisibleDisconnectionTasks.length]);
 
   // Ensure top of Home Screen & content viewport is always visible on mount or navigation
   useEffect(() => {

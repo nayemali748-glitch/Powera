@@ -143,11 +143,18 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       setMeterReading(String(task.meterReading ?? (task as any)['Reading'] ?? '').trim());
       setRemarks(cleanDisconnectionNotes(task.workerRemarks || task.workerReport || (task as any)['Notes'] || (task as any)['Remarks'] || ''));
       setPaidAmount(String(task.paidAmount ?? (task as any)['Paid Amount'] ?? '').trim());
+      const todayStr = getTodayYMD();
+      const isFreshOrReissued =
+        rawSt === 'PENDING' ||
+        rawSt === 'REISSUE' ||
+        rawSt === 'IN PROGRESS' ||
+        Boolean(task.reissueApproved) ||
+        /\[REISSUE_APPROVED/i.test(String(task.notes || task.workerRemarks || ''));
       const rawPaidDate = String(task.paymentDate || task.paidDate || (task as any)['Paid Date'] || '').trim();
-      setPaymentDate(parseTaskDateToYMD(rawPaidDate) || getTodayYMD());
+      setPaymentDate(isFreshOrReissued ? todayStr : (parseTaskDateToYMD(rawPaidDate) || todayStr));
       setPaymentReference(String(task.paymentReference || task.paidType || (task as any)['Paid Type'] || '').trim());
       const rawDisconDate = String(task.disconDate || task.reportDate || (task as any)['Discon Date'] || '').trim();
-      setDisconDate(parseTaskDateToYMD(rawDisconDate) || getTodayYMD());
+      setDisconDate(isFreshOrReissued ? todayStr : (parseTaskDateToYMD(rawDisconDate) || todayStr));
       setGisPole(String(task.gisPole ?? (task as any)['Gis Pole'] ?? '').trim());
       const resolvedPayStatus = normalizedSt === 'PAID' ? 'PAID' : 'PENDING';
       setPaymentStatus(resolvedPayStatus);
@@ -300,8 +307,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const addrText = String(task.consumerAddress || (task as any)['Address'] || '').trim();
 
       const compressed = await compressImageFile(file, {
-        maxDimension: 2560,
-        quality: 0.95,
+        maxDimension: 1920,
+        quality: 0.90,
         watermarkText,
         subText,
         addressText: addrText || undefined
@@ -389,19 +396,48 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const sheetStatusVal = selectedStatus;
       const finalPaymentStatus = selectedStatus === 'PAID' ? 'PAID' : 'PENDING';
       const finalPaidType = paidType || paymentReference || '';
-      const finalPaidDate = paymentDate || '';
-      const finalDisconDate = disconDate || '';
+
+      const todayYmd = getTodayYMD();
+      const prevStatusNorm = String(
+        task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || 'PENDING'
+      ).trim().toUpperCase();
+      const shouldStampToday =
+        !isAdminUser ||
+        selectedStatus !== prevStatusNorm ||
+        prevStatusNorm === 'PENDING' ||
+        prevStatusNorm === 'REISSUE' ||
+        prevStatusNorm === 'IN PROGRESS' ||
+        Boolean(task.reissueApproved);
+      const finalPaidDate = shouldStampToday ? todayYmd : (paymentDate || todayYmd);
+      const finalDisconDate = shouldStampToday ? todayYmd : (disconDate || todayYmd);
+
       const finalMeterReading = meterReading.trim();
       const finalPaidAmount = paidAmount.trim();
       const finalPaymentSource = paymentSource.trim();
       const finalGisPole = gisPole.trim();
+      const isPlaceholderLabel = (v: string) =>
+        !v || /^(admin|administrator|superadmin|controller|worker|unassigned|samsi ccc|nayem(?:\s*\(.*\))?)$/i.test(v.trim());
       const currentAgencyDefault =
         !isAdminUser && currentUser?.role === 'agency'
           ? cleanWorkerOrAgencyName((currentUser as any)?.agencyName || currentUser?.name || currentUser?.username || '')
           : '';
-      const finalAgency = cleanWorkerOrAgencyName(
-        (task as any)['Agency'] || task.Agency || task.agency || task.assignedAgency || assignedAgency || currentAgencyDefault || ''
+      const rawExistingAgency = cleanWorkerOrAgencyName(
+        (task as any)['Agency'] || task.Agency || task.agency || task.assignedAgency || ''
       );
+      const rawSelectedDropdownAgency = cleanWorkerOrAgencyName(assignedAgency || '');
+      const agencyCandidates = isAdminUser
+        ? [rawSelectedDropdownAgency, rawExistingAgency]
+        : [rawExistingAgency, rawSelectedDropdownAgency, currentAgencyDefault];
+      const finalAgency =
+        agencyCandidates.find(c => c && !isPlaceholderLabel(c)) ||
+        currentAgencyDefault ||
+        rawSelectedDropdownAgency ||
+        rawExistingAgency ||
+        '';
+      const effectiveSubmittedBy =
+        !isAdminUser && currentAgencyDefault && !isPlaceholderLabel(currentAgencyDefault)
+          ? currentAgencyDefault
+          : workerName;
       const matchedWorkerObj = availableWorkers.find(
         w => cleanWorkerOrAgencyName(w.name).toLowerCase() === finalAgency.toLowerCase() || String(w.id).toLowerCase() === String(assignedWorkerId).toLowerCase()
       );
@@ -418,7 +454,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         priority: finalPriority,
         Priority: finalPriority,
         workerId,
-        workerName,
+        workerName: effectiveSubmittedBy,
+        submittedBy: effectiveSubmittedBy,
         taskStatus: selectedStatus,
         disconStatus: sheetStatusVal,
         status: sheetStatusVal,
@@ -529,12 +566,15 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Outstanding After': outstandingAfter.trim(),
         nextPaymentDate: nextPaymentDate.trim(),
         'Next Payment Date': nextPaymentDate.trim(),
+        agency: finalAgency,
         assignedAgency: finalAgency,
         assignedWorkerName: finalAgency,
         assignedWorkerId: finalAssignedWorkerId,
         'Worker ID': finalAssignedWorkerId,
         'Worker Name': finalAgency,
         'Agency': finalAgency,
+        workerName: effectiveSubmittedBy,
+        submittedBy: effectiveSubmittedBy,
         photoUrl: finalPhotoUrl,
         'Image': finalPhotoUrl,
         updatedAt: nowIso,

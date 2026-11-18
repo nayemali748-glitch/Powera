@@ -229,7 +229,26 @@ export function getTaskReportYMD(task: DisconnectionTask): string {
     }
   }
 
-  // 3. Date embedded inside Notes / workerRemarks (if any DD/MM/YYYY or DD.MM.YYYY or YYYY-MM-DD token exists)
+  // 3. Local update timestamp from current session
+  if (typeof (task as any)._localUpdatedAt === 'number' && (task as any)._localUpdatedAt > 0) {
+    const ymd = parseTaskDateToYMD(new Date((task as any)._localUpdatedAt).toISOString());
+    if (ymd) return ymd;
+  }
+
+  // 4. Last Updated / updatedAt from Google Sheets backend
+  const lastUpdatedCandidates = [
+    (task as any)['Last Updated'],
+    task.lastUpdated,
+    task.updatedAt
+  ];
+  for (const c of lastUpdatedCandidates) {
+    if (c !== null && c !== undefined && String(c).trim() !== '') {
+      const ymd = parseTaskDateToYMD(c);
+      if (ymd) return ymd;
+    }
+  }
+
+  // 5. Last resort: Date embedded inside Notes / workerRemarks
   const rawNotes = String(
     (task as any)['Notes'] ?? task.notes ?? task.workerRemarks ?? task.workerReport ?? ''
   );
@@ -243,25 +262,6 @@ export function getTaskReportYMD(task: DisconnectionTask): string {
   const embeddedYmd = rawNotes.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (embeddedYmd) {
     return `${embeddedYmd[1]}-${embeddedYmd[2]}-${embeddedYmd[3]}`;
-  }
-
-  // 4. Local update timestamp from current session
-  if (typeof (task as any)._localUpdatedAt === 'number' && (task as any)._localUpdatedAt > 0) {
-    const ymd = parseTaskDateToYMD(new Date((task as any)._localUpdatedAt).toISOString());
-    if (ymd) return ymd;
-  }
-
-  // 5. Last Updated / updatedAt from Google Sheets backend
-  const lastUpdatedCandidates = [
-    (task as any)['Last Updated'],
-    task.lastUpdated,
-    task.updatedAt
-  ];
-  for (const c of lastUpdatedCandidates) {
-    if (c !== null && c !== undefined && String(c).trim() !== '') {
-      const ymd = parseTaskDateToYMD(c);
-      if (ymd) return ymd;
-    }
   }
 
   return '';

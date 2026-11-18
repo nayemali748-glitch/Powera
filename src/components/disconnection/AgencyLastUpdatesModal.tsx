@@ -140,10 +140,15 @@ function resolveCanonicalAgencyName(
       : ''
   ];
 
+  const isAdminLabel = (val: string) =>
+    /^(admin|administrator|superadmin|controller|worker|unassigned|samsi ccc|nayem(?:\s*\(.*\))?)$/i.test(
+      val.trim()
+    );
+
   let rawAgency = '';
   for (const c of candidates) {
     const cleaned = cleanWorkerOrAgencyName(String(c || '').trim());
-    if (cleaned && cleaned.toLowerCase() !== 'unassigned' && cleaned.toLowerCase() !== 'worker') {
+    if (cleaned && !isAdminLabel(cleaned)) {
       rawAgency = cleaned;
       break;
     }
@@ -203,7 +208,7 @@ export const AgencyLastUpdatesModal: React.FC<AgencyLastUpdatesModalProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
-  const todayYMD = useMemo(() => getTodayYMD(), [isOpen]);
+  const todayYMD = useMemo(() => getTodayYMD(), [isOpen, tasks]);
 
   const nonAdminUsers = useMemo(() => {
     return availableUsers.filter(u => {
@@ -219,52 +224,38 @@ export const AgencyLastUpdatesModal: React.FC<AgencyLastUpdatesModalProps> = ({
     return stripGenericAgencySuffix(raw);
   }, [currentUser]);
 
-  // Build each agency's latest update within the 3-day window (Today=Green, 1 day ago=Yellow, 2 days ago=Red; 3+ days ago=hidden)
+  // Build each agency's exact genuine update count within the 3-day window (Today=Green, 1 day ago=Yellow, 2 days ago=Red; 3+ days ago=hidden)
   const agencyRows = useMemo<AgencyDateUpdateRow[]>(() => {
     const dedupedUpdated = getDeduplicatedUpdatedTasks(tasks);
     const byAgencyDate = new Map<string, AgencyDateUpdateRow>();
 
     dedupedUpdated.forEach(task => {
-      if (!isUpdatedDisconnectionRecord(task)) return;
-
       const agencyName = resolveCanonicalAgencyName(task, nonAdminUsers);
       if (!agencyName) return;
-
-      const ymd = getTaskReportYMD(task);
-      if (!ymd) return;
 
       const rawStatus = String(
         (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? 'PENDING'
       )
         .trim()
         .toUpperCase();
-      const cleanedNotes = cleanDisconnectionNotes(
-        (task as any)['Notes'] ??
-          task.notes ??
-          task.workerRemarks ??
-          task.workerReport ??
-          (task as any)['Remark'] ??
-          (task as any)['Remarks'] ??
-          ''
-      ).trim();
 
-      const hasStatusUpdate =
-        rawStatus !== '' &&
-        rawStatus !== 'PENDING' &&
-        rawStatus !== 'IN PROGRESS' &&
-        rawStatus !== 'CONNECTED' &&
-        rawStatus !== 'REISSUE';
-      const hasRemarkUpdate = cleanedNotes.length > 0;
+      // Count strictly records updated via Update Status -> Set Status (DISCONNECT, PAID, NOT FOUND, DISPUTE, OFFICE TEAM)
+      const isSetStatusSaved =
+        rawStatus === 'DISCONNECT' ||
+        rawStatus === 'DISCONNECTED' ||
+        rawStatus === 'COMPLETED' ||
+        rawStatus === 'PAID' ||
+        rawStatus === 'AGENCY PAID' ||
+        rawStatus === 'NOT FOUND' ||
+        rawStatus === 'DISPUTE' ||
+        rawStatus === 'OFFICE TEAM';
 
-      if (!hasStatusUpdate && !hasRemarkUpdate) {
-        const rawPaidAmt = parseFloat(
-          String((task as any)['Paid Amount'] ?? task.paidAmount ?? '').replace(/[^0-9.-]/g, '')
-        );
-        const rawReading = String((task as any)['Reading'] ?? task.reading ?? task.meterReading ?? '').trim();
-        if ((isNaN(rawPaidAmt) || rawPaidAmt <= 0) && (!rawReading || rawReading === '-' || rawReading === '0')) {
-          return;
-        }
+      if (!isSetStatusSaved) {
+        return;
       }
+
+      const ymd = getTaskReportYMD(task);
+      if (!ymd) return;
 
       const daysAgo = Math.max(0, getCalendarDaysAgo(ymd, todayYMD));
       const colorState = getFreshnessColorState(daysAgo);
