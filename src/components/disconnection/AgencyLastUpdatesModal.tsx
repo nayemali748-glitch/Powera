@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -33,6 +33,7 @@ interface AgencyLastUpdatesModalProps {
   availableUsers?: AgencyLastUpdatesWorkerRef[];
   currentUser?: UserSession | null;
   onRefresh?: () => void;
+  onOpenModal?: () => void;
   isRefreshing?: boolean;
   lang?: 'en' | 'bn';
 }
@@ -203,12 +204,22 @@ export const AgencyLastUpdatesModal: React.FC<AgencyLastUpdatesModalProps> = ({
   availableUsers = [],
   currentUser,
   onRefresh,
+  onOpenModal,
   isRefreshing = false,
   lang = 'en'
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
-  const todayYMD = useMemo(() => getTodayYMD(), [isOpen, tasks]);
+  const onOpenModalRef = useRef(onOpenModal);
+  onOpenModalRef.current = onOpenModal;
+
+  useEffect(() => {
+    if (isOpen && onOpenModalRef.current) {
+      onOpenModalRef.current();
+    }
+  }, [isOpen]);
+
+  const todayYMD = getTodayYMD();
 
   const nonAdminUsers = useMemo(() => {
     return availableUsers.filter(u => {

@@ -304,10 +304,15 @@ export function getDeduplicatedUpdatedTasks(tasks: DisconnectionTask[]): Disconn
   tasks.forEach((task, idx) => {
     if (!isUpdatedDisconnectionRecord(task)) return;
 
-    const rawCid = String((task as any)['Consumer Id'] ?? task.consumerId ?? task.taskId ?? `ROW-${idx}`)
-      .replace(/^TASK-DISC-/i, '')
+    let rawCid = String((task as any)['Consumer Id'] ?? task.consumerId ?? task.taskId ?? `ROW-${idx}`)
+      .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+      .replace(/\.0+$/, '')
+      .replace(/[, \-_]/g, '')
       .trim()
       .toLowerCase();
+    if (/^\d+$/.test(rawCid)) {
+      rawCid = rawCid.replace(/^0+/, '') || '0';
+    }
     const key = rawCid || `row-${idx}`;
 
     const existing = byConsumerKey.get(key);

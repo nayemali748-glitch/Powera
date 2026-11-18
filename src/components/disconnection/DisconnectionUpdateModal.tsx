@@ -398,18 +398,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
       const finalPaidType = paidType || paymentReference || '';
 
       const todayYmd = getTodayYMD();
-      const prevStatusNorm = String(
-        task.taskStatus || task.disconStatus || (task as any)['Discon Status'] || 'PENDING'
-      ).trim().toUpperCase();
-      const shouldStampToday =
-        !isAdminUser ||
-        selectedStatus !== prevStatusNorm ||
-        prevStatusNorm === 'PENDING' ||
-        prevStatusNorm === 'REISSUE' ||
-        prevStatusNorm === 'IN PROGRESS' ||
-        Boolean(task.reissueApproved);
-      const finalPaidDate = shouldStampToday ? todayYmd : (paymentDate || todayYmd);
-      const finalDisconDate = shouldStampToday ? todayYmd : (disconDate || todayYmd);
+      const finalPaidDate = todayYmd;
+      const finalDisconDate = todayYmd;
 
       const finalMeterReading = meterReading.trim();
       const finalPaidAmount = paidAmount.trim();

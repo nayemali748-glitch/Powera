@@ -27,7 +27,8 @@ import {
   loadDiscTasksFromIdb,
   clearDiscTasksFromIdb,
   setCachedDisconnectionTasksSync,
-  saveClientDisconnectionOverlay
+  saveClientDisconnectionOverlay,
+  fastNormalizeServerDisconnectionTask
 } from './services/api';
 import { Language, translations } from './utils/translations';
 import { WorkOrderNoticeSection } from './components/WorkOrderNoticeSection';
@@ -383,8 +384,52 @@ export default function App() {
       });
     };
 
+    const onSseTaskUpdated = (e: Event) => {
+      const rawTask = (e as CustomEvent<any>)?.detail;
+      if (!rawTask) return;
+      const incoming = fastNormalizeServerDisconnectionTask(rawTask, 0);
+      const k = normKey(incoming);
+      if (k) {
+        const existingRec = recentDiscUpdatesRef.current.get(k);
+        const existingLocalTs = Number((existingRec?.task as any)?._localUpdatedAt || 0);
+        const incomingTs = Number((incoming as any)._localUpdatedAt || 0);
+        if (existingRec && existingLocalTs > incomingTs && Date.now() - existingRec.timestamp < 5000) {
+          return;
+        }
+        recentDiscUpdatesRef.current.set(k, { task: incoming, timestamp: Date.now() });
+      }
+      setDisconnectionTasks((prev) => {
+        let matchedAny = false;
+        const next = prev.map((t) => {
+          const tk = normKey(t);
+          const match = (k && tk === k) || (t.taskId && incoming.taskId && t.taskId === incoming.taskId);
+          if (match) {
+            matchedAny = true;
+            return { ...t, ...incoming, serialNumber: t.serialNumber || incoming.serialNumber };
+          }
+          return t;
+        });
+        const finalNext = matchedAny ? next : [incoming, ...next];
+        lastDataHashRef.current = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(finalNext)}`;
+        setCachedDisconnectionTasksSync(finalNext);
+        return finalNext;
+      });
+    };
+
+    const onLivePing = () => {
+      if (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 4000) {
+        loadDataRef.current?.(true, false);
+      }
+    };
+
     window.addEventListener('power-disconnection-task-updated', onTaskUpdated);
-    return () => window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
+    window.addEventListener('power-disconnection-sse-update', onSseTaskUpdated);
+    window.addEventListener('power-disconnection-live-ping', onLivePing);
+    return () => {
+      window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
+      window.removeEventListener('power-disconnection-sse-update', onSseTaskUpdated);
+      window.removeEventListener('power-disconnection-live-ping', onLivePing);
+    };
   }, []);
 
   const loadData = async (silent: boolean | unknown = false, forceRefresh = false, throwOnError = false) => {
@@ -441,14 +486,16 @@ export default function App() {
                 .trim()
                 .toLowerCase();
               const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
-              if (rec && Date.now() - rec.timestamp < 60000) {
+              if (rec && Date.now() - rec.timestamp < 180000) {
                 const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
                 const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
                 const inRem = String(t.workerRemarks || t.notes || '').trim();
                 const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
                 const inDate = String(t.disconDate || t.paidDate || '').trim();
                 const locDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
-                if (inSt !== locSt || inRem !== locRem || inDate !== locDate) {
+                const inAgency = String((t as any)['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
+                const locAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
+                if (inSt !== locSt || inRem !== locRem || inDate !== locDate || (locAgency && inAgency !== locAgency)) {
                   return {
                     ...t,
                     taskStatus: rec.task.taskStatus,
@@ -576,11 +623,54 @@ export default function App() {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // Real-time Server-Sent Events subscription for instant zero-refresh multi-user updates
+    let eventSource: EventSource | null = null;
+    let lastKnownVersion = 0;
+    try {
+      if (typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
+        eventSource = new EventSource('/api/disconnection-events');
+        eventSource.addEventListener('connected', (evt: MessageEvent) => {
+          try {
+            const payload = JSON.parse(evt.data || '{}');
+            const v = Number(payload?.version || 0);
+            if (lastKnownVersion > 0 && v > lastKnownVersion && !inFlightRef.current) {
+              loadData(true, false);
+            }
+            if (v > 0) lastKnownVersion = v;
+          } catch {}
+        });
+        eventSource.addEventListener('task_updated', (evt: MessageEvent) => {
+          try {
+            const payload = JSON.parse(evt.data || '{}');
+            const v = Number(payload?.version || 0);
+            if (v > lastKnownVersion) lastKnownVersion = v;
+            if (payload?.task) {
+              window.dispatchEvent(new CustomEvent('power-disconnection-sse-update', { detail: payload.task }));
+            }
+          } catch {}
+        });
+        eventSource.addEventListener('tasks_synced', (evt: MessageEvent) => {
+          try {
+            const payload = JSON.parse(evt.data || '{}');
+            const v = Number(payload?.version || 0);
+            if (v <= lastKnownVersion) return;
+            lastKnownVersion = v;
+            if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 2500) {
+              loadData(true, false);
+            }
+          } catch {}
+        });
+      }
+    } catch {}
+
     return () => {
       cancelled = true;
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      try {
+        eventSource?.close();
+      } catch {}
     };
   }, [currentUser?.idNo, currentUser?.name, currentUser?.role]);
 

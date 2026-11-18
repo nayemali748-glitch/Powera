@@ -5217,6 +5217,49 @@ interface CachedMergedDiscSnapshot {
 }
 let cachedMergedDiscSnapshot: CachedMergedDiscSnapshot | null = null;
 
+const discSseClients = new Set<any>();
+
+function broadcastDisconnectionEvent(eventType: string, payload: any) {
+  if (discSseClients.size === 0) return;
+  const frame = `event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const clientRes of Array.from(discSseClients)) {
+    try {
+      clientRes.write(frame);
+    } catch {
+      discSseClients.delete(clientRes);
+    }
+  }
+}
+
+let discCacheDiskTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleDiscCacheDiskWrite() {
+  if (discCacheDiskTimer) return;
+  discCacheDiskTimer = setTimeout(() => {
+    discCacheDiskTimer = null;
+    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+      try {
+        fs.promises.writeFile(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8').catch(() => {});
+      } catch {}
+    }
+  }, 250);
+}
+
+function getIndiaTodayYMD(): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const yyyy = parts.find(p => p.type === 'year')?.value;
+    const mm = parts.find(p => p.type === 'month')?.value;
+    const dd = parts.find(p => p.type === 'day')?.value;
+    if (yyyy && mm && dd) return `${yyyy}-${mm}-${dd}`;
+  } catch {}
+  return new Date().toISOString().split('T')[0];
+}
+
 function invalidateDiscSnapshotCache() {
   discSnapshotVersion++;
   cachedMergedDiscSnapshot = null;
@@ -5227,7 +5270,7 @@ function getMergedDiscSnapshot(): CachedMergedDiscSnapshot {
   if (
     cachedMergedDiscSnapshot &&
     cachedMergedDiscSnapshot.version === discSnapshotVersion &&
-    (!cachedMergedDiscSnapshot.hasPendingOverlay || now - cachedMergedDiscSnapshot.builtAt < 35000)
+    (!cachedMergedDiscSnapshot.hasPendingOverlay || now - cachedMergedDiscSnapshot.builtAt < 90000)
   ) {
     return cachedMergedDiscSnapshot;
   }
@@ -5319,11 +5362,24 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || 'PENDING').trim().toUpperCase();
       const sheetNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
       const ovNotes = String(ov.notes || ov['Notes'] || ov.workerRemarks || '').trim();
+      const sheetDisconDate = String(t.disconDate || t['Discon Date'] || '').trim();
+      const ovDisconDate = String(ov.disconDate || ov['Discon Date'] || '').trim();
+      const sheetPaidDate = String(t.paidDate || t['Paid Date'] || '').trim();
+      const ovPaidDate = String(ov.paidDate || ov['Paid Date'] || '').trim();
+      const sheetAgency = String(t['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
+      const ovAgency = String(ov['Agency'] || ov.Agency || ov.agency || ov.assignedAgency || '').trim().toLowerCase();
 
-      const sheetMatchesOverlay = sheetStatus === ovStatus && sheetNotes === ovNotes;
-      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+      const sheetMatchesOverlay =
+        sheetStatus === ovStatus &&
+        sheetNotes === ovNotes &&
+        (!ovDisconDate || sheetDisconDate === ovDisconDate) &&
+        (!ovPaidDate || sheetPaidDate === ovPaidDate) &&
+        (!ovAgency || sheetAgency === ovAgency);
+      const unsyncedWindowValid = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 600000);
+      const syncedPropagationGraceValid = Boolean(ov._syncedToSheet) && (now - Number(ov._syncedAt || ov._localUpdatedAt || 0) < 90000);
+      const overlayStillActive = unsyncedWindowValid || syncedPropagationGraceValid;
 
-      if (!sheetMatchesOverlay && isRecentUnsynced && (ovStatus !== 'PENDING' || ovNotes !== '' || ov._hasUserRemarkUpdate)) {
+      if (!sheetMatchesOverlay && overlayStillActive && (ovStatus !== 'PENDING' || ovNotes !== '' || ov._hasUserRemarkUpdate)) {
         mergedMap.set(key, {
           ...t,
           ...ov,
@@ -5376,7 +5432,7 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       continue;
     }
     if (!mergedMap.has(normKey)) {
-      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 600000);
       if (isRecentUnsynced) {
         mergedMap.set(normKey, ov);
       } else {
@@ -5588,7 +5644,11 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     const origD2NetOs = String(origMaster['D2 Net O/S'] ?? origMaster.outstandingDue ?? origMaster.arrearAmount ?? full33['D2 Net O/S'] ?? '').trim();
     const origMobile = String(origMaster['Mobile'] ?? origMaster['Mobile Number'] ?? origMaster.phoneNumber ?? origMaster.mobile ?? full33['Mobile'] ?? '').trim();
     const origNumber = String(origMaster['Number'] ?? origMaster.number ?? origMaster['Meter'] ?? full33['Number'] ?? '').trim();
-    const origAgency = String(origMaster['Agency'] ?? origMaster.Agency ?? origMaster.agency ?? origMaster.assignedAgency ?? full33['Agency'] ?? '').trim();
+    const origAgency = String(
+      taskOrRow['Agency'] ?? taskOrRow.Agency ?? taskOrRow.agency ?? taskOrRow.assignedAgency ??
+      origMaster['Agency'] ?? origMaster.Agency ?? origMaster.agency ?? origMaster.assignedAgency ??
+      full33['Agency'] ?? ''
+    ).trim();
     const origNatureOfConn = String(origMaster['Nature of Conn'] ?? origMaster.natureOfConn ?? full33['Nature of Conn'] ?? '').trim();
     const origGovNonGov = String(origMaster['Gov/Non-Gov'] ?? origMaster.govNonGov ?? full33['Gov/Non-Gov'] ?? '').trim();
     const origUploadDate = String(origMaster['Upload Date'] ?? origMaster.uploadDate ?? origMaster.createdAt ?? full33['Upload Date'] ?? '').trim();
@@ -5678,6 +5738,7 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     setIfPresent(['paymentSource', 'Payment Source'], taskOrRow['Payment Source'] ?? taskOrRow.paymentSource);
     setIfPresent(['gisPole', 'Gis Pole', 'poleNo'], taskOrRow['Gis Pole'] ?? taskOrRow.gisPole ?? taskOrRow.poleNo);
     setIfPresent(['priority', 'Priority'], taskOrRow['Priority'] ?? taskOrRow.priority);
+    setIfPresent(['submittedBy', 'workerName', 'Worker Name'], taskOrRow.submittedBy ?? taskOrRow.workerName ?? origAgency);
 
     const imgUrlVal = String(mergedSource.photoUrl || mergedSource.imageUrl || mergedSource['Image'] || mergedSource.image || '').trim();
     if (imgUrlVal && !imgUrlVal.startsWith('data:')) {
@@ -5827,6 +5888,7 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
     }
 
     if (rawTasks.length > 0) {
+      const prevLen = cachedDisconnectionState?.tasks?.length || 0;
       const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
       const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
 
@@ -5836,20 +5898,34 @@ async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
         timestamp: Date.now()
       };
       invalidateDiscSnapshotCache();
-      try {
-        fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(merged), 'utf-8');
-      } catch {}
+      scheduleDiscCacheDiskWrite();
+      if (prevLen === 0 || Math.abs(prevLen - merged.length) > 0 || discSseClients.size > 0) {
+        broadcastDisconnectionEvent('tasks_synced', {
+          version: discSnapshotVersion,
+          count: merged.length,
+          ts: Date.now()
+        });
+      }
 
       // If any local overlay records haven't been synced to the sheet yet, push them gently in background
       for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
-        if (ov && !ov._syncedToSheet && isValidDisconnectionConsumerRow(ov)) {
+        if (ov && !ov._syncedToSheet && !ov._syncInFlight && isValidDisconnectionConsumerRow(ov)) {
+          ov._syncInFlight = true;
           enqueueGasWrite(async () => {
-            const ok = await syncSingleDisconnectionRowToSheet(ov);
-            if (ok) {
-              localDisconnectionOverlayMap.delete(k);
-              saveDiscOverlayToDisk();
+            try {
+              const ok = await syncSingleDisconnectionRowToSheet(ov);
+              if (ok) {
+                const cur = localDisconnectionOverlayMap.get(k);
+                if (cur && Number(cur._localUpdatedAt || 0) <= Number(ov._localUpdatedAt || 0)) {
+                  cur._syncedToSheet = true;
+                  cur._syncedAt = Date.now();
+                  saveDiscOverlayToDisk();
+                }
+              }
+              return ok;
+            } finally {
+              ov._syncInFlight = false;
             }
-            return ok;
           }).catch(() => {});
         }
       }
@@ -5876,13 +5952,13 @@ function refreshDisconnectionFromSheetInBackground() {
   })();
 }
 
-// Keep Disconnection cache synced with Google Sheet every 30 seconds (in standalone server only)
+// Keep Disconnection cache synced with Google Sheet every 15 seconds (in standalone server only)
 if (!process.env.VERCEL) {
   setInterval(() => {
     if (activeGasWriteCount === 0 && activeForegroundGasCount === 0) {
       refreshDisconnectionFromSheetInBackground();
     }
-  }, 30000).unref();
+  }, 15000).unref();
 
   // Keep other module caches warm every 90 seconds
   setInterval(() => {
@@ -5922,6 +5998,39 @@ app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
       error: err?.message || 'Failed to refresh from Google Sheet'
     });
   }
+});
+
+app.get('/api/disconnection-events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  (res as any).flushHeaders?.();
+
+  discSseClients.add(res);
+  try {
+    res.write(
+      `event: connected\ndata: ${JSON.stringify({
+        version: discSnapshotVersion,
+        count: cachedDisconnectionState?.tasks?.length || 0,
+        ts: Date.now()
+      })}\n\n`
+    );
+  } catch {}
+
+  const pingInterval = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      clearInterval(pingInterval);
+      discSseClients.delete(res);
+    }
+  }, 20000);
+
+  req.on('close', () => {
+    clearInterval(pingInterval);
+    discSseClients.delete(res);
+  });
 });
 
 app.get('/api/disconnection-tasks', async (req, res) => {
@@ -6473,7 +6582,7 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
 
   const newStatus = String(report.taskStatus || report.disconStatus || report['Discon Status'] || report.status || 'COMPLETED').trim().toUpperCase();
   const cId = String(report.consumerId || report['Consumer Id'] || taskId).replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
-  const dateStr = new Date().toISOString().split('T')[0];
+  const dateStr = getIndiaTodayYMD();
   const remarksStr = String(report.workerRemarks ?? report.workerReport ?? report.notes ?? report['Notes'] ?? report['Remark'] ?? '').trim();
 
   const cIdKey = cId.toLowerCase();
@@ -6768,12 +6877,18 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       return true;
     });
     invalidateDiscSnapshotCache();
-    try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+    scheduleDiscCacheDiskWrite();
   }
 
   // Respond immediately after saving local overlay & disk cache; upload external photo link + sync Google Sheets in background
   const responseTask = { ...updatedTaskObj };
   delete responseTask.photoDataUrl;
+  broadcastDisconnectionEvent('task_updated', {
+    task: responseTask,
+    version: discSnapshotVersion,
+    ts: Date.now()
+  });
+
   const responseObj = {
     success: true,
     message: `Consumer ${cId} remark & status (${newStatus}) saved to Disconnection sheet`,
@@ -6810,7 +6925,7 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
                   'Image': permUrl
                 };
                 invalidateDiscSnapshotCache();
-                try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+                scheduleDiscCacheDiskWrite();
               }
             }
           }
@@ -6825,8 +6940,9 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     }
     if (ok && normCIdKey) {
       const currentOv = localDisconnectionOverlayMap.get(normCIdKey);
-      if (!currentOv || Number(currentOv._localUpdatedAt || 0) <= submittedLocalUpdatedAt) {
-        localDisconnectionOverlayMap.delete(normCIdKey);
+      if (currentOv && Number(currentOv._localUpdatedAt || 0) <= submittedLocalUpdatedAt) {
+        currentOv._syncedToSheet = true;
+        currentOv._syncedAt = Date.now();
         saveDiscOverlayToDisk();
       }
     }
@@ -7125,6 +7241,11 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
     }
     gasCache.clear();
     const mergedList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+    broadcastDisconnectionEvent('tasks_synced', {
+      version: discSnapshotVersion,
+      count: mergedList.length,
+      ts: Date.now()
+    });
     return res.json({
       success: true,
       assignedCount: cleanIds.length,

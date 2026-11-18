@@ -371,7 +371,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     if (!k) return item;
     const rec = hasRecentUpdatesRef.current.get(k);
     if (!rec) return item;
-    if (Date.now() - rec.timestamp > 60000) {
+    if (Date.now() - rec.timestamp > 180000) {
       hasRecentUpdatesRef.current.delete(k);
       return item;
     }
@@ -381,8 +381,10 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     const localNotes = String(rec.task.workerRemarks || rec.task.notes || '').trim();
     const incomingDate = String(item.disconDate || item.paidDate || '').trim();
     const localDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
+    const incomingAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim().toLowerCase();
+    const localAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
     // If incoming already matches our local update, keep incoming; otherwise preserve our just-saved status, date, agency & remarks
-    if (incomingSt === localSt && incomingNotes === localNotes && incomingDate === localDate) {
+    if (incomingSt === localSt && incomingNotes === localNotes && incomingDate === localDate && (!localAgency || incomingAgency === localAgency)) {
       return item;
     }
     return {
@@ -2845,6 +2847,15 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
         availableUsers={availableWorkers}
         currentUser={currentUser}
         onRefresh={() => loadData(true, true)}
+        onOpenModal={() => {
+          if (hasExternalTasksRef.current) {
+            try {
+              window.dispatchEvent(new CustomEvent('power-disconnection-live-ping'));
+            } catch {}
+          } else if (!inFlightRef.current && Date.now() - lastBackupPollTsRef.current >= 4000) {
+            loadData(true, false);
+          }
+        }}
         isRefreshing={isRefreshing}
         lang={lang}
       />
