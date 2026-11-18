@@ -7402,11 +7402,36 @@ const PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
 const paymentUploadIdempotencyMap = new Map<string, { timestamp: number; result: any }>();
 const inFlightPaymentUploads = new Map<string, Promise<any>>();
 
+interface PaymentUploadJobState {
+  jobId: string;
+  contentHash: string;
+  status: 'running' | 'completed' | 'failed';
+  progressPercent: number;
+  stageMessage: string;
+  totalCount: number;
+  matchedCount: number;
+  processedCount: number;
+  updatedCount: number;
+  notFoundCount: number;
+  failedCount: number;
+  startedAt: number;
+  updatedAt: number;
+  result?: any;
+  error?: string;
+  errorCode?: string;
+}
+const paymentUploadJobs = new Map<string, PaymentUploadJobState>();
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of paymentUploadIdempotencyMap.entries()) {
     if (now - v.timestamp > PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
       paymentUploadIdempotencyMap.delete(k);
+    }
+  }
+  for (const [k, job] of paymentUploadJobs.entries()) {
+    if (now - job.updatedAt > 30 * 60 * 1000) {
+      paymentUploadJobs.delete(k);
     }
   }
 }, 60000).unref();
@@ -7602,6 +7627,755 @@ function isCompletelyBlankExcelRow(row: any[]): boolean {
   return row.every(cell => cell === null || cell === undefined || String(cell).trim() === '');
 }
 
+interface ValidPaymentRecord {
+  rowNumber: number;
+  consumerId: string;
+  amount: number;
+  date: string;
+}
+
+interface PaymentRowResult {
+  rowNumber: number;
+  consumerId: string;
+  d2NetOs: string;
+  paidAmount: string;
+  paidDate: string;
+  paidType: string;
+  outstandingAfter: string;
+  status: 'Updated' | 'Not Found' | 'Failed';
+  message: string;
+}
+
+function parseUploadedPaymentWorkbook(rawPaymentSource: string, rawBase64: string): {
+  cleanBase64: string;
+  nonBlankRecordCount: number;
+  validRecords: ValidPaymentRecord[];
+  preFailedResults: PaymentRowResult[];
+} {
+  const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  if (!buffer || buffer.length === 0) {
+    const err: any = new Error('Unable to decode uploaded Excel file.');
+    err.statusCode = 400;
+    err.code = 'INVALID_FILE_BUFFER';
+    throw err;
+  }
+
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, raw: true });
+  } catch (parseErr: any) {
+    const err: any = new Error(`Failed to read Excel file: ${parseErr?.message || 'Corrupted or invalid Excel workbook'}`);
+    err.statusCode = 400;
+    err.code = 'EXCEL_PARSE_ERROR';
+    throw err;
+  }
+
+  if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    const err: any = new Error('The uploaded Excel file contains no worksheets.');
+    err.statusCode = 400;
+    err.code = 'NO_WORKSHEETS';
+    throw err;
+  }
+
+  let matrix: any[][] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    if (!ws) continue;
+    const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: true, blankrows: true });
+    if (Array.isArray(rows) && rows.some(r => !isCompletelyBlankExcelRow(r))) {
+      matrix = rows;
+      break;
+    }
+  }
+
+  if (matrix.length === 0) {
+    const err: any = new Error('The uploaded Excel worksheet is completely empty.');
+    err.statusCode = 400;
+    err.code = 'EMPTY_WORKSHEET';
+    throw err;
+  }
+
+  let headerRowIdx = -1;
+  for (let i = 0; i < matrix.length; i++) {
+    if (!isCompletelyBlankExcelRow(matrix[i])) {
+      headerRowIdx = i;
+      break;
+    }
+  }
+
+  if (headerRowIdx === -1) {
+    const err: any = new Error('No header row found in the uploaded Excel file.');
+    err.statusCode = 400;
+    err.code = 'MISSING_HEADER_ROW';
+    throw err;
+  }
+
+  const headerRow = matrix[headerRowIdx];
+  let consumerIdCol = -1;
+  let amountCol = -1;
+  let dateCol = -1;
+
+  for (let c = 0; c < headerRow.length; c++) {
+    const norm = normalizePaymentExcelHeader(headerRow[c]);
+    if (consumerIdCol === -1 && norm === 'consumer id') {
+      consumerIdCol = c;
+    } else if (amountCol === -1 && norm === 'amount') {
+      amountCol = c;
+    } else if (dateCol === -1 && norm === 'date') {
+      dateCol = c;
+    }
+  }
+
+  const missingHeaders: string[] = [];
+  if (consumerIdCol === -1) missingHeaders.push('Consumer ID');
+  if (amountCol === -1) missingHeaders.push('Amount');
+  if (dateCol === -1) missingHeaders.push('Date');
+
+  if (missingHeaders.length > 0) {
+    const err: any = new Error(`Missing required Excel column header(s): ${missingHeaders.join(', ')}. Expected headers: Consumer ID, Amount, Date.`);
+    err.statusCode = 400;
+    err.code = 'MISSING_REQUIRED_COLUMNS';
+    throw err;
+  }
+
+  const validRecords: ValidPaymentRecord[] = [];
+  const preFailedResults: PaymentRowResult[] = [];
+  let nonBlankRecordCount = 0;
+  const isDate1904 = Boolean((workbook as any)?.Workbook?.WBProps?.date1904);
+
+  for (let r = headerRowIdx + 1; r < matrix.length; r++) {
+    const row = matrix[r];
+    if (isCompletelyBlankExcelRow(row)) continue;
+
+    nonBlankRecordCount++;
+    const rowNumber = r + 1;
+    const rawCid = row[consumerIdCol];
+    const rawAmt = row[amountCol];
+    const rawDate = row[dateCol];
+
+    const consumerId = normalizeExcelConsumerId(rawCid);
+    const parsedAmount = parseExcelPaymentAmount(rawAmt);
+    const parsedDate = parseExcelPaymentDate(rawDate, isDate1904);
+
+    const reasons: string[] = [];
+    if (!consumerId) reasons.push('Missing or invalid Consumer ID');
+    if (parsedAmount === null) reasons.push('Invalid Amount (must be a positive number)');
+    if (!parsedDate) reasons.push('Invalid Date');
+
+    if (reasons.length > 0) {
+      preFailedResults.push({
+        rowNumber,
+        consumerId: consumerId || String(rawCid ?? '').trim(),
+        d2NetOs: '',
+        paidAmount: rawAmt !== undefined && rawAmt !== null ? String(rawAmt).trim() : '',
+        paidDate: rawDate !== undefined && rawDate !== null ? String(rawDate).trim() : '',
+        paidType: rawPaymentSource,
+        outstandingAfter: '',
+        status: 'Failed',
+        message: reasons.join('; ')
+      });
+    } else {
+      validRecords.push({
+        rowNumber,
+        consumerId,
+        amount: parsedAmount!,
+        date: parsedDate!
+      });
+    }
+  }
+
+  if (nonBlankRecordCount === 0) {
+    const err: any = new Error('Excel file contains headers only and no payment data rows.');
+    err.statusCode = 400;
+    err.code = 'NO_RECORDS';
+    throw err;
+  }
+
+  return { cleanBase64, nonBlankRecordCount, validRecords, preFailedResults };
+}
+
+async function runPaymentUploadProcessing(params: {
+  rawPaymentSource: string;
+  fileName: string;
+  rawBase64: string;
+  effectiveUploadId: string;
+  contentHash: string;
+  job?: PaymentUploadJobState;
+}): Promise<any> {
+  const { rawPaymentSource, fileName, rawBase64, effectiveUploadId, contentHash, job } = params;
+  const updateJob = (patch: Partial<PaymentUploadJobState>) => {
+    if (!job) return;
+    Object.assign(job, patch, { updatedAt: Date.now() });
+  };
+
+  updateJob({ progressPercent: 5, stageMessage: 'Reading & validating Excel file...' });
+  const { nonBlankRecordCount, validRecords, preFailedResults } = parseUploadedPaymentWorkbook(rawPaymentSource, rawBase64);
+
+  updateJob({
+    totalCount: nonBlankRecordCount,
+    failedCount: preFailedResults.length,
+    progressPercent: 12,
+    stageMessage: `Validated ${nonBlankRecordCount.toLocaleString()} record(s). Fetching live Disconnection sheet...`
+  });
+
+  if (validRecords.length === 0) {
+    const earlyRes = {
+      success: true,
+      paymentSource: rawPaymentSource,
+      fileName,
+      uploadId: effectiveUploadId,
+      totalRecords: nonBlankRecordCount,
+      updatedCount: 0,
+      notFoundCount: 0,
+      failedCount: preFailedResults.length,
+      rowResults: preFailedResults,
+      message: `Validation failed for all ${preFailedResults.length} record(s). No Google Sheet rows were modified.`
+    };
+    updateJob({
+      status: 'completed',
+      progressPercent: 100,
+      processedCount: nonBlankRecordCount,
+      result: earlyRes,
+      stageMessage: earlyRes.message
+    });
+    return earlyRes;
+  }
+
+  // Use fresh in-memory Disconnection rows (< 45s old) or fetch live Disconnection rows ONCE to pre-filter Not Found records in ~5ms
+  let liveRows: any[] = [];
+  if (
+    cachedDisconnectionState &&
+    Array.isArray(cachedDisconnectionState.tasks) &&
+    cachedDisconnectionState.tasks.length > 0 &&
+    cachedDisconnectionState.timestamp > 0 &&
+    Date.now() - cachedDisconnectionState.timestamp < 45000
+  ) {
+    liveRows = cachedDisconnectionState.tasks;
+  } else {
+    gasCache.delete('entries_{"category":"Disconnection"}');
+    gasCache.delete('entries:{"category":"Disconnection"}');
+    const liveEntriesRes = await callGoogleAppsScript(
+      'entries',
+      { category: 'Disconnection', _t: Date.now() },
+      'GET',
+      25000
+    );
+
+    if (liveEntriesRes && liveEntriesRes.success !== false) {
+      liveRows = Array.isArray(liveEntriesRes.entries)
+        ? liveEntriesRes.entries
+        : Array.isArray(liveEntriesRes.data?.entries)
+          ? liveEntriesRes.data.entries
+          : Array.isArray(liveEntriesRes.data)
+            ? liveEntriesRes.data
+            : [];
+    } else if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+      liveRows = cachedDisconnectionState.tasks;
+    } else {
+      const fetchErr: any = new Error(
+        liveEntriesRes?.error?.message ||
+        'Failed to read live Disconnection sheet records from Google Apps Script.'
+      );
+      fetchErr.statusCode = 502;
+      fetchErr.code = 'GAS_READ_FAILED';
+      throw fetchErr;
+    }
+  }
+
+  const consumerMap = new Map<string, any>();
+  for (const row of liveRows) {
+    if (isRecordDeleted(row)) continue;
+    const rawRowCid = String(row?.['Consumer Id'] ?? row?.['Consumer ID'] ?? row?.consumerId ?? '').trim();
+    const key = normalizeConsumerIdKey(rawRowCid);
+    if (key && !consumerMap.has(key)) {
+      consumerMap.set(key, row);
+    }
+  }
+
+  interface MatchedPaymentSyncItem {
+    rec: ValidPaymentRecord;
+    targetCid: string;
+    d2NetOs: number;
+    paidAmtRounded: number;
+    outstandingAfter: number;
+    liveRow: any;
+  }
+
+  const mergedRowResults: PaymentRowResult[] = [...preFailedResults];
+  const matchedToSync: MatchedPaymentSyncItem[] = [];
+  let preNotFoundCount = 0;
+  let preFailedMatchedCount = 0;
+
+  for (const rec of validRecords) {
+    const cKey = normalizeConsumerIdKey(rec.consumerId);
+    const liveRow = cKey ? consumerMap.get(cKey) : undefined;
+    if (!liveRow) {
+      preNotFoundCount++;
+      mergedRowResults.push({
+        rowNumber: rec.rowNumber,
+        consumerId: rec.consumerId,
+        d2NetOs: '',
+        paidAmount: String(rec.amount),
+        paidDate: rec.date,
+        paidType: rawPaymentSource,
+        outstandingAfter: '',
+        status: 'Not Found',
+        message: 'Consumer ID not found in Disconnection sheet'
+      });
+      continue;
+    }
+
+    const rawD2 = liveRow['D2 Net O/S'] ?? liveRow['D2 Net OS'] ?? liveRow.d2NetOs ?? liveRow.outstandingDue ?? '';
+    const cleanedD2 = String(rawD2 === undefined || rawD2 === null ? '' : rawD2).replace(/[^0-9.-]/g, '').trim();
+    let d2NetOs = 0;
+    if (cleanedD2 !== '') {
+      d2NetOs = parseFloat(cleanedD2);
+      if (isNaN(d2NetOs) || !isFinite(d2NetOs)) {
+        preFailedMatchedCount++;
+        mergedRowResults.push({
+          rowNumber: rec.rowNumber,
+          consumerId: rec.consumerId,
+          d2NetOs: String(rawD2),
+          paidAmount: String(rec.amount),
+          paidDate: rec.date,
+          paidType: rawPaymentSource,
+          outstandingAfter: '',
+          status: 'Failed',
+          message: 'Invalid existing D2 Net O/S value in Disconnection sheet'
+        });
+        continue;
+      }
+    }
+
+    const paidAmtRounded = Math.round(rec.amount * 100) / 100;
+    const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
+    const targetCid = String(liveRow['Consumer Id'] ?? liveRow['Consumer ID'] ?? liveRow.consumerId ?? rec.consumerId).trim();
+
+    matchedToSync.push({
+      rec,
+      targetCid,
+      d2NetOs,
+      paidAmtRounded,
+      outstandingAfter,
+      liveRow
+    });
+  }
+
+  updateJob({
+    matchedCount: matchedToSync.length,
+    notFoundCount: preNotFoundCount,
+    failedCount: preFailedResults.length + preFailedMatchedCount,
+    processedCount: preFailedResults.length + preNotFoundCount + preFailedMatchedCount,
+    progressPercent: matchedToSync.length > 0 ? 22 : 95,
+    stageMessage: matchedToSync.length > 0
+      ? `Matched ${matchedToSync.length.toLocaleString()} consumer(s) in Disconnection sheet (${preNotFoundCount.toLocaleString()} not in sheet). Updating Google Sheet...`
+      : `Checked ${nonBlankRecordCount.toLocaleString()} record(s). No matching Consumer IDs found in Disconnection sheet.`
+  });
+
+  let batchActionUnsupported = false;
+  let syncedSoFar = 0;
+
+  const fallbackUpdateChunkViaUpdateEntry = async (items: MatchedPaymentSyncItem[]): Promise<PaymentRowResult[]> => {
+    return mapWithConcurrency(items, 6, async (item): Promise<PaymentRowResult> => {
+      const patch: Record<string, any> = {
+        id: item.targetCid,
+        consumerId: item.targetCid,
+        'Consumer Id': item.targetCid,
+        category: 'Disconnection',
+        spreadsheetId: GOOGLE_SHEET_ID,
+        'Discon Status': String(item.liveRow['Discon Status'] ?? item.liveRow.disconStatus ?? ''),
+        'Payment Status': String(item.liveRow['Payment Status'] ?? item.liveRow.paymentStatus ?? ''),
+        'Last Updated': String(item.liveRow['Last Updated'] ?? item.liveRow.lastUpdated ?? ''),
+        'Upload Date': String(item.liveRow['Upload Date'] ?? item.liveRow.uploadDate ?? ''),
+        'Paid Amount': item.paidAmtRounded,
+        paidAmount: item.paidAmtRounded,
+        'Paid Date': item.rec.date,
+        paidDate: item.rec.date,
+        'Paid Type': rawPaymentSource,
+        paidType: rawPaymentSource,
+        'Outstanding After': String(item.outstandingAfter),
+        outstandingAfter: String(item.outstandingAfter)
+      };
+
+      const upRes = await enqueueGasWrite(() =>
+        callGoogleAppsScript('updateEntry', { ...patch, data: patch }, 'POST', 25000)
+      );
+      if (upRes && upRes.success !== false) {
+        return {
+          rowNumber: item.rec.rowNumber,
+          consumerId: item.rec.consumerId,
+          d2NetOs: String(item.d2NetOs),
+          paidAmount: String(item.paidAmtRounded),
+          paidDate: item.rec.date,
+          paidType: rawPaymentSource,
+          outstandingAfter: String(item.outstandingAfter),
+          status: 'Updated',
+          message: 'Payment columns updated in Disconnection sheet'
+        };
+      }
+      return {
+        rowNumber: item.rec.rowNumber,
+        consumerId: item.rec.consumerId,
+        d2NetOs: String(item.d2NetOs),
+        paidAmount: String(item.paidAmtRounded),
+        paidDate: item.rec.date,
+        paidType: rawPaymentSource,
+        outstandingAfter: '',
+        status: 'Failed',
+        message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
+      };
+    });
+  };
+
+  let chunkSeq = 0;
+  const syncMatchedBatch = async (items: MatchedPaymentSyncItem[]): Promise<PaymentRowResult[]> => {
+    if (items.length === 0) return [];
+    const curSeq = chunkSeq++;
+
+    if (!batchActionUnsupported) {
+      const gasPayloadRecords = items.map(it => it.rec);
+      const gasRes = await enqueueGasWrite(() =>
+        callGoogleAppsScript(
+          'uploadDisconnectionPaymentData',
+          {
+            spreadsheetId: GOOGLE_SHEET_ID,
+            paymentSource: rawPaymentSource,
+            uploadId: `${effectiveUploadId}_c${curSeq}`,
+            records: gasPayloadRecords
+          },
+          'POST',
+          45000
+        )
+      );
+
+      if (gasRes && gasRes.success !== false) {
+        const rawRows: any[] = Array.isArray(gasRes.rowResults)
+          ? gasRes.rowResults
+          : Array.isArray(gasRes.data?.rowResults)
+            ? gasRes.data.rowResults
+            : [];
+        return rawRows.map((r: any, idx: number) => {
+          const fallbackItem = items[idx];
+          const st: 'Updated' | 'Not Found' | 'Failed' =
+            r.status === 'Updated'
+              ? 'Updated'
+              : r.status === 'Not Found'
+                ? 'Not Found'
+                : 'Failed';
+          const rawPaidAmt = r.paidAmount ?? r.amount ?? fallbackItem?.paidAmtRounded;
+          const rawPaidDt = r.paidDate ?? r.date ?? fallbackItem?.rec.date;
+          return {
+            rowNumber: Number(r.rowNumber || fallbackItem?.rec.rowNumber || 0),
+            consumerId: String(r.consumerId || fallbackItem?.rec.consumerId || ''),
+            d2NetOs: r.d2NetOs !== undefined && r.d2NetOs !== null ? String(r.d2NetOs) : String(fallbackItem?.d2NetOs ?? ''),
+            paidAmount: rawPaidAmt !== undefined && rawPaidAmt !== null ? String(rawPaidAmt) : '',
+            paidDate: rawPaidDt !== undefined && rawPaidDt !== null ? String(rawPaidDt) : '',
+            paidType: r.paidType !== undefined && r.paidType !== null ? String(r.paidType) : rawPaymentSource,
+            outstandingAfter: r.outstandingAfter !== undefined && r.outstandingAfter !== null ? String(r.outstandingAfter) : '',
+            status: st,
+            message: String(r.message || r.reason || (st === 'Updated' ? 'Payment columns updated in Disconnection sheet' : ''))
+          };
+        });
+      }
+
+      const errCode = String(gasRes?.error?.code || '').trim();
+      const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
+      if (errCode === 'UNKNOWN_POST_ACTION' || /Unrecognized POST action|Unknown POST action/i.test(errMsg)) {
+        batchActionUnsupported = true;
+        return fallbackUpdateChunkViaUpdateEntry(items);
+      }
+
+      // If batch chunk timed out or GAS was busy and chunk > 20 rows, split into smaller mini-chunks and retry
+      if (items.length > 20) {
+        const mid = Math.ceil(items.length / 2);
+        await new Promise(r => setTimeout(r, 600));
+        const left = await syncMatchedBatch(items.slice(0, mid));
+        const right = await syncMatchedBatch(items.slice(mid));
+        return [...left, ...right];
+      }
+
+      // Small chunk still failed — fall back to per-row updateEntry so individual rows succeed cleanly
+      return fallbackUpdateChunkViaUpdateEntry(items);
+    }
+
+    return fallbackUpdateChunkViaUpdateEntry(items);
+  };
+
+  const CHUNK_SIZE = 100;
+  const updatedByConsumerKey = new Map<string, PaymentRowResult>();
+
+  for (let start = 0; start < matchedToSync.length; start += CHUNK_SIZE) {
+    const slice = matchedToSync.slice(start, start + CHUNK_SIZE);
+    const chunkResults = await syncMatchedBatch(slice);
+
+    for (const r of chunkResults) {
+      mergedRowResults.push(r);
+      if (r.status === 'Updated') {
+        const cKey = normalizeConsumerIdKey(r.consumerId);
+        if (cKey) updatedByConsumerKey.set(cKey, r);
+      }
+    }
+
+    syncedSoFar += slice.length;
+    const pct = Math.min(96, 22 + Math.round((syncedSoFar / matchedToSync.length) * 74));
+    let runningUpdated = 0;
+    let runningFailed = preFailedResults.length + preFailedMatchedCount;
+    for (const row of mergedRowResults) {
+      if (row.status === 'Updated') runningUpdated++;
+    }
+    runningFailed = mergedRowResults.filter(r => r.status === 'Failed').length;
+
+    updateJob({
+      processedCount: preFailedResults.length + preNotFoundCount + preFailedMatchedCount + syncedSoFar,
+      updatedCount: runningUpdated,
+      failedCount: runningFailed,
+      progressPercent: pct,
+      stageMessage: `Updated ${syncedSoFar.toLocaleString()} of ${matchedToSync.length.toLocaleString()} matched consumer(s) in Google Sheet...`
+    });
+  }
+
+  mergedRowResults.sort((a, b) => a.rowNumber - b.rowNumber);
+
+  let updatedCount = 0;
+  let notFoundCount = 0;
+  let failedCount = 0;
+  for (const row of mergedRowResults) {
+    if (row.status === 'Updated') updatedCount++;
+    else if (row.status === 'Not Found') notFoundCount++;
+    else failedCount++;
+  }
+
+  // Synchronize ONLY the 4 updated payment columns into local cache (never touch D2 Net O/S or Payment Source)
+  if (updatedByConsumerKey.size > 0) {
+    gasCache.clear();
+    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+      cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
+        const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
+        const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
+        if (!matched) return task;
+        return {
+          ...task,
+          paidAmount: matched.paidAmount,
+          'Paid Amount': matched.paidAmount,
+          paidDate: matched.paidDate,
+          'Paid Date': matched.paidDate,
+          paidType: matched.paidType,
+          'Paid Type': matched.paidType,
+          outstandingAfter: matched.outstandingAfter,
+          'Outstanding After': matched.outstandingAfter
+        };
+      });
+      cachedDisconnectionState.timestamp = Date.now();
+      invalidateDiscSnapshotCache();
+      scheduleDiscCacheDiskWrite();
+      broadcastDisconnectionEvent('tasks_synced', {
+        version: discSnapshotVersion,
+        count: cachedDisconnectionState.tasks.length,
+        ts: Date.now()
+      });
+    }
+    refreshDisconnectionFromSheetInBackground();
+  }
+
+  const finalResult = {
+    success: true,
+    paymentSource: rawPaymentSource,
+    fileName,
+    uploadId: effectiveUploadId,
+    totalRecords: mergedRowResults.length,
+    updatedCount,
+    notFoundCount,
+    failedCount,
+    rowResults: mergedRowResults,
+    updatedColumns: ['Paid Amount', 'Paid Date', 'Paid Type', 'Outstanding After'],
+    message: `Processed ${mergedRowResults.length} record(s): ${updatedCount} Updated, ${notFoundCount} Not Found, ${failedCount} Failed.`
+  };
+
+  const record = { timestamp: Date.now(), result: finalResult };
+  paymentUploadIdempotencyMap.set(effectiveUploadId, record);
+  paymentUploadIdempotencyMap.set(`hash:${contentHash}`, record);
+
+  updateJob({
+    status: 'completed',
+    progressPercent: 100,
+    processedCount: mergedRowResults.length,
+    updatedCount,
+    notFoundCount,
+    failedCount,
+    result: finalResult,
+    stageMessage: finalResult.message
+  });
+
+  return finalResult;
+}
+
+app.post('/api/disconnection/upload-payment-data/start', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const rawPaymentSource = String(req.body?.paymentSource || '').trim();
+    const fileName = String(req.body?.fileName || '').trim();
+    const rawBase64 = String(req.body?.fileBase64 || '').trim();
+    const requestedUploadId = String(req.body?.uploadId || '').trim();
+
+    if (rawPaymentSource !== 'Cash Desk' && rawPaymentSource !== 'Portal') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PAYMENT_SOURCE',
+        error: 'Please select a valid Payment Source (Cash Desk or Portal).'
+      });
+    }
+    if (!fileName || !/\.(xlsx|xls)$/i.test(fileName)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_FILE_TYPE',
+        error: 'Unsupported file format. Please upload an Excel file (.xlsx or .xls).'
+      });
+    }
+    if (!rawBase64) {
+      return res.status(400).json({
+        success: false,
+        code: 'EMPTY_FILE',
+        error: 'Excel file payload is empty. Please select a valid .xlsx or .xls file.'
+      });
+    }
+
+    const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(`${rawPaymentSource}::${cleanBase64}`)
+      .digest('hex');
+    const effectiveUploadId = requestedUploadId || `pay-${contentHash.slice(0, 24)}`;
+
+    const cachedById = paymentUploadIdempotencyMap.get(effectiveUploadId);
+    if (cachedById && Date.now() - cachedById.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      return sendCompressedJsonPayload(req, res, {
+        success: true,
+        alreadyCompleted: true,
+        jobId: effectiveUploadId,
+        result: { ...cachedById.result, duplicatePrevented: true }
+      });
+    }
+    const cachedByHash = paymentUploadIdempotencyMap.get(`hash:${contentHash}`);
+    if (cachedByHash && Date.now() - cachedByHash.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      return sendCompressedJsonPayload(req, res, {
+        success: true,
+        alreadyCompleted: true,
+        jobId: effectiveUploadId,
+        result: { ...cachedByHash.result, duplicatePrevented: true }
+      });
+    }
+
+    // Check if an identical job is already running in memory
+    for (const existingJob of paymentUploadJobs.values()) {
+      if ((existingJob.jobId === effectiveUploadId || existingJob.contentHash === contentHash) && existingJob.status === 'running') {
+        return res.json({
+          success: true,
+          alreadyCompleted: false,
+          jobId: existingJob.jobId,
+          progressPercent: existingJob.progressPercent,
+          stageMessage: existingJob.stageMessage
+        });
+      }
+    }
+
+    const job: PaymentUploadJobState = {
+      jobId: effectiveUploadId,
+      contentHash,
+      status: 'running',
+      progressPercent: 3,
+      stageMessage: 'Starting Excel payment processing...',
+      totalCount: 0,
+      matchedCount: 0,
+      processedCount: 0,
+      updatedCount: 0,
+      notFoundCount: 0,
+      failedCount: 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    paymentUploadJobs.set(effectiveUploadId, job);
+
+    const executionPromise = runPaymentUploadProcessing({
+      rawPaymentSource,
+      fileName,
+      rawBase64,
+      effectiveUploadId,
+      contentHash,
+      job
+    }).catch((err: any) => {
+      job.status = 'failed';
+      job.error = err?.message || 'Failed to process payment data.';
+      job.errorCode = err?.code || 'PAYMENT_UPLOAD_ERROR';
+      job.updatedAt = Date.now();
+      throw err;
+    });
+
+    inFlightPaymentUploads.set(effectiveUploadId, executionPromise);
+    inFlightPaymentUploads.set(`hash:${contentHash}`, executionPromise);
+    executionPromise.finally(() => {
+      inFlightPaymentUploads.delete(effectiveUploadId);
+      inFlightPaymentUploads.delete(`hash:${contentHash}`);
+    }).catch(() => {});
+
+    return res.json({
+      success: true,
+      alreadyCompleted: false,
+      jobId: effectiveUploadId,
+      progressPercent: job.progressPercent,
+      stageMessage: job.stageMessage
+    });
+  } catch (err: any) {
+    const statusCode = Number(err?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: err?.code || 'PAYMENT_UPLOAD_ERROR',
+      error: err?.message || 'Failed to start payment data upload.'
+    });
+  }
+});
+
+app.get('/api/disconnection/upload-payment-data/status/:jobId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const jobId = String(req.params.jobId || '').trim();
+  const job = paymentUploadJobs.get(jobId);
+  if (!job) {
+    const cached = paymentUploadIdempotencyMap.get(jobId);
+    if (cached && Date.now() - cached.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+      return sendCompressedJsonPayload(req, res, {
+        success: true,
+        status: 'completed',
+        progressPercent: 100,
+        stageMessage: cached.result?.message || 'Completed',
+        result: cached.result
+      });
+    }
+    return res.status(404).json({
+      success: false,
+      status: 'failed',
+      code: 'JOB_NOT_FOUND',
+      error: 'Payment upload job not found or expired. Please retry upload.'
+    });
+  }
+
+  return sendCompressedJsonPayload(req, res, {
+    success: job.status !== 'failed',
+    jobId: job.jobId,
+    status: job.status,
+    progressPercent: job.progressPercent,
+    stageMessage: job.stageMessage,
+    totalCount: job.totalCount,
+    matchedCount: job.matchedCount,
+    processedCount: job.processedCount,
+    updatedCount: job.updatedCount,
+    notFoundCount: job.notFoundCount,
+    failedCount: job.failedCount,
+    error: job.error,
+    code: job.errorCode,
+    result: job.status === 'completed' ? job.result : undefined
+  });
+});
+
 app.post('/api/disconnection/upload-payment-data', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
@@ -7635,191 +8409,6 @@ app.post('/api/disconnection/upload-payment-data', async (req, res) => {
     }
 
     const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
-    const buffer = Buffer.from(cleanBase64, 'base64');
-    if (!buffer || buffer.length === 0) {
-      return res.status(400).json({
-        success: false,
-        code: 'INVALID_FILE_BUFFER',
-        error: 'Unable to decode uploaded Excel file.'
-      });
-    }
-
-    // Parse Excel dynamically using column headers (never fixed column positions)
-    let workbook: XLSX.WorkBook;
-    try {
-      workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, raw: true });
-    } catch (parseErr: any) {
-      return res.status(400).json({
-        success: false,
-        code: 'EXCEL_PARSE_ERROR',
-        error: `Failed to read Excel file: ${parseErr?.message || 'Corrupted or invalid Excel workbook'}`
-      });
-    }
-
-    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-      return res.status(400).json({
-        success: false,
-        code: 'NO_WORKSHEETS',
-        error: 'The uploaded Excel file contains no worksheets.'
-      });
-    }
-
-    let matrix: any[][] = [];
-    for (const sheetName of workbook.SheetNames) {
-      const ws = workbook.Sheets[sheetName];
-      if (!ws) continue;
-      const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: true, blankrows: true });
-      if (Array.isArray(rows) && rows.some(r => !isCompletelyBlankExcelRow(r))) {
-        matrix = rows;
-        break;
-      }
-    }
-
-    if (matrix.length === 0) {
-      return res.status(400).json({
-        success: false,
-        code: 'EMPTY_WORKSHEET',
-        error: 'The uploaded Excel worksheet is completely empty.'
-      });
-    }
-
-    // Locate first non-blank row as header row
-    let headerRowIdx = -1;
-    for (let i = 0; i < matrix.length; i++) {
-      if (!isCompletelyBlankExcelRow(matrix[i])) {
-        headerRowIdx = i;
-        break;
-      }
-    }
-
-    if (headerRowIdx === -1) {
-      return res.status(400).json({
-        success: false,
-        code: 'MISSING_HEADER_ROW',
-        error: 'No header row found in the uploaded Excel file.'
-      });
-    }
-
-    const headerRow = matrix[headerRowIdx];
-    let consumerIdCol = -1;
-    let amountCol = -1;
-    let dateCol = -1;
-
-    for (let c = 0; c < headerRow.length; c++) {
-      const norm = normalizePaymentExcelHeader(headerRow[c]);
-      if (consumerIdCol === -1 && norm === 'consumer id') {
-        consumerIdCol = c;
-      } else if (amountCol === -1 && norm === 'amount') {
-        amountCol = c;
-      } else if (dateCol === -1 && norm === 'date') {
-        dateCol = c;
-      }
-    }
-
-    const missingHeaders: string[] = [];
-    if (consumerIdCol === -1) missingHeaders.push('Consumer ID');
-    if (amountCol === -1) missingHeaders.push('Amount');
-    if (dateCol === -1) missingHeaders.push('Date');
-
-    if (missingHeaders.length > 0) {
-      return res.status(400).json({
-        success: false,
-        code: 'MISSING_REQUIRED_COLUMNS',
-        error: `Missing required Excel column header(s): ${missingHeaders.join(', ')}. Expected headers: Consumer ID, Amount, Date.`
-      });
-    }
-
-    interface ValidPaymentRecord {
-      rowNumber: number;
-      consumerId: string;
-      amount: number;
-      date: string;
-    }
-
-    interface PaymentRowResult {
-      rowNumber: number;
-      consumerId: string;
-      d2NetOs: string;
-      paidAmount: string;
-      paidDate: string;
-      paidType: string;
-      outstandingAfter: string;
-      status: 'Updated' | 'Not Found' | 'Failed';
-      message: string;
-    }
-
-    const validRecords: ValidPaymentRecord[] = [];
-    const preFailedResults: PaymentRowResult[] = [];
-    let nonBlankRecordCount = 0;
-
-    const isDate1904 = Boolean((workbook as any)?.Workbook?.WBProps?.date1904);
-
-    for (let r = headerRowIdx + 1; r < matrix.length; r++) {
-      const row = matrix[r];
-      if (isCompletelyBlankExcelRow(row)) {
-        continue; // Ignore completely blank rows
-      }
-
-      nonBlankRecordCount++;
-      const rowNumber = r + 1;
-      const rawCid = row[consumerIdCol];
-      const rawAmt = row[amountCol];
-      const rawDate = row[dateCol];
-
-      const consumerId = normalizeExcelConsumerId(rawCid);
-      const parsedAmount = parseExcelPaymentAmount(rawAmt);
-      const parsedDate = parseExcelPaymentDate(rawDate, isDate1904);
-
-      const reasons: string[] = [];
-      if (!consumerId) reasons.push('Missing or invalid Consumer ID');
-      if (parsedAmount === null) reasons.push('Invalid Amount (must be a positive number)');
-      if (!parsedDate) reasons.push('Invalid Date');
-
-      if (reasons.length > 0) {
-        preFailedResults.push({
-          rowNumber,
-          consumerId: consumerId || String(rawCid ?? '').trim(),
-          d2NetOs: '',
-          paidAmount: rawAmt !== undefined && rawAmt !== null ? String(rawAmt).trim() : '',
-          paidDate: rawDate !== undefined && rawDate !== null ? String(rawDate).trim() : '',
-          paidType: rawPaymentSource,
-          outstandingAfter: '',
-          status: 'Failed',
-          message: reasons.join('; ')
-        });
-      } else {
-        validRecords.push({
-          rowNumber,
-          consumerId,
-          amount: parsedAmount!,
-          date: parsedDate!
-        });
-      }
-    }
-
-    if (nonBlankRecordCount === 0) {
-      return res.status(400).json({
-        success: false,
-        code: 'NO_RECORDS',
-        error: 'Excel file contains headers only and no payment data rows.'
-      });
-    }
-
-    // If every non-blank row failed client/server pre-validation, return report without calling Google Sheets
-    if (validRecords.length === 0) {
-      return res.json({
-        success: true,
-        paymentSource: rawPaymentSource,
-        fileName,
-        totalRecords: nonBlankRecordCount,
-        updatedCount: 0,
-        notFoundCount: 0,
-        failedCount: preFailedResults.length,
-        rowResults: preFailedResults,
-        message: `Validation failed for all ${preFailedResults.length} record(s). No Google Sheet rows were modified.`
-      });
-    }
-
     const contentHash = crypto
       .createHash('sha256')
       .update(`${rawPaymentSource}::${cleanBase64}`)
@@ -7828,14 +8417,14 @@ app.post('/api/disconnection/upload-payment-data', async (req, res) => {
 
     const cachedById = paymentUploadIdempotencyMap.get(effectiveUploadId);
     if (cachedById && Date.now() - cachedById.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
-      return res.json({
+      return sendCompressedJsonPayload(req, res, {
         ...cachedById.result,
         duplicatePrevented: true
       });
     }
     const cachedByHash = paymentUploadIdempotencyMap.get(`hash:${contentHash}`);
     if (cachedByHash && Date.now() - cachedByHash.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
-      return res.json({
+      return sendCompressedJsonPayload(req, res, {
         ...cachedByHash.result,
         duplicatePrevented: true
       });
@@ -7844,287 +8433,26 @@ app.post('/api/disconnection/upload-payment-data', async (req, res) => {
     const inFlight = inFlightPaymentUploads.get(effectiveUploadId) || inFlightPaymentUploads.get(`hash:${contentHash}`);
     if (inFlight) {
       const sharedResult = await inFlight;
-      return res.json({
+      return sendCompressedJsonPayload(req, res, {
         ...sharedResult,
         duplicatePrevented: true
       });
     }
 
-    const executionPromise = (async () => {
-      let gasRes = await callGoogleAppsScript(
-        'uploadDisconnectionPaymentData',
-        {
-          spreadsheetId: GOOGLE_SHEET_ID,
-          paymentSource: rawPaymentSource,
-          uploadId: effectiveUploadId,
-          records: validRecords
-        },
-        'POST',
-        60000
-      );
-
-      if (!gasRes || gasRes.success === false) {
-        const errCode = String(gasRes?.error?.code || '').trim();
-        const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
-
-        if (
-          errCode === 'UNKNOWN_POST_ACTION' ||
-          /Unrecognized POST action|Unknown POST action/i.test(errMsg)
-        ) {
-          // Live GAS deployment does not yet have uploadDisconnectionPaymentData;
-          // execute the exact same payment-only 4-column update via already-deployed live GAS 'entries' + 'updateEntry' actions.
-          const liveEntriesRes = await callGoogleAppsScript(
-            'entries',
-            { category: 'Disconnection', _t: Date.now() },
-            'GET',
-            25000
-          );
-          if (!liveEntriesRes || liveEntriesRes.success === false) {
-            const fetchErr: any = new Error(
-              liveEntriesRes?.error?.message ||
-              'Failed to read live Disconnection sheet records from Google Apps Script.'
-            );
-            fetchErr.statusCode = 502;
-            fetchErr.code = 'GAS_READ_FAILED';
-            throw fetchErr;
-          }
-
-          const liveRows: any[] = Array.isArray(liveEntriesRes.entries)
-            ? liveEntriesRes.entries
-            : Array.isArray(liveEntriesRes.data?.entries)
-              ? liveEntriesRes.data.entries
-              : Array.isArray(liveEntriesRes.data)
-                ? liveEntriesRes.data
-                : [];
-
-          const consumerMap = new Map<string, any>();
-          for (const row of liveRows) {
-            const rawRowCid = String(row?.['Consumer Id'] ?? row?.['Consumer ID'] ?? row?.consumerId ?? '').trim();
-            const key = normalizeConsumerIdKey(rawRowCid);
-            if (key && !consumerMap.has(key)) {
-              consumerMap.set(key, row);
-            }
-          }
-
-          const compatRowResults: PaymentRowResult[] = await mapWithConcurrency(
-            validRecords,
-            6,
-            async (rec): Promise<PaymentRowResult> => {
-              const cKey = normalizeConsumerIdKey(rec.consumerId);
-              const liveRow = cKey ? consumerMap.get(cKey) : undefined;
-              if (!liveRow) {
-                return {
-                  rowNumber: rec.rowNumber,
-                  consumerId: rec.consumerId,
-                  d2NetOs: '',
-                  paidAmount: String(rec.amount),
-                  paidDate: rec.date,
-                  paidType: rawPaymentSource,
-                  outstandingAfter: '',
-                  status: 'Not Found',
-                  message: 'Consumer ID not found in Disconnection sheet'
-                };
-              }
-
-              const rawD2 = liveRow['D2 Net O/S'] ?? liveRow['D2 Net OS'] ?? liveRow.d2NetOs ?? liveRow.outstandingDue ?? '';
-              const cleanedD2 = String(rawD2 === undefined || rawD2 === null ? '' : rawD2).replace(/[^0-9.-]/g, '').trim();
-              let d2NetOs = 0;
-              if (cleanedD2 !== '') {
-                d2NetOs = parseFloat(cleanedD2);
-                if (isNaN(d2NetOs) || !isFinite(d2NetOs)) {
-                  return {
-                    rowNumber: rec.rowNumber,
-                    consumerId: rec.consumerId,
-                    d2NetOs: String(rawD2),
-                    paidAmount: String(rec.amount),
-                    paidDate: rec.date,
-                    paidType: rawPaymentSource,
-                    outstandingAfter: '',
-                    status: 'Failed',
-                    message: 'Invalid existing D2 Net O/S value in Disconnection sheet'
-                  };
-                }
-              }
-
-              const paidAmtRounded = Math.round(rec.amount * 100) / 100;
-              const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
-              const targetCid = String(liveRow['Consumer Id'] ?? liveRow['Consumer ID'] ?? liveRow.consumerId ?? rec.consumerId).trim();
-
-              // Preserve existing non-payment fields whose GAS extractFieldValue defaults are non-empty,
-              // and never send D2 Net O/S or Payment Source so they remain untouched.
-              const patch: Record<string, any> = {
-                id: targetCid,
-                consumerId: targetCid,
-                'Consumer Id': targetCid,
-                category: 'Disconnection',
-                spreadsheetId: GOOGLE_SHEET_ID,
-                'Discon Status': String(liveRow['Discon Status'] ?? liveRow.disconStatus ?? ''),
-                'Payment Status': String(liveRow['Payment Status'] ?? liveRow.paymentStatus ?? ''),
-                'Last Updated': String(liveRow['Last Updated'] ?? liveRow.lastUpdated ?? ''),
-                'Upload Date': String(liveRow['Upload Date'] ?? liveRow.uploadDate ?? ''),
-                'Paid Amount': paidAmtRounded,
-                paidAmount: paidAmtRounded,
-                'Paid Date': rec.date,
-                paidDate: rec.date,
-                'Paid Type': rawPaymentSource,
-                paidType: rawPaymentSource,
-                'Outstanding After': String(outstandingAfter),
-                outstandingAfter: String(outstandingAfter)
-              };
-
-              const upRes = await callGoogleAppsScript(
-                'updateEntry',
-                {
-                  ...patch,
-                  data: patch
-                },
-                'POST',
-                25000
-              );
-
-              if (upRes && upRes.success !== false) {
-                return {
-                  rowNumber: rec.rowNumber,
-                  consumerId: rec.consumerId,
-                  d2NetOs: String(d2NetOs),
-                  paidAmount: String(paidAmtRounded),
-                  paidDate: rec.date,
-                  paidType: rawPaymentSource,
-                  outstandingAfter: String(outstandingAfter),
-                  status: 'Updated',
-                  message: 'Payment columns updated in Disconnection sheet'
-                };
-              }
-              return {
-                rowNumber: rec.rowNumber,
-                consumerId: rec.consumerId,
-                d2NetOs: String(d2NetOs),
-                paidAmount: String(paidAmtRounded),
-                paidDate: rec.date,
-                paidType: rawPaymentSource,
-                outstandingAfter: '',
-                status: 'Failed',
-                message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
-              };
-            }
-          );
-
-          gasRes = {
-            success: true,
-            rowResults: compatRowResults
-          };
-        } else {
-          const err: any = new Error(errMsg);
-          err.statusCode = 502;
-          err.code = errCode || 'GAS_PAYMENT_UPDATE_FAILED';
-          throw err;
-        }
-      }
-
-      const gasRowsRaw: any[] = Array.isArray(gasRes.rowResults)
-        ? gasRes.rowResults
-        : Array.isArray(gasRes.data?.rowResults)
-          ? gasRes.data.rowResults
-          : [];
-
-      const mergedRowResults: PaymentRowResult[] = [...preFailedResults];
-      const updatedByConsumerKey = new Map<string, PaymentRowResult>();
-
-      for (const r of gasRowsRaw) {
-        const st: 'Updated' | 'Not Found' | 'Failed' =
-          r.status === 'Updated'
-            ? 'Updated'
-            : r.status === 'Not Found'
-              ? 'Not Found'
-              : 'Failed';
-        const rawPaidAmt = r.paidAmount ?? r.amount;
-        const rawPaidDt = r.paidDate ?? r.date;
-        const normalizedRow: PaymentRowResult = {
-          rowNumber: Number(r.rowNumber || 0),
-          consumerId: String(r.consumerId || ''),
-          d2NetOs: r.d2NetOs !== undefined && r.d2NetOs !== null ? String(r.d2NetOs) : '',
-          paidAmount: rawPaidAmt !== undefined && rawPaidAmt !== null ? String(rawPaidAmt) : '',
-          paidDate: rawPaidDt !== undefined && rawPaidDt !== null ? String(rawPaidDt) : '',
-          paidType: r.paidType !== undefined && r.paidType !== null ? String(r.paidType) : rawPaymentSource,
-          outstandingAfter: r.outstandingAfter !== undefined && r.outstandingAfter !== null ? String(r.outstandingAfter) : '',
-          status: st,
-          message: String(r.message || r.reason || '')
-        };
-        mergedRowResults.push(normalizedRow);
-        if (st === 'Updated') {
-          const cKey = normalizeConsumerIdKey(normalizedRow.consumerId);
-          if (cKey) {
-            updatedByConsumerKey.set(cKey, normalizedRow);
-          }
-        }
-      }
-
-      mergedRowResults.sort((a, b) => a.rowNumber - b.rowNumber);
-
-      let updatedCount = 0;
-      let notFoundCount = 0;
-      let failedCount = 0;
-      for (const row of mergedRowResults) {
-        if (row.status === 'Updated') updatedCount++;
-        else if (row.status === 'Not Found') notFoundCount++;
-        else failedCount++;
-      }
-
-      // Synchronize ONLY the 4 updated payment columns into local cache if loaded (never touch D2 Net O/S or Payment Source)
-      if (updatedByConsumerKey.size > 0) {
-        gasCache.clear();
-        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
-          cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
-            const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
-            const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
-            if (!matched) return task;
-            return {
-              ...task,
-              paidAmount: matched.paidAmount,
-              'Paid Amount': matched.paidAmount,
-              paidDate: matched.paidDate,
-              'Paid Date': matched.paidDate,
-              paidType: matched.paidType,
-              'Paid Type': matched.paidType,
-              outstandingAfter: matched.outstandingAfter,
-              'Outstanding After': matched.outstandingAfter
-            };
-          });
-          cachedDisconnectionState.timestamp = Date.now();
-          invalidateDiscSnapshotCache();
-          try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
-        }
-        // Trigger a silent background refresh from Google Sheets so cache reflects live sheet values
-        refreshDisconnectionFromSheetInBackground();
-      }
-
-      const finalResult = {
-        success: true,
-        paymentSource: rawPaymentSource,
-        fileName,
-        uploadId: effectiveUploadId,
-        totalRecords: mergedRowResults.length,
-        updatedCount,
-        notFoundCount,
-        failedCount,
-        rowResults: mergedRowResults,
-        duplicate: Boolean(gasRes.duplicate),
-        updatedColumns: ['Paid Amount', 'Paid Date', 'Paid Type', 'Outstanding After'],
-        message: `Processed ${mergedRowResults.length} record(s): ${updatedCount} Updated, ${notFoundCount} Not Found, ${failedCount} Failed.`
-      };
-
-      const record = { timestamp: Date.now(), result: finalResult };
-      paymentUploadIdempotencyMap.set(effectiveUploadId, record);
-      paymentUploadIdempotencyMap.set(`hash:${contentHash}`, record);
-      return finalResult;
-    })();
+    const executionPromise = runPaymentUploadProcessing({
+      rawPaymentSource,
+      fileName,
+      rawBase64,
+      effectiveUploadId,
+      contentHash
+    });
 
     inFlightPaymentUploads.set(effectiveUploadId, executionPromise);
     inFlightPaymentUploads.set(`hash:${contentHash}`, executionPromise);
 
     try {
       const result = await executionPromise;
-      return res.json(result);
+      return sendCompressedJsonPayload(req, res, result);
     } finally {
       inFlightPaymentUploads.delete(effectiveUploadId);
       inFlightPaymentUploads.delete(`hash:${contentHash}`);

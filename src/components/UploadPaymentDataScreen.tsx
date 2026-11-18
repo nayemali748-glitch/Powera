@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {
   PaymentSourceOption,
+  PaymentUploadProgress,
   PaymentUploadResultReport,
   uploadDisconnectionPaymentData
 } from '../services/api';
@@ -165,9 +166,13 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
   const [appliedUploadKey, setAppliedUploadKey] = useState<string | null>(null);
   const [isReadingFile, setIsReadingFile] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<PaymentUploadProgress | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultReport, setResultReport] = useState<PaymentUploadResultReport | null>(null);
   const [resultFilter, setResultFilter] = useState<ResultFilter>('ALL');
+  const [resultSearch, setResultSearch] = useState<string>('');
+  const [resultPage, setResultPage] = useState<number>(1);
+  const RESULT_PAGE_SIZE = 100;
 
   const currentBatchKey = useMemo(() => {
     if (!paymentSource || !filePreview) return '';
@@ -348,9 +353,12 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
     setFilePreview(null);
     setUploadId('');
     setAppliedUploadKey(null);
+    setUploadProgress(null);
     setErrorMessage(null);
     setResultReport(null);
     setResultFilter('ALL');
+    setResultSearch('');
+    setResultPage(1);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -381,18 +389,33 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
     }
 
     setIsSubmitting(true);
+    setUploadProgress({
+      progressPercent: 4,
+      stageMessage: 'Uploading & preparing payment records...',
+      totalCount: filePreview.totalNonBlankRows,
+      matchedCount: 0,
+      processedCount: 0,
+      updatedCount: 0
+    });
     setErrorMessage(null);
     try {
       const effectiveId = uploadId || generateFreshUploadId();
-      const report = await uploadDisconnectionPaymentData({
-        paymentSource,
-        fileName: filePreview.fileName,
-        fileBase64: filePreview.fileBase64,
-        uploadId: effectiveId
-      });
+      const report = await uploadDisconnectionPaymentData(
+        {
+          paymentSource,
+          fileName: filePreview.fileName,
+          fileBase64: filePreview.fileBase64,
+          uploadId: effectiveId
+        },
+        (progress) => {
+          setUploadProgress(progress);
+        }
+      );
 
       setResultReport(report);
       setResultFilter('ALL');
+      setResultSearch('');
+      setResultPage(1);
       setAppliedUploadKey(`${paymentSource}::${filePreview.fileName}::${filePreview.fileSize}::${effectiveId}`);
       if (report.updatedCount > 0 && onUploadCompleted) {
         onUploadCompleted();
@@ -401,14 +424,32 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
       setErrorMessage(err?.message || 'Payment data upload failed.');
     } finally {
       setIsSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
   const filteredRows = useMemo(() => {
     if (!resultReport?.rowResults) return [];
-    if (resultFilter === 'ALL') return resultReport.rowResults;
-    return resultReport.rowResults.filter(r => r.status === resultFilter);
-  }, [resultReport, resultFilter]);
+    let list = resultReport.rowResults;
+    if (resultFilter !== 'ALL') {
+      list = list.filter(r => r.status === resultFilter);
+    }
+    const q = resultSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter(r =>
+        String(r.consumerId || '').toLowerCase().includes(q) ||
+        String(r.message || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [resultReport, resultFilter, resultSearch]);
+
+  const totalResultPages = Math.max(1, Math.ceil(filteredRows.length / RESULT_PAGE_SIZE));
+  const safeResultPage = Math.min(resultPage, totalResultPages);
+  const pagedRows = useMemo(() => {
+    const start = (safeResultPage - 1) * RESULT_PAGE_SIZE;
+    return filteredRows.slice(start, start + RESULT_PAGE_SIZE);
+  }, [filteredRows, safeResultPage]);
 
   const canSubmit =
     !isReadingFile &&
@@ -620,7 +661,11 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Updating Payment Data in Google Sheet...</span>
+                  <span>
+                    {uploadProgress
+                      ? `Processing... ${uploadProgress.progressPercent}%`
+                      : 'Updating Payment Data in Google Sheet...'}
+                  </span>
                 </>
               ) : isAlreadyAppliedForBatch ? (
                 <>
@@ -634,6 +679,26 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
                 </>
               )}
             </button>
+
+            {isSubmitting && uploadProgress && (
+              <div className="mt-3 rounded-2xl bg-emerald-50 border border-emerald-200 p-3 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-emerald-900">
+                  <span className="truncate pr-2">{uploadProgress.stageMessage}</span>
+                  <span className="shrink-0 tabular-nums">{uploadProgress.progressPercent}%</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-emerald-200/70 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.max(4, Math.min(100, uploadProgress.progressPercent))}%` }}
+                  />
+                </div>
+                {uploadProgress.matchedCount > 0 && (
+                  <p className="text-[10px] font-semibold text-emerald-800">
+                    Matched Consumers: {uploadProgress.matchedCount.toLocaleString()} • Updated: {uploadProgress.updatedCount.toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </form>
@@ -717,36 +782,52 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
             </div>
           </div>
 
-          {/* Filter Tabs */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {(['ALL', 'Updated', 'Not Found', 'Failed'] as ResultFilter[]).map(tab => {
-              const count =
-                tab === 'ALL'
-                  ? resultReport.totalRecords
-                  : tab === 'Updated'
-                    ? resultReport.updatedCount
-                    : tab === 'Not Found'
-                      ? resultReport.notFoundCount
-                      : resultReport.failedCount;
-              const active = resultFilter === tab;
-              return (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setResultFilter(tab)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  {tab === 'ALL' ? 'All Records' : tab} ({count})
-                </button>
-              );
-            })}
+          {/* Filter Tabs + Consumer Search */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              {(['ALL', 'Updated', 'Not Found', 'Failed'] as ResultFilter[]).map(tab => {
+                const count =
+                  tab === 'ALL'
+                    ? resultReport.totalRecords
+                    : tab === 'Updated'
+                      ? resultReport.updatedCount
+                      : tab === 'Not Found'
+                        ? resultReport.notFoundCount
+                        : resultReport.failedCount;
+                const active = resultFilter === tab;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => {
+                      setResultFilter(tab);
+                      setResultPage(1);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {tab === 'ALL' ? 'All Records' : tab} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            <input
+              type="text"
+              value={resultSearch}
+              onChange={e => {
+                setResultSearch(e.target.value);
+                setResultPage(1);
+              }}
+              placeholder="Search Consumer ID..."
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-slate-900 text-xs font-semibold text-slate-800 placeholder-slate-400 outline-none sm:w-56"
+            />
           </div>
 
-          {/* Detailed Row Results Table */}
+          {/* Detailed Row Results Table (Paginated cleanly for 10k+ records) */}
           <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-96">
             <table className="w-full text-left border-collapse text-xs">
               <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10">
@@ -763,14 +844,14 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredRows.length === 0 ? (
+                {pagedRows.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="py-6 text-center text-slate-500 font-medium">
                       No records match the selected filter.
                     </td>
                   </tr>
                 ) : (
-                  filteredRows.map((row, idx) => (
+                  pagedRows.map((row, idx) => (
                     <tr key={`${row.rowNumber}-${idx}`} className="hover:bg-slate-50">
                       <td className="py-2 px-3 font-mono text-slate-600">{row.rowNumber}</td>
                       <td className="py-2 px-3 font-mono font-bold text-slate-900 select-all">
@@ -818,6 +899,35 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
               </tbody>
             </table>
           </div>
+
+          {filteredRows.length > RESULT_PAGE_SIZE && (
+            <div className="flex items-center justify-between gap-3 pt-1 text-xs font-bold text-slate-600">
+              <span>
+                Showing {((safeResultPage - 1) * RESULT_PAGE_SIZE + 1).toLocaleString()}–{Math.min(safeResultPage * RESULT_PAGE_SIZE, filteredRows.length).toLocaleString()} of {filteredRows.length.toLocaleString()}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={safeResultPage <= 1}
+                  onClick={() => setResultPage(p => Math.max(1, p - 1))}
+                  className="px-3 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                >
+                  Prev
+                </button>
+                <span className="px-2 tabular-nums">
+                  {safeResultPage} / {totalResultPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={safeResultPage >= totalResultPages}
+                  onClick={() => setResultPage(p => Math.min(totalResultPages, p + 1))}
+                  className="px-3 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

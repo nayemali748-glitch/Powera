@@ -3649,23 +3649,127 @@ export interface PaymentUploadResultReport {
   error?: string;
 }
 
-export async function uploadDisconnectionPaymentData(payload: {
-  paymentSource: PaymentSourceOption;
-  fileName: string;
-  fileBase64: string;
-  uploadId: string;
-}): Promise<PaymentUploadResultReport> {
-  const resp = await nativeFetch('/api/disconnection/upload-payment-data', {
+export interface PaymentUploadProgress {
+  progressPercent: number;
+  stageMessage: string;
+  totalCount: number;
+  matchedCount: number;
+  processedCount: number;
+  updatedCount: number;
+}
+
+export async function uploadDisconnectionPaymentData(
+  payload: {
+    paymentSource: PaymentSourceOption;
+    fileName: string;
+    fileBase64: string;
+    uploadId: string;
+  },
+  onProgress?: (progress: PaymentUploadProgress) => void
+): Promise<PaymentUploadResultReport> {
+  const startResp = await nativeFetch('/api/disconnection/upload-payment-data/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 
-  const data = await resp.json().catch(() => null);
-  if (!resp.ok || !data || data.success === false) {
-    const err: any = new Error(data?.error || data?.message || `Upload failed with status ${resp.status}`);
-    if (data?.code) err.code = data.code;
-    throw err;
+  let data: any = null;
+
+  if (startResp.status === 404) {
+    // Fallback if server only exposes synchronous endpoint
+    const syncResp = await nativeFetch('/api/disconnection/upload-payment-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const syncData = await syncResp.json().catch(() => null);
+    if (!syncResp.ok || !syncData || syncData.success === false) {
+      const err: any = new Error(syncData?.error || syncData?.message || `Upload failed with status ${syncResp.status}`);
+      if (syncData?.code) err.code = syncData.code;
+      throw err;
+    }
+    data = syncData;
+  } else {
+    const startData = await startResp.json().catch(() => null);
+    if (!startResp.ok || !startData || startData.success === false) {
+      const err: any = new Error(startData?.error || startData?.message || `Upload failed with status ${startResp.status}`);
+      if (startData?.code) err.code = startData.code;
+      throw err;
+    }
+
+    if (startData.alreadyCompleted && startData.result) {
+      data = startData.result;
+    } else {
+      const jobId = String(startData.jobId || payload.uploadId).trim();
+      if (onProgress) {
+        onProgress({
+          progressPercent: Number(startData.progressPercent || 5),
+          stageMessage: String(startData.stageMessage || 'Starting Excel payment processing...'),
+          totalCount: 0,
+          matchedCount: 0,
+          processedCount: 0,
+          updatedCount: 0
+        });
+      }
+
+      let transientErrors = 0;
+      const maxWaitMs = 15 * 60 * 1000;
+      const pollStartedAt = Date.now();
+
+      while (true) {
+        if (Date.now() - pollStartedAt > maxWaitMs) {
+          throw new Error('Payment processing took longer than expected. Please check status or retry.');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        let statusResp: Response;
+        try {
+          statusResp = await nativeFetch(`/api/disconnection/upload-payment-data/status/${encodeURIComponent(jobId)}?_t=${Date.now()}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
+            cache: 'no-store'
+          });
+        } catch {
+          transientErrors++;
+          if (transientErrors <= 5) continue;
+          throw new Error('Network connection interrupted while checking payment upload status.');
+        }
+
+        const statusData = await statusResp.json().catch(() => null);
+        if (!statusResp.ok && statusResp.status >= 500) {
+          transientErrors++;
+          if (transientErrors <= 5) continue;
+        }
+        transientErrors = 0;
+
+        if (!statusData) {
+          throw new Error(`Upload status check failed with status ${statusResp.status}`);
+        }
+
+        if (statusData.status === 'failed' || statusData.success === false) {
+          const err: any = new Error(statusData.error || statusData.message || 'Payment data upload failed.');
+          if (statusData.code) err.code = statusData.code;
+          throw err;
+        }
+
+        if (onProgress) {
+          onProgress({
+            progressPercent: Number(statusData.progressPercent || 10),
+            stageMessage: String(statusData.stageMessage || 'Processing payment records...'),
+            totalCount: Number(statusData.totalCount || 0),
+            matchedCount: Number(statusData.matchedCount || 0),
+            processedCount: Number(statusData.processedCount || 0),
+            updatedCount: Number(statusData.updatedCount || 0)
+          });
+        }
+
+        if (statusData.status === 'completed' && statusData.result) {
+          data = statusData.result;
+          break;
+        }
+      }
+    }
   }
 
   // Update in-memory/local disconnection task cache ONLY for the 4 payment columns on Updated rows
