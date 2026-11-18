@@ -3667,7 +3667,18 @@ export async function uploadDisconnectionPaymentData(
   },
   onProgress?: (progress: PaymentUploadProgress) => void
 ): Promise<PaymentUploadResultReport> {
-  const startResp = await nativeFetch('/api/disconnection/upload-payment-data/start', {
+  if (onProgress) {
+    onProgress({
+      progressPercent: 8,
+      stageMessage: 'Validating Excel records & matching Consumer IDs...',
+      totalCount: 0,
+      matchedCount: 0,
+      processedCount: 0,
+      updatedCount: 0
+    });
+  }
+
+  const parseResp = await nativeFetch('/api/disconnection/payment-parse-and-match', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -3675,8 +3686,8 @@ export async function uploadDisconnectionPaymentData(
 
   let data: any = null;
 
-  if (startResp.status === 404) {
-    // Fallback if server only exposes synchronous endpoint
+  if (parseResp.status === 404) {
+    // Fallback if server only exposes legacy synchronous endpoint
     const syncResp = await nativeFetch('/api/disconnection/upload-payment-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3690,86 +3701,160 @@ export async function uploadDisconnectionPaymentData(
     }
     data = syncData;
   } else {
-    const startData = await startResp.json().catch(() => null);
-    if (!startResp.ok || !startData || startData.success === false) {
-      const err: any = new Error(startData?.error || startData?.message || `Upload failed with status ${startResp.status}`);
-      if (startData?.code) err.code = startData.code;
+    const parseData = await parseResp.json().catch(() => null);
+    if (!parseResp.ok || !parseData || parseData.success === false) {
+      const err: any = new Error(parseData?.error || parseData?.message || `Upload failed with status ${parseResp.status}`);
+      if (parseData?.code) err.code = parseData.code;
       throw err;
     }
 
-    if (startData.alreadyCompleted && startData.result) {
-      data = startData.result;
-    } else {
-      const jobId = String(startData.jobId || payload.uploadId).trim();
-      if (onProgress) {
-        onProgress({
-          progressPercent: Number(startData.progressPercent || 5),
-          stageMessage: String(startData.stageMessage || 'Starting Excel payment processing...'),
-          totalCount: 0,
-          matchedCount: 0,
-          processedCount: 0,
-          updatedCount: 0
+    const totalRecords = Number(parseData.totalRecords || 0);
+    const preFailedResults: PaymentUploadRowResult[] = Array.isArray(parseData.preFailedResults) ? parseData.preFailedResults : [];
+    const notFoundResults: PaymentUploadRowResult[] = Array.isArray(parseData.notFoundResults) ? parseData.notFoundResults : [];
+    const matchedItems: any[] = Array.isArray(parseData.matchedItems) ? parseData.matchedItems : [];
+
+    const preProcessedCount = preFailedResults.length + notFoundResults.length;
+
+    if (onProgress) {
+      onProgress({
+        progressPercent: matchedItems.length > 0 ? 20 : 95,
+        stageMessage:
+          matchedItems.length > 0
+            ? `Matched ${matchedItems.length.toLocaleString()} consumer(s) in Disconnection sheet (${notFoundResults.length.toLocaleString()} not in sheet). Updating Google Sheet...`
+            : `Checked ${totalRecords.toLocaleString()} record(s). No matching Consumer IDs found in Disconnection sheet.`,
+        totalCount: totalRecords,
+        matchedCount: matchedItems.length,
+        processedCount: preProcessedCount,
+        updatedCount: 0
+      });
+    }
+
+    const mergedRowResults: PaymentUploadRowResult[] = [...preFailedResults, ...notFoundResults];
+    let updatedSoFar = 0;
+    let syncedMatchedCount = 0;
+    let subChunkSeq = 0;
+
+    const sendBatchWithRetryAndSplit = async (
+      items: any[],
+      isFinalChunk: boolean,
+      retryAttempt = 0
+    ): Promise<PaymentUploadRowResult[]> => {
+      if (items.length === 0) return [];
+      const curId = `${payload.uploadId}_b${subChunkSeq++}`;
+      try {
+        const batchResp = await nativeFetch('/api/disconnection/payment-update-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentSource: payload.paymentSource,
+            batchUploadId: curId,
+            records: items,
+            isFinalBatch: isFinalChunk
+          })
         });
-      }
 
-      let transientErrors = 0;
-      const maxWaitMs = 15 * 60 * 1000;
-      const pollStartedAt = Date.now();
-
-      while (true) {
-        if (Date.now() - pollStartedAt > maxWaitMs) {
-          throw new Error('Payment processing took longer than expected. Please check status or retry.');
+        if ((batchResp.status === 502 || batchResp.status === 503 || batchResp.status === 504) && (items.length > 10 || retryAttempt < 2)) {
+          throw new Error(`GATEWAY_${batchResp.status}`);
         }
 
-        await new Promise(resolve => setTimeout(resolve, 800));
-
-        let statusResp: Response;
-        try {
-          statusResp = await nativeFetch(`/api/disconnection/upload-payment-data/status/${encodeURIComponent(jobId)}?_t=${Date.now()}`, {
-            method: 'GET',
-            headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
-            cache: 'no-store'
-          });
-        } catch {
-          transientErrors++;
-          if (transientErrors <= 5) continue;
-          throw new Error('Network connection interrupted while checking payment upload status.');
-        }
-
-        const statusData = await statusResp.json().catch(() => null);
-        if (!statusResp.ok && statusResp.status >= 500) {
-          transientErrors++;
-          if (transientErrors <= 5) continue;
-        }
-        transientErrors = 0;
-
-        if (!statusData) {
-          throw new Error(`Upload status check failed with status ${statusResp.status}`);
-        }
-
-        if (statusData.status === 'failed' || statusData.success === false) {
-          const err: any = new Error(statusData.error || statusData.message || 'Payment data upload failed.');
-          if (statusData.code) err.code = statusData.code;
+        const batchData = await batchResp.json().catch(() => null);
+        if (!batchResp.ok || !batchData || batchData.success === false) {
+          if (batchResp.status >= 500 && (items.length > 10 || retryAttempt < 1)) {
+            throw new Error(`SERVER_${batchResp.status}`);
+          }
+          const err: any = new Error(batchData?.error || batchData?.message || `Batch update failed with status ${batchResp.status}`);
+          if (batchData?.code) err.code = batchData.code;
           throw err;
         }
 
-        if (onProgress) {
-          onProgress({
-            progressPercent: Number(statusData.progressPercent || 10),
-            stageMessage: String(statusData.stageMessage || 'Processing payment records...'),
-            totalCount: Number(statusData.totalCount || 0),
-            matchedCount: Number(statusData.matchedCount || 0),
-            processedCount: Number(statusData.processedCount || 0),
-            updatedCount: Number(statusData.updatedCount || 0)
-          });
+        return Array.isArray(batchData.rowResults) ? batchData.rowResults : [];
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        const isTransient =
+          msg.startsWith('GATEWAY_') ||
+          msg.startsWith('SERVER_') ||
+          err?.name === 'TypeError' ||
+          /network|fetch|timeout|aborted/i.test(msg);
+
+        if (isTransient && items.length > 10) {
+          const mid = Math.ceil(items.length / 2);
+          await new Promise(resolve => setTimeout(resolve, 600));
+          const left = await sendBatchWithRetryAndSplit(items.slice(0, mid), false, 0);
+          const right = await sendBatchWithRetryAndSplit(items.slice(mid), isFinalChunk, 0);
+          return [...left, ...right];
         }
 
-        if (statusData.status === 'completed' && statusData.result) {
-          data = statusData.result;
-          break;
+        if (isTransient && retryAttempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 900 * (retryAttempt + 1)));
+          return sendBatchWithRetryAndSplit(items, isFinalChunk, retryAttempt + 1);
+        }
+
+        throw err;
+      }
+    };
+
+    const CLIENT_PAYMENT_BATCH_SIZE = 50;
+    for (let start = 0; start < matchedItems.length; start += CLIENT_PAYMENT_BATCH_SIZE) {
+      const slice = matchedItems.slice(start, start + CLIENT_PAYMENT_BATCH_SIZE);
+      const isFinalBatch = start + CLIENT_PAYMENT_BATCH_SIZE >= matchedItems.length;
+      const chunkResults = await sendBatchWithRetryAndSplit(slice, isFinalBatch);
+
+      for (const r of chunkResults) {
+        mergedRowResults.push(r);
+        if (r.status === 'Updated') {
+          updatedSoFar++;
         }
       }
+
+      syncedMatchedCount += slice.length;
+      if (onProgress) {
+        const pct = Math.min(98, 20 + Math.round((syncedMatchedCount / matchedItems.length) * 78));
+        onProgress({
+          progressPercent: pct,
+          stageMessage: `Updated ${syncedMatchedCount.toLocaleString()} of ${matchedItems.length.toLocaleString()} matched consumer(s) in Google Sheet...`,
+          totalCount: totalRecords,
+          matchedCount: matchedItems.length,
+          processedCount: preProcessedCount + syncedMatchedCount,
+          updatedCount: updatedSoFar
+        });
+      }
     }
+
+    mergedRowResults.sort((a, b) => a.rowNumber - b.rowNumber);
+
+    let updatedCount = 0;
+    let notFoundCount = 0;
+    let failedCount = 0;
+    for (const row of mergedRowResults) {
+      if (row.status === 'Updated') updatedCount++;
+      else if (row.status === 'Not Found') notFoundCount++;
+      else failedCount++;
+    }
+
+    if (onProgress) {
+      onProgress({
+        progressPercent: 100,
+        stageMessage: `Completed: ${updatedCount.toLocaleString()} Updated, ${notFoundCount.toLocaleString()} Not Found, ${failedCount.toLocaleString()} Failed.`,
+        totalCount: mergedRowResults.length,
+        matchedCount: matchedItems.length,
+        processedCount: mergedRowResults.length,
+        updatedCount
+      });
+    }
+
+    data = {
+      success: true,
+      paymentSource: payload.paymentSource,
+      fileName: payload.fileName,
+      uploadId: payload.uploadId,
+      totalRecords: mergedRowResults.length,
+      updatedCount,
+      notFoundCount,
+      failedCount,
+      rowResults: mergedRowResults,
+      updatedColumns: ['Paid Amount', 'Paid Date', 'Paid Type', 'Outstanding After'],
+      message: `Processed ${mergedRowResults.length} record(s): ${updatedCount} Updated, ${notFoundCount} Not Found, ${failedCount} Failed.`
+    };
   }
 
   // Update in-memory/local disconnection task cache ONLY for the 4 payment columns on Updated rows

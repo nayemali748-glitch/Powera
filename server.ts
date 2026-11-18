@@ -607,7 +607,7 @@ async function callGoogleAppsScript(
       const controller = new AbortController();
       // Keep timeouts responsive so slow GAS calls never hang the server, while allowing up to 60s for batch payment uploads
       const currentTimeoutMs = isBatchPaymentUpload
-        ? Math.min(Math.max(timeoutMs || 60000, 30000), 60000)
+        ? Math.min(Math.max(timeoutMs || 45000, 18000), 60000)
         : isMutation
           ? Math.min(Math.max(timeoutMs || 25000, 15000), 30000)
           : Math.min(Math.max(timeoutMs || 18000, 10000), 22000);
@@ -7402,36 +7402,11 @@ const PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
 const paymentUploadIdempotencyMap = new Map<string, { timestamp: number; result: any }>();
 const inFlightPaymentUploads = new Map<string, Promise<any>>();
 
-interface PaymentUploadJobState {
-  jobId: string;
-  contentHash: string;
-  status: 'running' | 'completed' | 'failed';
-  progressPercent: number;
-  stageMessage: string;
-  totalCount: number;
-  matchedCount: number;
-  processedCount: number;
-  updatedCount: number;
-  notFoundCount: number;
-  failedCount: number;
-  startedAt: number;
-  updatedAt: number;
-  result?: any;
-  error?: string;
-  errorCode?: string;
-}
-const paymentUploadJobs = new Map<string, PaymentUploadJobState>();
-
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of paymentUploadIdempotencyMap.entries()) {
     if (now - v.timestamp > PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
       paymentUploadIdempotencyMap.delete(k);
-    }
-  }
-  for (const [k, job] of paymentUploadJobs.entries()) {
-    if (now - job.updatedAt > 30 * 60 * 1000) {
-      paymentUploadJobs.delete(k);
     }
   }
 }, 60000).unref();
@@ -7795,94 +7770,76 @@ function parseUploadedPaymentWorkbook(rawPaymentSource: string, rawBase64: strin
   return { cleanBase64, nonBlankRecordCount, validRecords, preFailedResults };
 }
 
-async function runPaymentUploadProcessing(params: {
-  rawPaymentSource: string;
-  fileName: string;
-  rawBase64: string;
-  effectiveUploadId: string;
-  contentHash: string;
-  job?: PaymentUploadJobState;
-}): Promise<any> {
-  const { rawPaymentSource, fileName, rawBase64, effectiveUploadId, contentHash, job } = params;
-  const updateJob = (patch: Partial<PaymentUploadJobState>) => {
-    if (!job) return;
-    Object.assign(job, patch, { updatedAt: Date.now() });
+interface MatchedPaymentSyncItem {
+  rowNumber: number;
+  consumerId: string;
+  targetCid: string;
+  amount: number;
+  date: string;
+  d2NetOs: number;
+  paidAmtRounded: number;
+  outstandingAfter: number;
+  liveMeta: {
+    disconStatus: string;
+    paymentStatus: string;
+    lastUpdated: string;
+    uploadDate: string;
   };
+}
 
-  updateJob({ progressPercent: 5, stageMessage: 'Reading & validating Excel file...' });
-  const { nonBlankRecordCount, validRecords, preFailedResults } = parseUploadedPaymentWorkbook(rawPaymentSource, rawBase64);
-
-  updateJob({
-    totalCount: nonBlankRecordCount,
-    failedCount: preFailedResults.length,
-    progressPercent: 12,
-    stageMessage: `Validated ${nonBlankRecordCount.toLocaleString()} record(s). Fetching live Disconnection sheet...`
-  });
-
-  if (validRecords.length === 0) {
-    const earlyRes = {
-      success: true,
-      paymentSource: rawPaymentSource,
-      fileName,
-      uploadId: effectiveUploadId,
-      totalRecords: nonBlankRecordCount,
-      updatedCount: 0,
-      notFoundCount: 0,
-      failedCount: preFailedResults.length,
-      rowResults: preFailedResults,
-      message: `Validation failed for all ${preFailedResults.length} record(s). No Google Sheet rows were modified.`
-    };
-    updateJob({
-      status: 'completed',
-      progressPercent: 100,
-      processedCount: nonBlankRecordCount,
-      result: earlyRes,
-      stageMessage: earlyRes.message
-    });
-    return earlyRes;
-  }
-
-  // Use fresh in-memory Disconnection rows (< 45s old) or fetch live Disconnection rows ONCE to pre-filter Not Found records in ~5ms
-  let liveRows: any[] = [];
+async function getLiveDisconnectionRowsForPaymentMatch(): Promise<any[]> {
   if (
     cachedDisconnectionState &&
     Array.isArray(cachedDisconnectionState.tasks) &&
     cachedDisconnectionState.tasks.length > 0 &&
     cachedDisconnectionState.timestamp > 0 &&
-    Date.now() - cachedDisconnectionState.timestamp < 45000
+    Date.now() - cachedDisconnectionState.timestamp < 60000
   ) {
-    liveRows = cachedDisconnectionState.tasks;
-  } else {
-    gasCache.delete('entries_{"category":"Disconnection"}');
-    gasCache.delete('entries:{"category":"Disconnection"}');
-    const liveEntriesRes = await callGoogleAppsScript(
-      'entries',
-      { category: 'Disconnection', _t: Date.now() },
-      'GET',
-      25000
-    );
-
-    if (liveEntriesRes && liveEntriesRes.success !== false) {
-      liveRows = Array.isArray(liveEntriesRes.entries)
-        ? liveEntriesRes.entries
-        : Array.isArray(liveEntriesRes.data?.entries)
-          ? liveEntriesRes.data.entries
-          : Array.isArray(liveEntriesRes.data)
-            ? liveEntriesRes.data
-            : [];
-    } else if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-      liveRows = cachedDisconnectionState.tasks;
-    } else {
-      const fetchErr: any = new Error(
-        liveEntriesRes?.error?.message ||
-        'Failed to read live Disconnection sheet records from Google Apps Script.'
-      );
-      fetchErr.statusCode = 502;
-      fetchErr.code = 'GAS_READ_FAILED';
-      throw fetchErr;
-    }
+    return cachedDisconnectionState.tasks;
   }
 
+  gasCache.delete('entries_{"category":"Disconnection"}');
+  gasCache.delete('entries:{"category":"Disconnection"}');
+  const liveEntriesRes = await callGoogleAppsScript(
+    'entries',
+    { category: 'Disconnection', _t: Date.now() },
+    'GET',
+    25000
+  );
+
+  if (liveEntriesRes && liveEntriesRes.success !== false) {
+    return Array.isArray(liveEntriesRes.entries)
+      ? liveEntriesRes.entries
+      : Array.isArray(liveEntriesRes.data?.entries)
+        ? liveEntriesRes.data.entries
+        : Array.isArray(liveEntriesRes.data)
+          ? liveEntriesRes.data
+          : [];
+  }
+
+  if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+    return cachedDisconnectionState.tasks;
+  }
+
+  const fetchErr: any = new Error(
+    liveEntriesRes?.error?.message ||
+    'Failed to read live Disconnection sheet records from Google Apps Script.'
+  );
+  fetchErr.statusCode = 502;
+  fetchErr.code = 'GAS_READ_FAILED';
+  throw fetchErr;
+}
+
+function matchPaymentRecordsWithSheet(
+  rawPaymentSource: string,
+  validRecords: ValidPaymentRecord[],
+  preFailedResults: PaymentRowResult[],
+  liveRows: any[]
+): {
+  combinedPreFailedResults: PaymentRowResult[];
+  notFoundResults: PaymentRowResult[];
+  matchedItems: MatchedPaymentSyncItem[];
+} {
   const consumerMap = new Map<string, any>();
   for (const row of liveRows) {
     if (isRecordDeleted(row)) continue;
@@ -7893,26 +7850,15 @@ async function runPaymentUploadProcessing(params: {
     }
   }
 
-  interface MatchedPaymentSyncItem {
-    rec: ValidPaymentRecord;
-    targetCid: string;
-    d2NetOs: number;
-    paidAmtRounded: number;
-    outstandingAfter: number;
-    liveRow: any;
-  }
-
-  const mergedRowResults: PaymentRowResult[] = [...preFailedResults];
-  const matchedToSync: MatchedPaymentSyncItem[] = [];
-  let preNotFoundCount = 0;
-  let preFailedMatchedCount = 0;
+  const combinedPreFailedResults: PaymentRowResult[] = [...preFailedResults];
+  const notFoundResults: PaymentRowResult[] = [];
+  const matchedItems: MatchedPaymentSyncItem[] = [];
 
   for (const rec of validRecords) {
     const cKey = normalizeConsumerIdKey(rec.consumerId);
     const liveRow = cKey ? consumerMap.get(cKey) : undefined;
     if (!liveRow) {
-      preNotFoundCount++;
-      mergedRowResults.push({
+      notFoundResults.push({
         rowNumber: rec.rowNumber,
         consumerId: rec.consumerId,
         d2NetOs: '',
@@ -7932,8 +7878,7 @@ async function runPaymentUploadProcessing(params: {
     if (cleanedD2 !== '') {
       d2NetOs = parseFloat(cleanedD2);
       if (isNaN(d2NetOs) || !isFinite(d2NetOs)) {
-        preFailedMatchedCount++;
-        mergedRowResults.push({
+        combinedPreFailedResults.push({
           rowNumber: rec.rowNumber,
           consumerId: rec.consumerId,
           d2NetOs: String(rawD2),
@@ -7952,187 +7897,270 @@ async function runPaymentUploadProcessing(params: {
     const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
     const targetCid = String(liveRow['Consumer Id'] ?? liveRow['Consumer ID'] ?? liveRow.consumerId ?? rec.consumerId).trim();
 
-    matchedToSync.push({
-      rec,
+    matchedItems.push({
+      rowNumber: rec.rowNumber,
+      consumerId: rec.consumerId,
       targetCid,
+      amount: rec.amount,
+      date: rec.date,
       d2NetOs,
       paidAmtRounded,
       outstandingAfter,
-      liveRow
+      liveMeta: {
+        disconStatus: String(liveRow['Discon Status'] ?? liveRow.disconStatus ?? ''),
+        paymentStatus: String(liveRow['Payment Status'] ?? liveRow.paymentStatus ?? ''),
+        lastUpdated: String(liveRow['Last Updated'] ?? liveRow.lastUpdated ?? ''),
+        uploadDate: String(liveRow['Upload Date'] ?? liveRow.uploadDate ?? '')
+      }
     });
   }
 
-  updateJob({
-    matchedCount: matchedToSync.length,
-    notFoundCount: preNotFoundCount,
-    failedCount: preFailedResults.length + preFailedMatchedCount,
-    processedCount: preFailedResults.length + preNotFoundCount + preFailedMatchedCount,
-    progressPercent: matchedToSync.length > 0 ? 22 : 95,
-    stageMessage: matchedToSync.length > 0
-      ? `Matched ${matchedToSync.length.toLocaleString()} consumer(s) in Disconnection sheet (${preNotFoundCount.toLocaleString()} not in sheet). Updating Google Sheet...`
-      : `Checked ${nonBlankRecordCount.toLocaleString()} record(s). No matching Consumer IDs found in Disconnection sheet.`
-  });
+  return { combinedPreFailedResults, notFoundResults, matchedItems };
+}
 
-  let batchActionUnsupported = false;
-  let syncedSoFar = 0;
+async function fallbackUpdatePaymentChunkViaUpdateEntry(
+  rawPaymentSource: string,
+  items: MatchedPaymentSyncItem[]
+): Promise<PaymentRowResult[]> {
+  return mapWithConcurrency(items, 6, async (item): Promise<PaymentRowResult> => {
+    const patch: Record<string, any> = {
+      id: item.targetCid,
+      consumerId: item.targetCid,
+      'Consumer Id': item.targetCid,
+      category: 'Disconnection',
+      spreadsheetId: GOOGLE_SHEET_ID,
+      'Discon Status': item.liveMeta?.disconStatus ?? '',
+      'Payment Status': item.liveMeta?.paymentStatus ?? '',
+      'Last Updated': item.liveMeta?.lastUpdated ?? '',
+      'Upload Date': item.liveMeta?.uploadDate ?? '',
+      'Paid Amount': item.paidAmtRounded,
+      paidAmount: item.paidAmtRounded,
+      'Paid Date': item.date,
+      paidDate: item.date,
+      'Paid Type': rawPaymentSource,
+      paidType: rawPaymentSource,
+      'Outstanding After': String(item.outstandingAfter),
+      outstandingAfter: String(item.outstandingAfter)
+    };
 
-  const fallbackUpdateChunkViaUpdateEntry = async (items: MatchedPaymentSyncItem[]): Promise<PaymentRowResult[]> => {
-    return mapWithConcurrency(items, 6, async (item): Promise<PaymentRowResult> => {
-      const patch: Record<string, any> = {
-        id: item.targetCid,
-        consumerId: item.targetCid,
-        'Consumer Id': item.targetCid,
-        category: 'Disconnection',
-        spreadsheetId: GOOGLE_SHEET_ID,
-        'Discon Status': String(item.liveRow['Discon Status'] ?? item.liveRow.disconStatus ?? ''),
-        'Payment Status': String(item.liveRow['Payment Status'] ?? item.liveRow.paymentStatus ?? ''),
-        'Last Updated': String(item.liveRow['Last Updated'] ?? item.liveRow.lastUpdated ?? ''),
-        'Upload Date': String(item.liveRow['Upload Date'] ?? item.liveRow.uploadDate ?? ''),
-        'Paid Amount': item.paidAmtRounded,
-        paidAmount: item.paidAmtRounded,
-        'Paid Date': item.rec.date,
-        paidDate: item.rec.date,
-        'Paid Type': rawPaymentSource,
-        paidType: rawPaymentSource,
-        'Outstanding After': String(item.outstandingAfter),
-        outstandingAfter: String(item.outstandingAfter)
-      };
-
-      const upRes = await enqueueGasWrite(() =>
-        callGoogleAppsScript('updateEntry', { ...patch, data: patch }, 'POST', 25000)
-      );
-      if (upRes && upRes.success !== false) {
-        return {
-          rowNumber: item.rec.rowNumber,
-          consumerId: item.rec.consumerId,
-          d2NetOs: String(item.d2NetOs),
-          paidAmount: String(item.paidAmtRounded),
-          paidDate: item.rec.date,
-          paidType: rawPaymentSource,
-          outstandingAfter: String(item.outstandingAfter),
-          status: 'Updated',
-          message: 'Payment columns updated in Disconnection sheet'
-        };
-      }
+    const upRes = await enqueueGasWrite(() =>
+      callGoogleAppsScript('updateEntry', { ...patch, data: patch }, 'POST', 20000)
+    );
+    if (upRes && upRes.success !== false) {
       return {
-        rowNumber: item.rec.rowNumber,
-        consumerId: item.rec.consumerId,
+        rowNumber: item.rowNumber,
+        consumerId: item.consumerId,
         d2NetOs: String(item.d2NetOs),
         paidAmount: String(item.paidAmtRounded),
-        paidDate: item.rec.date,
+        paidDate: item.date,
         paidType: rawPaymentSource,
-        outstandingAfter: '',
-        status: 'Failed',
-        message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
+        outstandingAfter: String(item.outstandingAfter),
+        status: 'Updated',
+        message: 'Payment columns updated in Disconnection sheet'
+      };
+    }
+    return {
+      rowNumber: item.rowNumber,
+      consumerId: item.consumerId,
+      d2NetOs: String(item.d2NetOs),
+      paidAmount: String(item.paidAmtRounded),
+      paidDate: item.date,
+      paidType: rawPaymentSource,
+      outstandingAfter: '',
+      status: 'Failed',
+      message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
+    };
+  });
+}
+
+async function syncMatchedPaymentBatchToGas(params: {
+  rawPaymentSource: string;
+  batchUploadId: string;
+  items: MatchedPaymentSyncItem[];
+  state?: { batchActionUnsupported: boolean; subSeq: number };
+}): Promise<PaymentRowResult[]> {
+  const { rawPaymentSource, batchUploadId, items } = params;
+  const state = params.state || { batchActionUnsupported: false, subSeq: 0 };
+  if (items.length === 0) return [];
+
+  const curSeq = state.subSeq++;
+
+  if (!state.batchActionUnsupported) {
+    const gasPayloadRecords = items.map(it => ({
+      rowNumber: it.rowNumber,
+      consumerId: it.consumerId,
+      amount: it.amount,
+      date: it.date
+    }));
+
+    const gasRes = await enqueueGasWrite(() =>
+      callGoogleAppsScript(
+        'uploadDisconnectionPaymentData',
+        {
+          spreadsheetId: GOOGLE_SHEET_ID,
+          paymentSource: rawPaymentSource,
+          uploadId: `${batchUploadId}_c${curSeq}`,
+          records: gasPayloadRecords
+        },
+        'POST',
+        25000
+      )
+    );
+
+    if (gasRes && gasRes.success !== false) {
+      const rawRows: any[] = Array.isArray(gasRes.rowResults)
+        ? gasRes.rowResults
+        : Array.isArray(gasRes.data?.rowResults)
+          ? gasRes.data.rowResults
+          : [];
+      return rawRows.map((r: any, idx: number) => {
+        const fallbackItem = items[idx];
+        const st: 'Updated' | 'Not Found' | 'Failed' =
+          r.status === 'Updated'
+            ? 'Updated'
+            : r.status === 'Not Found'
+              ? 'Not Found'
+              : 'Failed';
+        const rawPaidAmt = r.paidAmount ?? r.amount ?? fallbackItem?.paidAmtRounded;
+        const rawPaidDt = r.paidDate ?? r.date ?? fallbackItem?.date;
+        return {
+          rowNumber: Number(r.rowNumber || fallbackItem?.rowNumber || 0),
+          consumerId: String(r.consumerId || fallbackItem?.consumerId || ''),
+          d2NetOs: r.d2NetOs !== undefined && r.d2NetOs !== null ? String(r.d2NetOs) : String(fallbackItem?.d2NetOs ?? ''),
+          paidAmount: rawPaidAmt !== undefined && rawPaidAmt !== null ? String(rawPaidAmt) : '',
+          paidDate: rawPaidDt !== undefined && rawPaidDt !== null ? String(rawPaidDt) : '',
+          paidType: r.paidType !== undefined && r.paidType !== null ? String(r.paidType) : rawPaymentSource,
+          outstandingAfter: r.outstandingAfter !== undefined && r.outstandingAfter !== null ? String(r.outstandingAfter) : '',
+          status: st,
+          message: String(r.message || r.reason || (st === 'Updated' ? 'Payment columns updated in Disconnection sheet' : ''))
+        };
+      });
+    }
+
+    const errCode = String(gasRes?.error?.code || '').trim();
+    const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
+    if (errCode === 'UNKNOWN_POST_ACTION' || /Unrecognized POST action|Unknown POST action/i.test(errMsg)) {
+      state.batchActionUnsupported = true;
+      return fallbackUpdatePaymentChunkViaUpdateEntry(rawPaymentSource, items);
+    }
+
+    if (items.length > 15) {
+      const mid = Math.ceil(items.length / 2);
+      await new Promise(r => setTimeout(r, 400));
+      const left = await syncMatchedPaymentBatchToGas({
+        rawPaymentSource,
+        batchUploadId,
+        items: items.slice(0, mid),
+        state
+      });
+      const right = await syncMatchedPaymentBatchToGas({
+        rawPaymentSource,
+        batchUploadId,
+        items: items.slice(mid),
+        state
+      });
+      return [...left, ...right];
+    }
+
+    return fallbackUpdatePaymentChunkViaUpdateEntry(rawPaymentSource, items);
+  }
+
+  return fallbackUpdatePaymentChunkViaUpdateEntry(rawPaymentSource, items);
+}
+
+function applyPaymentUpdatesToLocalCache(
+  rowResults: PaymentRowResult[],
+  triggerBackgroundRefresh: boolean
+): void {
+  const updatedByConsumerKey = new Map<string, PaymentRowResult>();
+  for (const r of rowResults) {
+    if (r.status === 'Updated') {
+      const cKey = normalizeConsumerIdKey(r.consumerId);
+      if (cKey) updatedByConsumerKey.set(cKey, r);
+    }
+  }
+
+  if (updatedByConsumerKey.size > 0 && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+    cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
+      const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
+      const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
+      if (!matched) return task;
+      return {
+        ...task,
+        paidAmount: matched.paidAmount,
+        'Paid Amount': matched.paidAmount,
+        paidDate: matched.paidDate,
+        'Paid Date': matched.paidDate,
+        paidType: matched.paidType,
+        'Paid Type': matched.paidType,
+        outstandingAfter: matched.outstandingAfter,
+        'Outstanding After': matched.outstandingAfter
       };
     });
-  };
+    cachedDisconnectionState.timestamp = Date.now();
+    invalidateDiscSnapshotCache();
+    scheduleDiscCacheDiskWrite();
+  }
 
-  let chunkSeq = 0;
-  const syncMatchedBatch = async (items: MatchedPaymentSyncItem[]): Promise<PaymentRowResult[]> => {
-    if (items.length === 0) return [];
-    const curSeq = chunkSeq++;
-
-    if (!batchActionUnsupported) {
-      const gasPayloadRecords = items.map(it => it.rec);
-      const gasRes = await enqueueGasWrite(() =>
-        callGoogleAppsScript(
-          'uploadDisconnectionPaymentData',
-          {
-            spreadsheetId: GOOGLE_SHEET_ID,
-            paymentSource: rawPaymentSource,
-            uploadId: `${effectiveUploadId}_c${curSeq}`,
-            records: gasPayloadRecords
-          },
-          'POST',
-          45000
-        )
-      );
-
-      if (gasRes && gasRes.success !== false) {
-        const rawRows: any[] = Array.isArray(gasRes.rowResults)
-          ? gasRes.rowResults
-          : Array.isArray(gasRes.data?.rowResults)
-            ? gasRes.data.rowResults
-            : [];
-        return rawRows.map((r: any, idx: number) => {
-          const fallbackItem = items[idx];
-          const st: 'Updated' | 'Not Found' | 'Failed' =
-            r.status === 'Updated'
-              ? 'Updated'
-              : r.status === 'Not Found'
-                ? 'Not Found'
-                : 'Failed';
-          const rawPaidAmt = r.paidAmount ?? r.amount ?? fallbackItem?.paidAmtRounded;
-          const rawPaidDt = r.paidDate ?? r.date ?? fallbackItem?.rec.date;
-          return {
-            rowNumber: Number(r.rowNumber || fallbackItem?.rec.rowNumber || 0),
-            consumerId: String(r.consumerId || fallbackItem?.rec.consumerId || ''),
-            d2NetOs: r.d2NetOs !== undefined && r.d2NetOs !== null ? String(r.d2NetOs) : String(fallbackItem?.d2NetOs ?? ''),
-            paidAmount: rawPaidAmt !== undefined && rawPaidAmt !== null ? String(rawPaidAmt) : '',
-            paidDate: rawPaidDt !== undefined && rawPaidDt !== null ? String(rawPaidDt) : '',
-            paidType: r.paidType !== undefined && r.paidType !== null ? String(r.paidType) : rawPaymentSource,
-            outstandingAfter: r.outstandingAfter !== undefined && r.outstandingAfter !== null ? String(r.outstandingAfter) : '',
-            status: st,
-            message: String(r.message || r.reason || (st === 'Updated' ? 'Payment columns updated in Disconnection sheet' : ''))
-          };
-        });
-      }
-
-      const errCode = String(gasRes?.error?.code || '').trim();
-      const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
-      if (errCode === 'UNKNOWN_POST_ACTION' || /Unrecognized POST action|Unknown POST action/i.test(errMsg)) {
-        batchActionUnsupported = true;
-        return fallbackUpdateChunkViaUpdateEntry(items);
-      }
-
-      // If batch chunk timed out or GAS was busy and chunk > 20 rows, split into smaller mini-chunks and retry
-      if (items.length > 20) {
-        const mid = Math.ceil(items.length / 2);
-        await new Promise(r => setTimeout(r, 600));
-        const left = await syncMatchedBatch(items.slice(0, mid));
-        const right = await syncMatchedBatch(items.slice(mid));
-        return [...left, ...right];
-      }
-
-      // Small chunk still failed — fall back to per-row updateEntry so individual rows succeed cleanly
-      return fallbackUpdateChunkViaUpdateEntry(items);
+  if (triggerBackgroundRefresh) {
+    gasCache.clear();
+    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+      broadcastDisconnectionEvent('tasks_synced', {
+        version: discSnapshotVersion,
+        count: cachedDisconnectionState.tasks.length,
+        ts: Date.now()
+      });
     }
+    refreshDisconnectionFromSheetInBackground();
+  }
+}
 
-    return fallbackUpdateChunkViaUpdateEntry(items);
-  };
+async function runPaymentUploadProcessing(params: {
+  rawPaymentSource: string;
+  fileName: string;
+  rawBase64: string;
+  effectiveUploadId: string;
+  contentHash: string;
+}): Promise<any> {
+  const { rawPaymentSource, fileName, rawBase64, effectiveUploadId, contentHash } = params;
+  const { nonBlankRecordCount, validRecords, preFailedResults } = parseUploadedPaymentWorkbook(rawPaymentSource, rawBase64);
 
-  const CHUNK_SIZE = 100;
-  const updatedByConsumerKey = new Map<string, PaymentRowResult>();
+  if (validRecords.length === 0) {
+    return {
+      success: true,
+      paymentSource: rawPaymentSource,
+      fileName,
+      uploadId: effectiveUploadId,
+      totalRecords: nonBlankRecordCount,
+      updatedCount: 0,
+      notFoundCount: 0,
+      failedCount: preFailedResults.length,
+      rowResults: preFailedResults,
+      message: `Validation failed for all ${preFailedResults.length} record(s). No Google Sheet rows were modified.`
+    };
+  }
 
-  for (let start = 0; start < matchedToSync.length; start += CHUNK_SIZE) {
-    const slice = matchedToSync.slice(start, start + CHUNK_SIZE);
-    const chunkResults = await syncMatchedBatch(slice);
+  const liveRows = await getLiveDisconnectionRowsForPaymentMatch();
+  const { combinedPreFailedResults, notFoundResults, matchedItems } = matchPaymentRecordsWithSheet(
+    rawPaymentSource,
+    validRecords,
+    preFailedResults,
+    liveRows
+  );
 
-    for (const r of chunkResults) {
-      mergedRowResults.push(r);
-      if (r.status === 'Updated') {
-        const cKey = normalizeConsumerIdKey(r.consumerId);
-        if (cKey) updatedByConsumerKey.set(cKey, r);
-      }
-    }
+  const mergedRowResults: PaymentRowResult[] = [...combinedPreFailedResults, ...notFoundResults];
+  const syncState = { batchActionUnsupported: false, subSeq: 0 };
+  const CHUNK_SIZE = 50;
 
-    syncedSoFar += slice.length;
-    const pct = Math.min(96, 22 + Math.round((syncedSoFar / matchedToSync.length) * 74));
-    let runningUpdated = 0;
-    let runningFailed = preFailedResults.length + preFailedMatchedCount;
-    for (const row of mergedRowResults) {
-      if (row.status === 'Updated') runningUpdated++;
-    }
-    runningFailed = mergedRowResults.filter(r => r.status === 'Failed').length;
-
-    updateJob({
-      processedCount: preFailedResults.length + preNotFoundCount + preFailedMatchedCount + syncedSoFar,
-      updatedCount: runningUpdated,
-      failedCount: runningFailed,
-      progressPercent: pct,
-      stageMessage: `Updated ${syncedSoFar.toLocaleString()} of ${matchedToSync.length.toLocaleString()} matched consumer(s) in Google Sheet...`
+  for (let start = 0; start < matchedItems.length; start += CHUNK_SIZE) {
+    const slice = matchedItems.slice(start, start + CHUNK_SIZE);
+    const chunkResults = await syncMatchedPaymentBatchToGas({
+      rawPaymentSource,
+      batchUploadId: effectiveUploadId,
+      items: slice,
+      state: syncState
     });
+    mergedRowResults.push(...chunkResults);
   }
 
   mergedRowResults.sort((a, b) => a.rowNumber - b.rowNumber);
@@ -8146,36 +8174,8 @@ async function runPaymentUploadProcessing(params: {
     else failedCount++;
   }
 
-  // Synchronize ONLY the 4 updated payment columns into local cache (never touch D2 Net O/S or Payment Source)
-  if (updatedByConsumerKey.size > 0) {
-    gasCache.clear();
-    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
-      cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
-        const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
-        const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
-        if (!matched) return task;
-        return {
-          ...task,
-          paidAmount: matched.paidAmount,
-          'Paid Amount': matched.paidAmount,
-          paidDate: matched.paidDate,
-          'Paid Date': matched.paidDate,
-          paidType: matched.paidType,
-          'Paid Type': matched.paidType,
-          outstandingAfter: matched.outstandingAfter,
-          'Outstanding After': matched.outstandingAfter
-        };
-      });
-      cachedDisconnectionState.timestamp = Date.now();
-      invalidateDiscSnapshotCache();
-      scheduleDiscCacheDiskWrite();
-      broadcastDisconnectionEvent('tasks_synced', {
-        version: discSnapshotVersion,
-        count: cachedDisconnectionState.tasks.length,
-        ts: Date.now()
-      });
-    }
-    refreshDisconnectionFromSheetInBackground();
+  if (updatedCount > 0) {
+    applyPaymentUpdatesToLocalCache(mergedRowResults, true);
   }
 
   const finalResult = {
@@ -8196,27 +8196,16 @@ async function runPaymentUploadProcessing(params: {
   paymentUploadIdempotencyMap.set(effectiveUploadId, record);
   paymentUploadIdempotencyMap.set(`hash:${contentHash}`, record);
 
-  updateJob({
-    status: 'completed',
-    progressPercent: 100,
-    processedCount: mergedRowResults.length,
-    updatedCount,
-    notFoundCount,
-    failedCount,
-    result: finalResult,
-    stageMessage: finalResult.message
-  });
-
   return finalResult;
 }
 
-app.post('/api/disconnection/upload-payment-data/start', async (req, res) => {
+// 100% Stateless Step 1: Parse Excel and match Consumer IDs against Disconnection sheet
+app.post('/api/disconnection/payment-parse-and-match', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const rawPaymentSource = String(req.body?.paymentSource || '').trim();
     const fileName = String(req.body?.fileName || '').trim();
     const rawBase64 = String(req.body?.fileBase64 || '').trim();
-    const requestedUploadId = String(req.body?.uploadId || '').trim();
 
     if (rawPaymentSource !== 'Cash Desk' && rawPaymentSource !== 'Portal') {
       return res.status(400).json({
@@ -8240,140 +8229,129 @@ app.post('/api/disconnection/upload-payment-data/start', async (req, res) => {
       });
     }
 
-    const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
-    const contentHash = crypto
-      .createHash('sha256')
-      .update(`${rawPaymentSource}::${cleanBase64}`)
-      .digest('hex');
-    const effectiveUploadId = requestedUploadId || `pay-${contentHash.slice(0, 24)}`;
+    const { nonBlankRecordCount, validRecords, preFailedResults } = parseUploadedPaymentWorkbook(rawPaymentSource, rawBase64);
 
-    const cachedById = paymentUploadIdempotencyMap.get(effectiveUploadId);
-    if (cachedById && Date.now() - cachedById.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
+    if (validRecords.length === 0) {
       return sendCompressedJsonPayload(req, res, {
         success: true,
-        alreadyCompleted: true,
-        jobId: effectiveUploadId,
-        result: { ...cachedById.result, duplicatePrevented: true }
-      });
-    }
-    const cachedByHash = paymentUploadIdempotencyMap.get(`hash:${contentHash}`);
-    if (cachedByHash && Date.now() - cachedByHash.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
-      return sendCompressedJsonPayload(req, res, {
-        success: true,
-        alreadyCompleted: true,
-        jobId: effectiveUploadId,
-        result: { ...cachedByHash.result, duplicatePrevented: true }
+        paymentSource: rawPaymentSource,
+        fileName,
+        totalRecords: nonBlankRecordCount,
+        preFailedResults,
+        notFoundResults: [],
+        matchedItems: []
       });
     }
 
-    // Check if an identical job is already running in memory
-    for (const existingJob of paymentUploadJobs.values()) {
-      if ((existingJob.jobId === effectiveUploadId || existingJob.contentHash === contentHash) && existingJob.status === 'running') {
-        return res.json({
-          success: true,
-          alreadyCompleted: false,
-          jobId: existingJob.jobId,
-          progressPercent: existingJob.progressPercent,
-          stageMessage: existingJob.stageMessage
-        });
-      }
-    }
-
-    const job: PaymentUploadJobState = {
-      jobId: effectiveUploadId,
-      contentHash,
-      status: 'running',
-      progressPercent: 3,
-      stageMessage: 'Starting Excel payment processing...',
-      totalCount: 0,
-      matchedCount: 0,
-      processedCount: 0,
-      updatedCount: 0,
-      notFoundCount: 0,
-      failedCount: 0,
-      startedAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    paymentUploadJobs.set(effectiveUploadId, job);
-
-    const executionPromise = runPaymentUploadProcessing({
+    const liveRows = await getLiveDisconnectionRowsForPaymentMatch();
+    const { combinedPreFailedResults, notFoundResults, matchedItems } = matchPaymentRecordsWithSheet(
       rawPaymentSource,
-      fileName,
-      rawBase64,
-      effectiveUploadId,
-      contentHash,
-      job
-    }).catch((err: any) => {
-      job.status = 'failed';
-      job.error = err?.message || 'Failed to process payment data.';
-      job.errorCode = err?.code || 'PAYMENT_UPLOAD_ERROR';
-      job.updatedAt = Date.now();
-      throw err;
-    });
+      validRecords,
+      preFailedResults,
+      liveRows
+    );
 
-    inFlightPaymentUploads.set(effectiveUploadId, executionPromise);
-    inFlightPaymentUploads.set(`hash:${contentHash}`, executionPromise);
-    executionPromise.finally(() => {
-      inFlightPaymentUploads.delete(effectiveUploadId);
-      inFlightPaymentUploads.delete(`hash:${contentHash}`);
-    }).catch(() => {});
-
-    return res.json({
+    return sendCompressedJsonPayload(req, res, {
       success: true,
-      alreadyCompleted: false,
-      jobId: effectiveUploadId,
-      progressPercent: job.progressPercent,
-      stageMessage: job.stageMessage
+      paymentSource: rawPaymentSource,
+      fileName,
+      totalRecords: nonBlankRecordCount,
+      preFailedResults: combinedPreFailedResults,
+      notFoundResults,
+      matchedItems
     });
   } catch (err: any) {
+    console.error('[Disconnection Payment Parse-and-Match Error]', err);
     const statusCode = Number(err?.statusCode) || 500;
     return res.status(statusCode).json({
       success: false,
-      code: err?.code || 'PAYMENT_UPLOAD_ERROR',
-      error: err?.message || 'Failed to start payment data upload.'
+      code: err?.code || 'PAYMENT_PARSE_MATCH_ERROR',
+      error: err?.message || 'Failed to parse and match Excel payment records.'
     });
   }
 });
 
-app.get('/api/disconnection/upload-payment-data/status/:jobId', (req, res) => {
+// 100% Stateless Step 2: Update a small chunk of matched records in Google Sheets
+app.post('/api/disconnection/payment-update-batch', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const jobId = String(req.params.jobId || '').trim();
-  const job = paymentUploadJobs.get(jobId);
-  if (!job) {
-    const cached = paymentUploadIdempotencyMap.get(jobId);
-    if (cached && Date.now() - cached.timestamp < PAYMENT_UPLOAD_IDEMPOTENCY_TTL_MS) {
-      return sendCompressedJsonPayload(req, res, {
-        success: true,
-        status: 'completed',
-        progressPercent: 100,
-        stageMessage: cached.result?.message || 'Completed',
-        result: cached.result
+  try {
+    const rawPaymentSource = String(req.body?.paymentSource || '').trim();
+    const batchUploadId = String(req.body?.batchUploadId || `pay-batch-${Date.now()}`).trim();
+    const isFinalBatch = Boolean(req.body?.isFinalBatch);
+    const rawRecords = Array.isArray(req.body?.records) ? req.body.records : null;
+
+    if (rawPaymentSource !== 'Cash Desk' && rawPaymentSource !== 'Portal') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PAYMENT_SOURCE',
+        error: 'Please select a valid Payment Source (Cash Desk or Portal).'
       });
     }
-    return res.status(404).json({
+    if (!rawRecords) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_BATCH_RECORDS',
+        error: 'Missing payment batch records array.'
+      });
+    }
+
+    if (rawRecords.length === 0) {
+      if (isFinalBatch) {
+        applyPaymentUpdatesToLocalCache([], true);
+      }
+      return sendCompressedJsonPayload(req, res, { success: true, rowResults: [] });
+    }
+
+    const syncItems: MatchedPaymentSyncItem[] = rawRecords.map((r: any, idx: number) => {
+      const rowNumber = Number(r.rowNumber || idx + 2);
+      const consumerId = String(r.consumerId || '').trim();
+      const targetCid = String(r.targetCid || consumerId).trim();
+      const amount = Number(r.amount ?? 0);
+      const date = String(r.date || '').trim();
+      const d2NetOs = Number(r.d2NetOs ?? 0) || 0;
+      const paidAmtRounded = Number(r.paidAmtRounded ?? Math.round(amount * 100) / 100);
+      const outstandingAfter = Number(
+        r.outstandingAfter ?? Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100)
+      );
+      return {
+        rowNumber,
+        consumerId,
+        targetCid,
+        amount,
+        date,
+        d2NetOs,
+        paidAmtRounded,
+        outstandingAfter,
+        liveMeta: {
+          disconStatus: String(r.liveMeta?.disconStatus ?? '').trim(),
+          paymentStatus: String(r.liveMeta?.paymentStatus ?? '').trim(),
+          lastUpdated: String(r.liveMeta?.lastUpdated ?? '').trim(),
+          uploadDate: String(r.liveMeta?.uploadDate ?? '').trim()
+        }
+      };
+    });
+
+    const rowResults = await syncMatchedPaymentBatchToGas({
+      rawPaymentSource,
+      batchUploadId,
+      items: syncItems
+    });
+
+    applyPaymentUpdatesToLocalCache(rowResults, isFinalBatch);
+
+    return sendCompressedJsonPayload(req, res, {
+      success: true,
+      rowResults
+    });
+  } catch (err: any) {
+    console.error('[Disconnection Payment Batch Error]', err);
+    const statusCode = Number(err?.statusCode) || 500;
+    return res.status(statusCode).json({
       success: false,
-      status: 'failed',
-      code: 'JOB_NOT_FOUND',
-      error: 'Payment upload job not found or expired. Please retry upload.'
+      code: err?.code || 'PAYMENT_BATCH_ERROR',
+      error: err?.message || 'Failed to update payment batch.'
     });
   }
-
-  return sendCompressedJsonPayload(req, res, {
-    success: job.status !== 'failed',
-    jobId: job.jobId,
-    status: job.status,
-    progressPercent: job.progressPercent,
-    stageMessage: job.stageMessage,
-    totalCount: job.totalCount,
-    matchedCount: job.matchedCount,
-    processedCount: job.processedCount,
-    updatedCount: job.updatedCount,
-    notFoundCount: job.notFoundCount,
-    failedCount: job.failedCount,
-    error: job.error,
-    code: job.errorCode,
-    result: job.status === 'completed' ? job.result : undefined
-  });
 });
 
 app.post('/api/disconnection/upload-payment-data', async (req, res) => {
