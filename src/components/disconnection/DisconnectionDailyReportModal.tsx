@@ -190,29 +190,15 @@ export function isUpdatedDisconnectionRecord(task: DisconnectionTask): boolean {
 export function getTaskReportYMD(task: DisconnectionTask): string {
   if (!task || typeof task !== 'object') return '';
 
-  const rawStatus = String(
-    (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? ''
-  ).trim().toUpperCase();
-
-  // 1. Explicit Discon Date / Report Date / Paid Date (prioritize Paid Date when status is PAID)
-  const explicitDateCandidates =
-    rawStatus === 'PAID' || rawStatus === 'AGENCY PAID'
-      ? [
-          (task as any)['Paid Date'],
-          task.paidDate,
-          task.paymentDate,
-          (task as any)['Discon Date'],
-          task.disconDate,
-          task.reportDate
-        ]
-      : [
-          (task as any)['Discon Date'],
-          task.disconDate,
-          task.reportDate,
-          (task as any)['Paid Date'],
-          task.paidDate,
-          task.paymentDate
-        ];
+  // 1. Explicit Discon Date / Report Date first, then Paid Date fallback
+  const explicitDateCandidates = [
+    (task as any)['Discon Date'],
+    task.disconDate,
+    task.reportDate,
+    (task as any)['Paid Date'],
+    task.paidDate,
+    task.paymentDate
+  ];
 
   for (const c of explicitDateCandidates) {
     if (c !== null && c !== undefined && String(c).trim() !== '') {

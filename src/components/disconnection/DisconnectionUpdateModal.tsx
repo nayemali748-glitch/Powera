@@ -432,7 +432,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         w => cleanWorkerOrAgencyName(w.name).toLowerCase() === finalAgency.toLowerCase() || String(w.id).toLowerCase() === String(assignedWorkerId).toLowerCase()
       );
       const finalAssignedWorkerId = String(matchedWorkerObj?.id || assignedWorkerId || task.assignedWorkerId || (!isAdminUser ? workerId : '')).trim();
-      const finalPhotoUrl = photoDataUrl || task.photoUrl || (task as any)['Image'] || '';
+      const finalPhotoUrl = photoDataUrl || '';
       const finalPriority = isUrgent ? 'URGENT' : 'NORMAL';
 
       // Preserve all consumer source columns (A:N) untouched; only update operational fields
@@ -493,6 +493,7 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         'Agency': finalAgency,
         photoUrl: finalPhotoUrl,
         'Image': finalPhotoUrl,
+        ...(finalPhotoUrl.startsWith('data:') ? { photoDataUrl: finalPhotoUrl } : { photoDataUrl: undefined }),
         reissueRequested: false,
         reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
         reissueRejected: false,
@@ -578,14 +579,8 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         _hasUserRemarkUpdate: true
       } as DisconnectionTask;
 
-      // Immediately propagate update to parent list and show confirmation (0ms delay)
-      onUpdateSuccess(updatedTaskObj);
-      setSavedTaskResult(updatedTaskObj);
-      setShowRoundSavePopup(true);
-      setIsSubmitting(false);
-
-      // Sync to backend & Google Sheets without blocking UI
-      submitDisconnectionTaskReport({
+      // Await backend & external photo host upload + Google Sheets save BEFORE closing modal so photos never abort mid-flight
+      const submitRes = await submitDisconnectionTaskReport({
         ...reportPayload,
         reissueRequested: false,
         reissueApproved: Boolean(isAdminUser && selectedStatus === 'REISSUE'),
@@ -595,26 +590,34 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
         updatedAt: nowIso,
         lastUpdated: nowIso,
         'Last Updated': nowIso
-      })
-        .then(res => {
-          if (res && res.imageUrl && res.imageUrl.startsWith('http') && !res.imageUrl.includes('/api/stored-images/')) {
-            onUpdateSuccess({
-              ...updatedTaskObj,
-              photoUrl: res.imageUrl,
-              'Image': res.imageUrl
-            } as DisconnectionTask);
-          }
-        })
-        .catch(err => {
-          console.warn('[Disconnection] Background report sync notice:', err);
-        });
+      });
 
-      // Auto close confirmation popup quickly (450ms)
+      const resolvedPhotoUrl =
+        submitRes && submitRes.imageUrl && typeof submitRes.imageUrl === 'string' && submitRes.imageUrl.startsWith('http')
+          ? submitRes.imageUrl
+          : finalPhotoUrl;
+
+      const finalSavedTask: DisconnectionTask = {
+        ...updatedTaskObj,
+        photoUrl: resolvedPhotoUrl,
+        'Image': resolvedPhotoUrl,
+        statusHistory: updatedHistory.map((h, i) =>
+          i === 0 && resolvedPhotoUrl && !resolvedPhotoUrl.startsWith('data:')
+            ? { ...h, photoUrl: resolvedPhotoUrl }
+            : h
+        )
+      } as DisconnectionTask;
+
+      onUpdateSuccess(finalSavedTask);
+      setSavedTaskResult(finalSavedTask);
+      setShowRoundSavePopup(true);
+      setIsSubmitting(false);
+
       setTimeout(() => {
         onClose();
-      }, 450);
+      }, 600);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to submit update');
+      setErrorMessage(err?.message || 'Failed to submit update');
       setIsSubmitting(false);
     }
   };
@@ -987,8 +990,10 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                 capture="environment"
                 className="hidden"
                 onChange={e => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    handlePhotoUpload(e.target.files[0]);
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) {
+                    handlePhotoUpload(file);
                   }
                 }}
               />
@@ -998,8 +1003,10 @@ export const DisconnectionUpdateModal: React.FC<DisconnectionUpdateModalProps> =
                 accept="image/*"
                 className="hidden"
                 onChange={e => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    handlePhotoUpload(e.target.files[0]);
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) {
+                    handlePhotoUpload(file);
                   }
                 }}
               />

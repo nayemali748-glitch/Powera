@@ -341,62 +341,90 @@ async function convertDataUrlToClickablePhotoLink(val: string, recordKeyHint = '
     : trimmed.replace(/^data:[^,]+,/, '');
 
   if (base64Clean && base64Clean.length > 20) {
-    // Primary upload: freeimage.host
+    const mimeMatch = trimmed.match(/^data:([^;]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+    const buffer = Buffer.from(base64Clean, 'base64');
+    const blob = new Blob([buffer], { type: mimeType });
+
+    // Primary upload: pixhost.to (fast multipart image host, returns direct full-res image URL readable by Google Sheets & browsers)
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         try { controller.abort(); } catch {}
-      }, 15000);
+      }, 12000);
       const form = new FormData();
-      form.append('key', '6d207e02198a847aa98d0a2a901485a5');
-      form.append('action', 'upload');
-      form.append('source', base64Clean);
-      form.append('format', 'json');
-      const res = await fetch('https://freeimage.host/api/1/upload', {
+      form.append('img', blob, `evidence_${imgHash}.${ext}`);
+      form.append('content_type', '0');
+      const res = await fetch('https://api.pixhost.to/images', {
         method: 'POST',
         body: form,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': BROWSER_USER_AGENT
+        },
         signal: controller.signal
       });
       clearTimeout(timeoutId);
       if (res.ok) {
         const json: any = await res.json().catch(() => null);
-        const directUrl = String(json?.image?.url || json?.image?.display_url || '').trim();
+        const thUrl = String(json?.th_url || '').trim();
+        const showUrl = String(json?.show_url || '').trim();
+        let directUrl = thUrl
+          ? thUrl.replace(/^https?:\/\/t(\d+)\.pixhost\.to\/thumbs\//i, 'https://img$1.pixhost.to/images/')
+          : '';
         if (directUrl && directUrl.startsWith('https://')) {
-          uploadedPhotoLinksMap.set(imgHash, directUrl);
-          saveUploadedPhotoLinksToDisk();
-          return directUrl;
+          let verified = false;
+          try {
+            const headCtrl = new AbortController();
+            const headTimer = setTimeout(() => { try { headCtrl.abort(); } catch {} }, 3500);
+            const headRes = await fetch(directUrl, {
+              method: 'HEAD',
+              headers: { 'Referer': 'https://docs.google.com/', 'User-Agent': BROWSER_USER_AGENT },
+              signal: headCtrl.signal
+            });
+            clearTimeout(headTimer);
+            verified = headRes.ok;
+          } catch {
+            verified = false;
+          }
+          const finalUrl = verified ? directUrl : (thUrl || showUrl || directUrl);
+          if (finalUrl && finalUrl.startsWith('https://')) {
+            uploadedPhotoLinksMap.set(imgHash, finalUrl);
+            saveUploadedPhotoLinksToDisk();
+            return finalUrl;
+          }
         }
       }
     } catch (err) {
       console.warn('[Photo Link Upload] Primary host notice:', (err as any)?.message || err);
     }
 
-    // Secondary fallback upload: catbox.moe
+    // Secondary backup upload: freeimage.host (multipart Blob)
     try {
       const controller2 = new AbortController();
       const timeoutId2 = setTimeout(() => {
         try { controller2.abort(); } catch {}
-      }, 15000);
-      const mimeMatch = trimmed.match(/^data:([^;]+);base64,/);
-      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-      const ext = mimeType.includes('png') ? 'png' : 'jpg';
-      const buffer = Buffer.from(base64Clean, 'base64');
-      const blob = new Blob([buffer], { type: mimeType });
+      }, 6000);
       const form2 = new FormData();
-      form2.append('reqtype', 'fileupload');
-      form2.append('fileToUpload', blob, `photo_${imgHash}.${ext}`);
-      const res2 = await fetch('https://catbox.moe/user/api.php', {
+      form2.append('key', '6d207e02198a847aa98d0a2a901485a5');
+      form2.append('action', 'upload');
+      form2.append('source', blob, `evidence_${imgHash}.${ext}`);
+      form2.append('format', 'json');
+      const res2 = await fetch('https://freeimage.host/api/1/upload', {
         method: 'POST',
         body: form2,
+        headers: { 'User-Agent': BROWSER_USER_AGENT },
         signal: controller2.signal
       });
       clearTimeout(timeoutId2);
       if (res2.ok) {
-        const textUrl = (await res2.text()).trim();
-        if (textUrl && textUrl.startsWith('https://')) {
-          uploadedPhotoLinksMap.set(imgHash, textUrl);
+        const json2: any = await res2.json().catch(() => null);
+        const directUrl2 = String(json2?.image?.url || json2?.image?.display_url || '').trim();
+        if (directUrl2 && directUrl2.startsWith('https://')) {
+          uploadedPhotoLinksMap.set(imgHash, directUrl2);
           saveUploadedPhotoLinksToDisk();
-          return textUrl;
+          return directUrl2;
         }
       }
     } catch (err2) {
@@ -910,8 +938,8 @@ function saveUsersStateToDisk(users: any[]) {
     if (!u) return false;
     const uid = String(u.id || '').trim().toLowerCase();
     const uidNo = String(u.idNo || '').trim().toLowerCase();
-    if (uid && deletedTombstoneSet.has(uid)) return false;
-    if (uidNo && deletedTombstoneSet.has(`usr_${uidNo}`)) return false;
+    if (uid && isKeyTombstoned(uid)) return false;
+    if (uidNo && isKeyTombstoned(`usr_${uidNo}`)) return false;
     return true;
   });
   cachedUsersState = { users: filtered, timestamp: Date.now() };
@@ -1251,8 +1279,8 @@ async function refreshVerifiedUsersFromSheetNow(): Promise<any[]> {
 
           const normSummary = normalizeUserRecord(rowSummary);
           // Un-tombstone any ID actively present in Google Sheets so sheet-side creations always show up
-          if (deletedTombstoneSet.delete(rowId.toLowerCase())) tombstonesChanged = true;
-          if (normSummary?.idNo && deletedTombstoneSet.delete(`usr_${String(normSummary.idNo).trim().toLowerCase()}`)) {
+          if (deletedTombstoneMap.delete(rowId.toLowerCase())) tombstonesChanged = true;
+          if (normSummary?.idNo && deletedTombstoneMap.delete(`usr_${String(normSummary.idNo).trim().toLowerCase()}`)) {
             tombstonesChanged = true;
           }
 
@@ -2367,8 +2395,9 @@ app.all('/api/gas-proxy', async (req, res) => {
       const targetUser = users.find(u => String(u.id).toLowerCase() === String(targetId).toLowerCase() || String(u.idNo).toLowerCase() === String(targetId).toLowerCase());
       const rowIdToDelete = targetUser ? targetUser.id : targetId;
       const idNoToDelete = targetUser ? targetUser.idNo : targetId;
-      deletedTombstoneSet.add(String(rowIdToDelete || '').trim().toLowerCase());
-      if (idNoToDelete) deletedTombstoneSet.add(`usr_${String(idNoToDelete).trim().toLowerCase()}`);
+      const nowDelTs = Date.now();
+      deletedTombstoneMap.set(String(rowIdToDelete || '').trim().toLowerCase(), nowDelTs);
+      if (idNoToDelete) deletedTombstoneMap.set(`usr_${String(idNoToDelete).trim().toLowerCase()}`, nowDelTs);
       saveTombstonesToDisk();
       clearUsersStateCache();
       callGoogleAppsScript('deleteUser', { id: rowIdToDelete, idNo: idNoToDelete, category: 'Users' }, 'POST').catch(() => {});
@@ -2538,53 +2567,15 @@ app.all('/api/gas-proxy', async (req, res) => {
       if (cIdKey) {
         if (hasApproveTag) {
           isReissueApp = true;
-          const prevReq = reissueRequestsMap.get(cIdKey);
-          reqByStr = prevReq?.requestedBy || reqByStr;
-          reqAtStr = prevReq?.requestedAt || reqAtStr;
           newNotes = `${cleanBase} [REISSUE_APPROVED]`.trim();
-          reissueRequestsMap.set(cIdKey, {
-            consumerId: cId,
-            status: 'APPROVED',
-            requestedBy: reqByStr,
-            requestedAt: reqAtStr,
-            updatedAt: Date.now()
-          });
-          saveReissueRequestsToDisk();
         } else if (hasRejectTag) {
           isReissueRej = true;
-          const prevReq = reissueRequestsMap.get(cIdKey);
-          reqByStr = prevReq?.requestedBy || reqByStr;
-          reqAtStr = prevReq?.requestedAt || reqAtStr;
           newNotes = `${cleanBase} [REISSUE_REJECTED]`.trim();
-          reissueRequestsMap.set(cIdKey, {
-            consumerId: cId,
-            status: 'REJECTED',
-            requestedBy: reqByStr,
-            requestedAt: reqAtStr,
-            updatedAt: Date.now()
-          });
-          saveReissueRequestsToDisk();
         } else if (hasRequestTag) {
           isReissueReq = true;
           newNotes = `${cleanBase} [REISSUE_REQ:${reqByStr}|${reqAtStr}]`.trim();
-          reissueRequestsMap.set(cIdKey, {
-            consumerId: cId,
-            status: 'PENDING',
-            requestedBy: reqByStr,
-            requestedAt: reqAtStr,
-            updatedAt: Date.now()
-          });
-          saveReissueRequestsToDisk();
         } else {
           newNotes = cleanBase;
-          reissueRequestsMap.set(cIdKey, {
-            consumerId: cId,
-            status: 'COMPLETED',
-            requestedBy: '',
-            requestedAt: '',
-            updatedAt: Date.now()
-          });
-          saveReissueRequestsToDisk();
         }
       }
 
@@ -2697,7 +2688,7 @@ app.all('/api/gas-proxy', async (req, res) => {
 });
 
 // ============================================================================
-// PERSISTENT DISK CACHE & TOMBSTONES FOR INSTANT (<10ms) READ/WRITE/DELETE
+// SHORT-LIVED IN-FLIGHT CACHE & VERSION TRACKING (GOOGLE SHEETS = SINGLE SOURCE OF TRUTH)
 // ============================================================================
 const TOMBSTONES_FILE = path.join(process.cwd(), '.deleted-tombstones.json');
 const DISC_OVERLAY_FILE = path.join(process.cwd(), '.disconnection-overlay.json');
@@ -2706,52 +2697,72 @@ const ENTRIES_OVERLAY_FILE = path.join(process.cwd(), '.entries-overlay.json');
 const ENTRIES_CACHE_FILE = path.join(process.cwd(), '.entries-cache.json');
 const REISSUE_REQUESTS_FILE = path.join(process.cwd(), '.reissue-requests.json');
 
-const deletedTombstoneSet = new Set<string>();
+const TOMBSTONE_GRACE_MS = 45000;
+const deletedTombstoneMap = new Map<string, number>();
 const localDisconnectionOverlayMap = new Map<string, any>();
 const localEntriesOverlayMap = new Map<string, any>();
-const reissueRequestsMap = new Map<string, {
-  consumerId: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'COMPLETED';
-  requestedBy: string;
-  requestedAt: string;
-  updatedAt: number;
-}>();
 
 interface CachedEntriesState {
   entries: any[];
   timestamp: number;
 }
 let cachedEntriesState: CachedEntriesState | null = null;
+let entriesVersion = 1;
+let entriesDigest = '';
 let isRefreshingEntriesInBg = false;
 let isRefreshingDiscInBg = false;
 
+function computeEntriesDigest(list: any[]): string {
+  if (!Array.isArray(list) || list.length === 0) return '0';
+  let h = 2166136261 ^ list.length;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (!e) continue;
+    const sig = `${e.id || ''}|${e.category || ''}|${e.status || ''}|${e.updatedAt || ''}|${e.notes || ''}|${e.photoUrl ? '1' : '0'}`;
+    for (let j = 0; j < sig.length; j++) {
+      h ^= sig.charCodeAt(j);
+      h = Math.imul(h, 16777619);
+    }
+  }
+  return `${list.length}_${(h >>> 0).toString(36)}`;
+}
+
 function loadDiskPersistence() {
+  const now = Date.now();
   try {
     if (fs.existsSync(TOMBSTONES_FILE)) {
-      const arr = JSON.parse(fs.readFileSync(TOMBSTONES_FILE, 'utf-8'));
-      if (Array.isArray(arr)) arr.forEach(id => deletedTombstoneSet.add(String(id).trim().toLowerCase()));
+      const parsed = JSON.parse(fs.readFileSync(TOMBSTONES_FILE, 'utf-8'));
+      if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+        for (const [k, ts] of Object.entries(parsed)) {
+          const tsNum = Number(ts || 0);
+          if (tsNum > 0 && now - tsNum < TOMBSTONE_GRACE_MS) {
+            deletedTombstoneMap.set(String(k).trim().toLowerCase(), tsNum);
+          }
+        }
+      }
+      // Clear stale permanent array tombstones so previously deleted & re-uploaded records always appear from Sheet
+      saveTombstonesToDisk();
     }
   } catch {}
   try {
+    // Discard stale overlays from previous container runs; only Google Sheets truth counts on boot
     if (fs.existsSync(DISC_OVERLAY_FILE)) {
       const obj = JSON.parse(fs.readFileSync(DISC_OVERLAY_FILE, 'utf-8'));
       if (obj && typeof obj === 'object') {
         for (const [k, v] of Object.entries(obj)) {
-          localDisconnectionOverlayMap.set(k, v);
-        }
-      }
-    }
-  } catch {}
-  try {
-    if (fs.existsSync(REISSUE_REQUESTS_FILE)) {
-      const obj = JSON.parse(fs.readFileSync(REISSUE_REQUESTS_FILE, 'utf-8'));
-      if (obj && typeof obj === 'object') {
-        for (const [k, v] of Object.entries(obj)) {
-          if (v && typeof v === 'object') {
-            reissueRequestsMap.set(k.toLowerCase(), v as any);
+          const rec = v as any;
+          if (rec && !rec._syncedToSheet && rec._localUpdatedAt && now - Number(rec._localUpdatedAt) < 35000) {
+            localDisconnectionOverlayMap.set(k, rec);
           }
         }
       }
+      saveDiscOverlayToDisk();
+    }
+  } catch {}
+  try {
+    // Never let legacy .reissue-requests.json override Google Sheets Discon Status / Notes
+    if (fs.existsSync(REISSUE_REQUESTS_FILE)) {
+      fs.unlinkSync(REISSUE_REQUESTS_FILE);
     }
   } catch {}
   try {
@@ -2759,12 +2770,17 @@ function loadDiskPersistence() {
       const obj = JSON.parse(fs.readFileSync(ENTRIES_OVERLAY_FILE, 'utf-8'));
       if (obj && typeof obj === 'object') {
         for (const [k, v] of Object.entries(obj)) {
-          localEntriesOverlayMap.set(k, v);
+          const rec = v as any;
+          if (rec && !rec._syncedToSheet && rec._localUpdatedAt && now - Number(rec._localUpdatedAt) < 35000) {
+            localEntriesOverlayMap.set(k, rec);
+          }
         }
       }
+      saveEntriesOverlayToDisk();
     }
   } catch {}
   try {
+    // Initialize timestamp as 0 so first request always fetches live truth from Google Sheets instead of serving stale disk JSON
     if (fs.existsSync(ENTRIES_CACHE_FILE)) {
       const arr = JSON.parse(fs.readFileSync(ENTRIES_CACHE_FILE, 'utf-8'));
       if (Array.isArray(arr)) {
@@ -2773,43 +2789,41 @@ function loadDiskPersistence() {
           const idUp = String(e?.id || '').toUpperCase().trim();
           return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
         });
-        cachedEntriesState = { entries: cleaned, timestamp: Date.now() };
+        cachedEntriesState = { entries: cleaned, timestamp: 0 };
+        entriesDigest = computeEntriesDigest(cleaned);
       }
     } else {
-      cachedEntriesState = { entries: [], timestamp: Date.now() };
+      cachedEntriesState = { entries: [], timestamp: 0 };
     }
   } catch {
-    cachedEntriesState = { entries: [], timestamp: Date.now() };
+    cachedEntriesState = { entries: [], timestamp: 0 };
   }
 }
-loadDiskPersistence();
 
 function saveTombstonesToDisk() {
-  invalidateDiscSnapshotCache();
+  cachedMergedDiscSnapshot = null;
   try {
-    fs.writeFileSync(TOMBSTONES_FILE, JSON.stringify(Array.from(deletedTombstoneSet)), 'utf-8');
+    const now = Date.now();
+    const obj: Record<string, number> = {};
+    for (const [k, ts] of deletedTombstoneMap.entries()) {
+      if (now - ts < TOMBSTONE_GRACE_MS) {
+        obj[k] = ts;
+      } else {
+        deletedTombstoneMap.delete(k);
+      }
+    }
+    fs.writeFileSync(TOMBSTONES_FILE, JSON.stringify(obj), 'utf-8');
   } catch {}
 }
 
 function saveDiscOverlayToDisk() {
-  invalidateDiscSnapshotCache();
+  cachedMergedDiscSnapshot = null;
   try {
     const obj: Record<string, any> = {};
     for (const [k, v] of localDisconnectionOverlayMap.entries()) {
       obj[k] = v;
     }
     fs.writeFileSync(DISC_OVERLAY_FILE, JSON.stringify(obj), 'utf-8');
-  } catch {}
-}
-
-function saveReissueRequestsToDisk() {
-  invalidateDiscSnapshotCache();
-  try {
-    const obj: Record<string, any> = {};
-    for (const [k, v] of reissueRequestsMap.entries()) {
-      obj[k] = v;
-    }
-    fs.writeFileSync(REISSUE_REQUESTS_FILE, JSON.stringify(obj), 'utf-8');
   } catch {}
 }
 
@@ -2822,6 +2836,34 @@ function saveEntriesOverlayToDisk() {
     fs.writeFileSync(ENTRIES_OVERLAY_FILE, JSON.stringify(obj), 'utf-8');
   } catch {}
 }
+
+function isKeyTombstoned(rawKey?: string): boolean {
+  if (!rawKey) return false;
+  const k = String(rawKey).trim().toLowerCase();
+  if (!k) return false;
+  const ts = deletedTombstoneMap.get(k);
+  if (!ts) return false;
+  if (Date.now() - ts >= TOMBSTONE_GRACE_MS) {
+    deletedTombstoneMap.delete(k);
+    return false;
+  }
+  return true;
+}
+
+function clearTombstoneKey(rawKey?: string) {
+  if (!rawKey) return;
+  const norm = String(rawKey).trim().toLowerCase();
+  if (!norm) return;
+  deletedTombstoneMap.delete(norm);
+  const bare = norm.replace(/^(task-disc-|pwr-dis-|sub-disc-)/i, '');
+  if (bare) {
+    deletedTombstoneMap.delete(bare);
+    deletedTombstoneMap.delete(`task-disc-${bare}`);
+    deletedTombstoneMap.delete(`pwr-dis-${bare}`);
+  }
+}
+
+loadDiskPersistence();
 
 function isRecordDeleted(item: any): boolean {
   if (!item || typeof item !== 'object') return false;
@@ -2841,8 +2883,8 @@ function isRecordDeleted(item: any): boolean {
   for (const c of candidates) {
     if (c) {
       const norm = String(c).trim().toLowerCase();
-      const bare = norm.replace(/^task-disc-/i, '');
-      if (norm && (deletedTombstoneSet.has(norm) || (bare && deletedTombstoneSet.has(bare)))) {
+      const bare = norm.replace(/^(task-disc-|pwr-dis-|sub-disc-)/i, '');
+      if (norm && (isKeyTombstoned(norm) || (bare && isKeyTombstoned(bare)))) {
         return true;
       }
     }
@@ -2851,14 +2893,15 @@ function isRecordDeleted(item: any): boolean {
 }
 
 function registerDeletedRecord(id?: string, consumerId?: string, submissionId?: string) {
-  const toDelete = [id, consumerId, submissionId, consumerId ? `TASK-DISC-${consumerId}` : '']
+  const now = Date.now();
+  const toDelete = [id, consumerId, submissionId, consumerId ? `TASK-DISC-${consumerId}` : '', consumerId ? `PWR-DIS-${consumerId}` : '']
     .map(v => String(v || '').trim().toLowerCase())
     .filter(Boolean);
 
   for (const key of toDelete) {
-    deletedTombstoneSet.add(key);
-    const bare = key.replace(/^task-disc-/i, '');
-    if (bare) deletedTombstoneSet.add(bare);
+    deletedTombstoneMap.set(key, now);
+    const bare = key.replace(/^(task-disc-|pwr-dis-|sub-disc-)/i, '');
+    if (bare) deletedTombstoneMap.set(bare, now);
     localDisconnectionOverlayMap.delete(key);
     if (bare) localDisconnectionOverlayMap.delete(bare);
     localEntriesOverlayMap.delete(key);
@@ -2866,13 +2909,22 @@ function registerDeletedRecord(id?: string, consumerId?: string, submissionId?: 
   }
 
   if (cachedEntriesState && Array.isArray(cachedEntriesState.entries)) {
-    cachedEntriesState.entries = cachedEntriesState.entries.filter(e => !isRecordDeleted(e));
-    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
+    const nextEntries = cachedEntriesState.entries.filter(e => !isRecordDeleted(e));
+    if (nextEntries.length !== cachedEntriesState.entries.length) {
+      cachedEntriesState.entries = nextEntries;
+      entriesVersion++;
+      entriesDigest = computeEntriesDigest(nextEntries);
+      try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(nextEntries), 'utf-8'); } catch {}
+    }
   }
 
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+    const deletedNormId = normalizeConsumerIdKey(consumerId || id || submissionId || '');
     cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.filter(t => !isRecordDeleted(t));
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
+    if (deletedNormId) {
+      recordDiscDelta([], [deletedNormId], false);
+    }
   }
 
   for (const [, modCache] of moduleEntriesCacheMap.entries()) {
@@ -2988,13 +3040,14 @@ async function handleClearAllProductionDatabase(): Promise<{ message: string; cl
     const subId = String(item.submissionId || item['Submission ID'] || id).trim();
     const cId = String(item.consumerId || item['Consumer Id'] || item['Consumer ID'] || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').trim();
     const cat = String(item.category || item.Category || fallbackCategory).trim();
+    const nowTs = Date.now();
 
-    if (id) deletedTombstoneSet.add(id.toLowerCase());
-    if (subId) deletedTombstoneSet.add(subId.toLowerCase());
+    if (id) deletedTombstoneMap.set(id.toLowerCase(), nowTs);
+    if (subId) deletedTombstoneMap.set(subId.toLowerCase(), nowTs);
     if (cId) {
-      deletedTombstoneSet.add(cId.toLowerCase());
-      deletedTombstoneSet.add(`task-disc-${cId.toLowerCase()}`);
-      deletedTombstoneSet.add(`pwr-dis-${cId.toLowerCase()}`);
+      deletedTombstoneMap.set(cId.toLowerCase(), nowTs);
+      deletedTombstoneMap.set(`task-disc-${cId.toLowerCase()}`, nowTs);
+      deletedTombstoneMap.set(`pwr-dis-${cId.toLowerCase()}`, nowTs);
     }
 
     const dedupeKey = `${cat}:${id || cId || subId}`.toLowerCase();
@@ -3037,7 +3090,9 @@ async function handleClearAllProductionDatabase(): Promise<{ message: string; cl
   cachedDisconnectionState = { tasks: [], timestamp: Date.now() };
   localDisconnectionOverlayMap.clear();
   gasCache.clear();
-  invalidateDiscSnapshotCache();
+  entriesVersion++;
+  entriesDigest = computeEntriesDigest([]);
+  recordDiscDelta([], [], true);
 
   saveTombstonesToDisk();
   saveDiscOverlayToDisk();
@@ -3335,14 +3390,12 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
   payload.updatedAt = nowIso;
   payload.date = payload.date || existingMatch?.date || nowIso;
 
-  deletedTombstoneSet.delete(payload.id.toLowerCase());
-  deletedTombstoneSet.delete(payload.submissionId.toLowerCase());
+  clearTombstoneKey(payload.id);
+  clearTombstoneKey(payload.submissionId);
   if (payload.consumerId) {
-    const cKey = String(payload.consumerId).trim().toLowerCase();
-    deletedTombstoneSet.delete(cKey);
-    deletedTombstoneSet.delete(`task-disc-${cKey}`);
-    deletedTombstoneSet.delete(`pwr-dis-${cKey}`);
+    clearTombstoneKey(String(payload.consumerId));
   }
+  clearTombstoneKey(String(payload.id || ''));
   saveTombstonesToDisk();
 
   const mergedBase = {
@@ -3403,9 +3456,13 @@ async function handleFastCreateEntry(rawPayload: any, actionName = 'createEntry'
       ...cachedEntriesState.entries.filter(e => e.id !== normalized.id && e.submissionId !== normalized.submissionId)
     ];
     cachedEntriesState.timestamp = Date.now();
+    entriesVersion++;
+    entriesDigest = computeEntriesDigest(cachedEntriesState.entries);
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   } else {
     cachedEntriesState = { entries: [normalized], timestamp: Date.now() };
+    entriesVersion++;
+    entriesDigest = computeEntriesDigest(cachedEntriesState.entries);
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
 
@@ -3538,7 +3595,7 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
         } else {
           cachedDisconnectionState.tasks.push(updatedDiscTask);
         }
-        invalidateDiscSnapshotCache();
+        recordDiscDelta([updatedDiscTask], [], false);
         try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8'); } catch {}
       }
     }
@@ -3613,6 +3670,8 @@ async function handleFastUpdateEntry(cleanId: string, bodyData: any): Promise<an
     } else if (!isDisc || isValidDisconnectionConsumerRow(merged)) {
       cachedEntriesState.entries.unshift(merged);
     }
+    entriesVersion++;
+    entriesDigest = computeEntriesDigest(cachedEntriesState.entries);
     try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(cachedEntriesState.entries), 'utf-8'); } catch {}
   }
 
@@ -3715,8 +3774,13 @@ async function refreshEntriesFromSheetInBackground() {
       }
     }
     const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+    const nextDigest = computeEntriesDigest(combined);
+    if (nextDigest !== entriesDigest) {
+      entriesDigest = nextDigest;
+      entriesVersion++;
+      try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
+    }
     cachedEntriesState = { entries: combined, timestamp: Date.now() };
-    try { fs.writeFileSync(ENTRIES_CACHE_FILE, JSON.stringify(combined), 'utf-8'); } catch {}
   } catch (err) {
     console.warn('[Background Entries Sync] Notice:', err);
   } finally {
@@ -3728,7 +3792,7 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
   if (query?.category && String(query.category).toUpperCase().trim() !== 'ALL') {
     const canonicalTab = toSheetTabCategory(query.category);
     if (canonicalTab === 'Disconnection') {
-      if (!forceRefresh && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+      if (!forceRefresh && cachedDisconnectionState && cachedDisconnectionState.timestamp > 0 && Array.isArray(cachedDisconnectionState.tasks)) {
         if (Date.now() - cachedDisconnectionState.timestamp > 15000) {
           refreshDisconnectionFromSheetInBackground();
         }
@@ -3740,7 +3804,7 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
       return tasks.map(t => normalizeServerEntry({ ...t, category: 'DISCONNECTION' }));
     }
     const modCached = moduleEntriesCacheMap.get(canonicalTab);
-    if (!forceRefresh && modCached && Array.isArray(modCached.entries)) {
+    if (!forceRefresh && modCached && modCached.timestamp > 0 && Array.isArray(modCached.entries)) {
       if (Date.now() - modCached.timestamp > 15000) {
         fetchIsolatedModuleEntriesFromSheet(canonicalTab, true).catch(() => {});
       }
@@ -3749,7 +3813,7 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
     return await fetchIsolatedModuleEntriesFromSheet(canonicalTab, forceRefresh);
   }
 
-  if (!forceRefresh && cachedEntriesState && Array.isArray(cachedEntriesState.entries) && cachedEntriesState.entries.length > 0) {
+  if (!forceRefresh && cachedEntriesState && cachedEntriesState.timestamp > 0 && Array.isArray(cachedEntriesState.entries)) {
     if (Date.now() - cachedEntriesState.timestamp > 15000) {
       refreshEntriesFromSheetInBackground();
     }
@@ -3765,6 +3829,11 @@ async function getFastMergedEntries(query: any = {}, forceRefresh = false): Prom
       )
     );
     const combined = mergeEntriesWithOverlay(allModuleLists.flat());
+    const nextDigest = computeEntriesDigest(combined);
+    if (nextDigest !== entriesDigest) {
+      entriesDigest = nextDigest;
+      entriesVersion++;
+    }
     cachedEntriesState = { entries: combined, timestamp: Date.now() };
     return combined;
   } catch {
@@ -3942,8 +4011,8 @@ app.post('/api/users', async (req, res) => {
     );
 
     const recordId = existingMatch ? existingMatch.id : (payload.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`);
-    deletedTombstoneSet.delete(String(recordId).trim().toLowerCase());
-    deletedTombstoneSet.delete(`usr_${cleanIdNo.toLowerCase()}`);
+    clearTombstoneKey(String(recordId));
+    clearTombstoneKey(`usr_${cleanIdNo.toLowerCase()}`);
     saveTombstonesToDisk();
     const syncTag = buildUserSyncTag({
       idNo: cleanIdNo,
@@ -4079,8 +4148,9 @@ const handleUserDeleteRequest = async (req: express.Request, res: express.Respon
       }, 'POST', 15000)
     ]);
 
-    deletedTombstoneSet.add(String(rowId).trim().toLowerCase());
-    if (idNo) deletedTombstoneSet.add(`usr_${String(idNo).trim().toLowerCase()}`);
+    const nowDelTs = Date.now();
+    deletedTombstoneMap.set(String(rowId).trim().toLowerCase(), nowDelTs);
+    if (idNo) deletedTombstoneMap.set(`usr_${String(idNo).trim().toLowerCase()}`, nowDelTs);
     saveTombstonesToDisk();
     removeUserFromCachedState(rowId);
     if (idNo) removeUserFromCachedState(idNo);
@@ -4199,20 +4269,37 @@ app.put('/api/users/:id', async (req, res) => {
 });
 
 // ============================================================================
-// WORK ORDERS & KHATA NOTICES (100% Connected to Google Sheets Work Orders + Local Disk Cache)
+// WORK ORDERS & KHATA NOTICES (100% Connected to Google Sheets Work Orders + Versioned Sync)
 // ============================================================================
 const WORK_ORDERS_CACHE_FILE = path.join(process.cwd(), '.work-orders-cache.json');
 const WO_SHEET_CATEGORY = 'Work Orders';
 let serverWorkOrdersCache: any[] = [];
-let lastWorkOrdersFetchTime = Date.now();
-let hasLoadedWorkOrdersOnce = true;
+let lastWorkOrdersFetchTime = 0;
+let hasLoadedWorkOrdersOnce = false;
 let isSyncingWorkOrdersFromSheet = false;
+let workOrdersVersion = 1;
+let workOrdersDigest = '';
+
+function computeWorkOrdersDigest(list: any[]): string {
+  if (!Array.isArray(list) || list.length === 0) return '0';
+  let h = 2166136261 ^ list.length;
+  for (const w of list) {
+    if (!w) continue;
+    const sig = `${w.id || ''}|${w.title || ''}|${w.category || ''}|${w.isHidden ? '1' : '0'}|${w.createdAt || ''}`;
+    for (let i = 0; i < sig.length; i++) {
+      h ^= sig.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+  }
+  return `${list.length}_${(h >>> 0).toString(36)}`;
+}
 
 try {
   if (fs.existsSync(WORK_ORDERS_CACHE_FILE)) {
     const parsed = JSON.parse(fs.readFileSync(WORK_ORDERS_CACHE_FILE, 'utf-8'));
     if (Array.isArray(parsed)) {
-      serverWorkOrdersCache = parsed.filter(w => w && w.id && !deletedTombstoneSet.has(String(w.id).trim().toLowerCase()));
+      serverWorkOrdersCache = parsed.filter(w => w && w.id && !isKeyTombstoned(String(w.id)));
+      workOrdersDigest = computeWorkOrdersDigest(serverWorkOrdersCache);
     }
   }
 } catch {}
@@ -4344,7 +4431,7 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
 
     for (const r of rows) {
       const rowId = String(r.id || r.submissionId || r.workOrderNoticeId || '').trim();
-      if (!rowId || deletedTombstoneSet.has(rowId.toLowerCase())) continue;
+      if (!rowId || isKeyTombstoned(rowId)) continue;
 
       let meta: any = {};
       const notesStr = String(r.notes || r['Notes'] || '').trim();
@@ -4369,7 +4456,6 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
         r.appliedLoad || ''
       ].join('');
 
-      // Check if local cache has an even fuller version of this image (e.g., if >12 chunks or still uploading)
       const localMatch = serverWorkOrdersCache.find(w => w.id === (meta.id || rowId));
       const bestImage = (localMatch?.fileData && localMatch.fileData.length > reassembledBase64.length)
         ? localMatch.fileData
@@ -4397,19 +4483,25 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
       fromSheet.push(item);
     }
 
-    // Preserve only newly created local work orders that are still syncing (< 60s old)
+    // Preserve only newly created local work orders that are still syncing (< 30s old)
     const sheetIds = new Set(fromSheet.map(w => w.id));
     for (const localWo of serverWorkOrdersCache) {
       if (!localWo || !localWo.id) continue;
-      if (deletedTombstoneSet.has(String(localWo.id).trim().toLowerCase())) continue;
-      if (!sheetIds.has(localWo.id) && !localWo._syncedToSheet && localWo._localSavedAt && (Date.now() - localWo._localSavedAt < 60000)) {
+      if (isKeyTombstoned(String(localWo.id))) continue;
+      if (!sheetIds.has(localWo.id) && !localWo._syncedToSheet && localWo._localSavedAt && (Date.now() - localWo._localSavedAt < 30000)) {
         fromSheet.unshift(localWo);
       }
     }
 
     fromSheet.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    const nextDigest = computeWorkOrdersDigest(fromSheet);
+    if (nextDigest !== workOrdersDigest) {
+      workOrdersDigest = nextDigest;
+      workOrdersVersion++;
+    }
     serverWorkOrdersCache = fromSheet;
     lastWorkOrdersFetchTime = Date.now();
+    hasLoadedWorkOrdersOnce = true;
     saveWorkOrdersToDisk();
   } catch (err: any) {
     console.warn('[WorkOrders] fetchWorkOrdersFromSheet notice:', err?.message || err);
@@ -4420,17 +4512,13 @@ async function fetchWorkOrdersFromSheet(): Promise<any[]> {
 }
 
 async function getMergedWorkOrders(categoryFilter?: any, forceRefresh = false): Promise<any[]> {
-  if (!hasLoadedWorkOrdersOnce) {
-    hasLoadedWorkOrdersOnce = true;
-    await Promise.race([
-      fetchWorkOrdersFromSheet(),
-      new Promise(resolve => setTimeout(resolve, 2500))
-    ]);
-  } else if (forceRefresh || Date.now() - lastWorkOrdersFetchTime > 45000) {
+  if (!hasLoadedWorkOrdersOnce || forceRefresh) {
+    await fetchWorkOrdersFromSheet();
+  } else if (Date.now() - lastWorkOrdersFetchTime > 45000) {
     fetchWorkOrdersFromSheet().catch(() => {});
   }
 
-  let list = serverWorkOrdersCache.filter(w => w && w.id && !deletedTombstoneSet.has(String(w.id).trim().toLowerCase()));
+  let list = serverWorkOrdersCache.filter(w => w && w.id && !isKeyTombstoned(String(w.id)));
   const cat = String(categoryFilter || '').trim().toUpperCase();
   if (cat && cat !== 'ALL') {
     list = list.filter(o => {
@@ -4451,11 +4539,13 @@ async function handleCreateWorkOrder(rawPayload: any): Promise<any> {
     _syncedToSheet: false
   });
 
-  deletedTombstoneSet.delete(newOrder.id.toLowerCase());
+  clearTombstoneKey(newOrder.id);
   saveTombstonesToDisk();
 
   // Immediately update memory and disk cache so upload completes in <10ms
   serverWorkOrdersCache = [newOrder, ...serverWorkOrdersCache.filter(w => w.id !== newOrder.id)];
+  workOrdersVersion++;
+  workOrdersDigest = computeWorkOrdersDigest(serverWorkOrdersCache);
   saveWorkOrdersToDisk();
 
   // Sync to Google Sheets in background write queue
@@ -4479,6 +4569,8 @@ async function handleToggleWorkOrderVisibility(id: string, isHidden: boolean): P
     return w;
   });
 
+  workOrdersVersion++;
+  workOrdersDigest = computeWorkOrdersDigest(serverWorkOrdersCache);
   saveWorkOrdersToDisk();
   if (updatedItem) {
     const itemToSync = updatedItem;
@@ -4494,10 +4586,12 @@ async function handleToggleWorkOrderVisibility(id: string, isHidden: boolean): P
 async function handleDeleteWorkOrder(id: string): Promise<boolean> {
   const cleanId = String(id || '').trim();
   if (!cleanId) return false;
-  deletedTombstoneSet.add(cleanId.toLowerCase());
+  deletedTombstoneMap.set(cleanId.toLowerCase(), Date.now());
   saveTombstonesToDisk();
 
   serverWorkOrdersCache = serverWorkOrdersCache.filter(w => w.id !== cleanId);
+  workOrdersVersion++;
+  workOrdersDigest = computeWorkOrdersDigest(serverWorkOrdersCache);
   saveWorkOrdersToDisk();
 
   callGoogleAppsScript('deleteWorkOrder', { id: cleanId }, 'POST', 20000).catch(() => {});
@@ -4970,11 +5064,10 @@ function convertSheetEntryToDisconnectionTask(entry: any, index: number): any {
   const priority = String(entry['Priority'] || entry.priority || ((parseFloat(outstandingDue.replace(/[^0-9.]/g, '')) > 10000) ? 'URGENT' : 'NORMAL')).trim().toUpperCase();
   const paidAmount = String(entry['Paid Amount'] ?? entry.paidAmount ?? '').trim();
 
-  // Normalize initial Connected/Completed status to PENDING while preserving explicit operational statuses (DISCONNECT, PAID, DISPUTE, OFFICE TEAM, NOT FOUND, REISSUE)
+  // Normalize only initial CONNECTED/empty status to PENDING while preserving Discon Status values directly from Google Sheet
   const status =
     !rawStatus ||
-    rawStatus === 'CONNECTED' ||
-    rawStatus === 'COMPLETED'
+    rawStatus === 'CONNECTED'
       ? 'PENDING'
       : rawStatus;
   const paymentStatus = status === 'PAID' ? 'PAID' : 'PENDING';
@@ -5185,6 +5278,7 @@ interface CachedDisconnectionState {
   timestamp: number;
 }
 let cachedDisconnectionState: CachedDisconnectionState | null = null;
+// Do not trust stale disk cache timestamp; require live Google Sheet load on first request
 try {
   if (fs.existsSync(DISC_CACHE_FILE)) {
     const diskTasks = JSON.parse(fs.readFileSync(DISC_CACHE_FILE, 'utf-8'));
@@ -5192,9 +5286,6 @@ try {
       const validDiskTasks = diskTasks.filter(
         t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t)
       );
-      if (validDiskTasks.length !== diskTasks.length) {
-        try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(validDiskTasks), 'utf-8'); } catch {}
-      }
       if (validDiskTasks.length > 0) {
         cachedDisconnectionState = { tasks: validDiskTasks, timestamp: 0 };
       }
@@ -5202,9 +5293,18 @@ try {
   }
 } catch {}
 
-const DISCONNECTION_CACHE_TTL_MS = 8000;
-
 let discSnapshotVersion = 1;
+interface DiscDeltaLogEntry {
+  version: number;
+  updated: any[];
+  deletedIds: string[];
+  requiresFullResync: boolean;
+  ts: number;
+}
+const MAX_DISC_DELTA_HISTORY = 200;
+const discDeltaLog: DiscDeltaLogEntry[] = [];
+let inFlightDiscFetchPromise: Promise<any[]> | null = null;
+
 interface CachedMergedDiscSnapshot {
   version: number;
   builtAt: number;
@@ -5265,12 +5365,145 @@ function invalidateDiscSnapshotCache() {
   cachedMergedDiscSnapshot = null;
 }
 
+function computeTaskComparisonKey(t: any): string {
+  if (!t) return '';
+  return [
+    String(t.consumerId || t['Consumer Id'] || ''),
+    String(t.consumerName || t['Name'] || ''),
+    String(t.consumerAddress || t['Address'] || ''),
+    String(t.phoneNumber || t['Mobile'] || ''),
+    String(t.offCode ?? t['off_code'] ?? ''),
+    String(t.mru ?? t['MRU'] ?? ''),
+    String(t.baseClass ?? t['Base Class'] ?? ''),
+    String(t.classType ?? t['Class'] ?? ''),
+    String(t.deviceType ?? t['Device'] ?? ''),
+    String(t.meterNumber || t['Number'] || ''),
+    String(t.dueDateRange || t['O/S Duedate Range'] || ''),
+    String(t.outstandingDue ?? t['D2 Net O/S'] ?? ''),
+    String(t.priority || t['Priority'] || ''),
+    String(t['Discon Status'] ?? t.disconStatus ?? t.taskStatus ?? ''),
+    String(t['Discon Date'] ?? t.disconDate ?? ''),
+    String(t['Image'] ?? t.photoUrl ?? ''),
+    String(t['Reading'] ?? t.reading ?? ''),
+    String(t['Payment Status'] ?? t.paymentStatus ?? ''),
+    String(t['Gis Pole'] ?? t.gisPole ?? ''),
+    String(t['Agency'] ?? t.Agency ?? t.agency ?? ''),
+    String(t['Notes'] ?? t.notes ?? ''),
+    String(t['Paid Amount'] ?? t.paidAmount ?? ''),
+    String(t['Paid Date'] ?? t.paidDate ?? ''),
+    String(t['Paid Type'] ?? t.paidType ?? ''),
+    String(t['Outstanding After'] ?? t.outstandingAfter ?? ''),
+    String(t['Next Payment Date'] ?? t.nextPaymentDate ?? ''),
+    String(t['Payment Source'] ?? t.paymentSource ?? ''),
+    String(t.submittedBy || ''),
+    String(t['Last Updated'] ?? t.lastUpdated ?? ''),
+    t.reissueRequested ? '1' : '0',
+    t.reissueApproved ? '1' : '0',
+    t.reissueRejected ? '1' : '0'
+  ].join('|');
+}
+
+function recordDiscDelta(updated: any[], deletedIds: string[], requiresFullResync = false) {
+  invalidateDiscSnapshotCache();
+  const cleanUpdated = (Array.isArray(updated) ? updated : []).map(u => {
+    const copy = { ...u };
+    delete copy.photoDataUrl;
+    return copy;
+  });
+  const cleanDeleted = Array.isArray(deletedIds) ? deletedIds.filter(Boolean) : [];
+  discDeltaLog.push({
+    version: discSnapshotVersion,
+    updated: requiresFullResync ? [] : cleanUpdated,
+    deletedIds: requiresFullResync ? [] : cleanDeleted,
+    requiresFullResync: Boolean(requiresFullResync || (cleanUpdated.length + cleanDeleted.length > 250)),
+    ts: Date.now()
+  });
+  if (discDeltaLog.length > MAX_DISC_DELTA_HISTORY) {
+    discDeltaLog.splice(0, discDeltaLog.length - MAX_DISC_DELTA_HISTORY);
+  }
+  if (discSseClients.size > 0) {
+    if (requiresFullResync || cleanUpdated.length + cleanDeleted.length > 100) {
+      broadcastDisconnectionEvent('tasks_synced', {
+        version: discSnapshotVersion,
+        count: cachedDisconnectionState?.tasks?.length || 0,
+        ts: Date.now()
+      });
+    } else if (cleanUpdated.length === 1 && cleanDeleted.length === 0) {
+      broadcastDisconnectionEvent('task_updated', {
+        task: cleanUpdated[0],
+        version: discSnapshotVersion,
+        ts: Date.now()
+      });
+    } else {
+      broadcastDisconnectionEvent('tasks_delta', {
+        version: discSnapshotVersion,
+        updated: cleanUpdated,
+        deletedIds: cleanDeleted,
+        ts: Date.now()
+      });
+    }
+  }
+}
+
+function getDiscChangesSinceVersion(sinceVersion: number): {
+  unchanged?: boolean;
+  delta?: boolean;
+  requiresFullResync?: boolean;
+  version: number;
+  updatedTasks?: any[];
+  deletedIds?: string[];
+} {
+  if (sinceVersion > 0 && sinceVersion === discSnapshotVersion) {
+    return { unchanged: true, version: discSnapshotVersion };
+  }
+  if (sinceVersion <= 0 || sinceVersion > discSnapshotVersion || discDeltaLog.length === 0) {
+    return { requiresFullResync: true, version: discSnapshotVersion };
+  }
+  const earliestAvailableSince = discDeltaLog[0].version - 1;
+  if (sinceVersion < earliestAvailableSince) {
+    return { requiresFullResync: true, version: discSnapshotVersion };
+  }
+  const relevant = discDeltaLog.filter(d => d.version > sinceVersion && d.version <= discSnapshotVersion);
+  if (relevant.length === 0 || relevant.some(d => d.requiresFullResync)) {
+    return { requiresFullResync: true, version: discSnapshotVersion };
+  }
+
+  const updatedMap = new Map<string, any>();
+  const deletedSet = new Set<string>();
+  for (const entry of relevant) {
+    for (const delId of entry.deletedIds) {
+      const k = normalizeConsumerIdKey(delId);
+      if (k) {
+        updatedMap.delete(k);
+        deletedSet.add(k);
+      }
+    }
+    for (const upd of entry.updated) {
+      const k = normalizeConsumerIdKey(upd?.consumerId || upd?.['Consumer Id'] || upd?.taskId);
+      if (k) {
+        deletedSet.delete(k);
+        updatedMap.set(k, upd);
+      }
+    }
+  }
+  if (updatedMap.size + deletedSet.size > 250) {
+    return { requiresFullResync: true, version: discSnapshotVersion };
+  }
+  return {
+    unchanged: false,
+    delta: true,
+    version: discSnapshotVersion,
+    updatedTasks: Array.from(updatedMap.values()),
+    deletedIds: Array.from(deletedSet)
+  };
+}
+
 function getMergedDiscSnapshot(): CachedMergedDiscSnapshot {
   const now = Date.now();
   if (
     cachedMergedDiscSnapshot &&
     cachedMergedDiscSnapshot.version === discSnapshotVersion &&
-    (!cachedMergedDiscSnapshot.hasPendingOverlay || now - cachedMergedDiscSnapshot.builtAt < 90000)
+    (!cachedMergedDiscSnapshot.hasPendingOverlay || now - cachedMergedDiscSnapshot.builtAt < 15000)
   ) {
     return cachedMergedDiscSnapshot;
   }
@@ -5281,6 +5514,7 @@ function getMergedDiscSnapshot(): CachedMergedDiscSnapshot {
   const defaultStats = computeLocalStats(cleanList);
   const defaultPayloadStr = JSON.stringify({
     success: true,
+    version: builtVersion,
     sheetConnected: true,
     spreadsheetId: GOOGLE_SHEET_ID,
     spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -5358,16 +5592,16 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       (t.taskId ? localDisconnectionOverlayMap.get(normalizeConsumerIdKey(t.taskId)) : undefined);
 
     if (ov && !isRecordDeleted(ov) && isValidDisconnectionConsumerRow(ov)) {
-      const sheetStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
-      const ovStatus = String(ov.taskStatus || ov.disconStatus || ov['Discon Status'] || 'PENDING').trim().toUpperCase();
-      const sheetNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
-      const ovNotes = String(ov.notes || ov['Notes'] || ov.workerRemarks || '').trim();
-      const sheetDisconDate = String(t.disconDate || t['Discon Date'] || '').trim();
-      const ovDisconDate = String(ov.disconDate || ov['Discon Date'] || '').trim();
-      const sheetPaidDate = String(t.paidDate || t['Paid Date'] || '').trim();
-      const ovPaidDate = String(ov.paidDate || ov['Paid Date'] || '').trim();
-      const sheetAgency = String(t['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
-      const ovAgency = String(ov['Agency'] || ov.Agency || ov.agency || ov.assignedAgency || '').trim().toLowerCase();
+      const sheetStatus = String(t['Discon Status'] ?? t.disconStatus ?? t.taskStatus ?? 'PENDING').trim().toUpperCase();
+      const ovStatus = String(ov['Discon Status'] ?? ov.disconStatus ?? ov.taskStatus ?? 'PENDING').trim().toUpperCase();
+      const sheetNotes = String(t['Notes'] ?? t.notes ?? t.workerRemarks ?? '').trim();
+      const ovNotes = String(ov['Notes'] ?? ov.notes ?? ov.workerRemarks ?? '').trim();
+      const sheetDisconDate = String(t['Discon Date'] ?? t.disconDate ?? '').trim();
+      const ovDisconDate = String(ov['Discon Date'] ?? ov.disconDate ?? '').trim();
+      const sheetPaidDate = String(t['Paid Date'] ?? t.paidDate ?? '').trim();
+      const ovPaidDate = String(ov['Paid Date'] ?? ov.paidDate ?? '').trim();
+      const sheetAgency = String(t['Agency'] ?? t.Agency ?? t.agency ?? t.assignedAgency ?? '').trim().toLowerCase();
+      const ovAgency = String(ov['Agency'] ?? ov.Agency ?? ov.agency ?? ov.assignedAgency ?? '').trim().toLowerCase();
 
       const sheetMatchesOverlay =
         sheetStatus === ovStatus &&
@@ -5375,8 +5609,9 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
         (!ovDisconDate || sheetDisconDate === ovDisconDate) &&
         (!ovPaidDate || sheetPaidDate === ovPaidDate) &&
         (!ovAgency || sheetAgency === ovAgency);
-      const unsyncedWindowValid = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 600000);
-      const syncedPropagationGraceValid = Boolean(ov._syncedToSheet) && (now - Number(ov._syncedAt || ov._localUpdatedAt || 0) < 90000);
+      // Only guard actively in-flight Google Sheet writes (< 35s) or very brief (< 6s) post-write propagation delay
+      const unsyncedWindowValid = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+      const syncedPropagationGraceValid = Boolean(ov._syncedToSheet) && (now - Number(ov._syncedAt || ov._localUpdatedAt || 0) < 6000);
       const overlayStillActive = unsyncedWindowValid || syncedPropagationGraceValid;
 
       if (!sheetMatchesOverlay && overlayStillActive && (ovStatus !== 'PENDING' || ovNotes !== '' || ov._hasUserRemarkUpdate)) {
@@ -5393,36 +5628,14 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       } else {
         localDisconnectionOverlayMap.delete(key);
         overlayChanged = true;
-        if (mergedMap.has(key)) {
-          const existing = mergedMap.get(key);
-          const tStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
-          const existingStatus = String(existing.taskStatus || existing.disconStatus || existing['Discon Status'] || 'PENDING').trim().toUpperCase();
-          const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
-          const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
-          if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
-            mergedMap.set(key, { ...existing, ...t });
-          }
-        } else {
-          mergedMap.set(key, t);
-        }
-      }
-    } else {
-      if (mergedMap.has(key)) {
-        const existing = mergedMap.get(key);
-        const tStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
-        const existingStatus = String(existing.taskStatus || existing.disconStatus || existing['Discon Status'] || 'PENDING').trim().toUpperCase();
-        const tNotes = String(t.notes || t['Notes'] || t.workerRemarks || '').trim();
-        const existingNotes = String(existing.notes || existing['Notes'] || existing.workerRemarks || '').trim();
-        if ((tStatus !== 'PENDING' && existingStatus === 'PENDING') || (tNotes && !existingNotes)) {
-          mergedMap.set(key, { ...existing, ...t });
-        }
-      } else {
         mergedMap.set(key, t);
       }
+    } else {
+      mergedMap.set(key, t);
     }
   }
 
-  // 2. Include any brand-new uploaded overlay items not yet returned by sheetTasks (only if unsynced and < 35s)
+  // 2. Include brand-new uploaded rows ONLY while insert to Google Sheet is actively in flight (< 35s)
   for (const [key, ov] of Array.from(localDisconnectionOverlayMap.entries())) {
     const normKey = normalizeConsumerIdKey(key || ov.consumerId || ov['Consumer Id'] || ov.taskId);
     if (!normKey) continue;
@@ -5432,8 +5645,8 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
       continue;
     }
     if (!mergedMap.has(normKey)) {
-      const isRecentUnsynced = !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 600000);
-      if (isRecentUnsynced) {
+      const isRecentUnsyncedInsert = Boolean(ov._isNewInsert) && !ov._syncedToSheet && Boolean(ov._localUpdatedAt) && (now - Number(ov._localUpdatedAt) < 35000);
+      if (isRecentUnsyncedInsert) {
         mergedMap.set(normKey, ov);
       } else {
         localDisconnectionOverlayMap.delete(key);
@@ -5446,75 +5659,25 @@ function mergeSheetDisconnectionTasksWithOverlay(sheetTasks: any[]): any[] {
     saveDiscOverlayToDisk();
   }
 
-  // 3. Deterministically sort by Consumer ID so the list order and serial numbers NEVER change or jump across GAS calls
+  // 3. Deterministically sort by Consumer ID so list order and serial numbers stay stable across calls
   const sortedValues = Array.from(mergedMap.values()).sort((a, b) => {
     const idA = String(a.consumerId || a['Consumer Id'] || a.taskId || '').trim();
     const idB = String(b.consumerId || b['Consumer Id'] || b.taskId || '').trim();
     return idA.localeCompare(idB, undefined, { numeric: true });
   });
 
+  // 4. Derive Discon Status & Reissue flags strictly from Google Sheet columns (never stale disk flags)
   const finalTasks = sortedValues.map((t, idx) => {
-    const cIdKey = String(t.consumerId || t['Consumer Id'] || t.taskId || '')
-      .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
-      .trim()
-      .toLowerCase();
-    const rawSt = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
-    const isInitialPending = rawSt === '' || rawSt === 'PENDING' || rawSt === 'CONNECTED';
-    let rawNotes = String(t.notes || t['Notes'] || t.workerRemarks || t.workerReport || '').trim();
-    const cleanBaseNotes = rawNotes
-      .replace(/\[REISSUE_REQ[^\]]*\]/gi, '')
-      .replace(/\[REISSUE_APPROVED[^\]]*\]/gi, '')
-      .replace(/\[REISSUE_REJECTED[^\]]*\]/gi, '')
-      .replace(/\s*\|\s*$/, '')
-      .trim();
-
-    let reissueRequested = Boolean(t.reissueRequested || /\[REISSUE_REQ:/i.test(rawNotes));
-    let reissueApproved = Boolean(t.reissueApproved || rawSt === 'REISSUE' || /\[REISSUE_APPROVED/i.test(rawNotes));
-    let reissueRejected = Boolean(t.reissueRejected || /\[REISSUE_REJECTED/i.test(rawNotes));
-    let reissueRequestedBy = t.reissueRequestedBy || '';
-    let reissueRequestedAt = t.reissueRequestedAt || '';
+    const rawSt = String(t['Discon Status'] ?? t.disconStatus ?? t.taskStatus ?? 'PENDING').trim().toUpperCase();
+    const effectiveTaskStatus = !rawSt || rawSt === 'CONNECTED' ? 'PENDING' : rawSt;
+    const rawNotes = String(t['Notes'] ?? t.notes ?? t.workerRemarks ?? t.workerReport ?? '').trim();
 
     const reqMatch = rawNotes.match(/\[REISSUE_REQ:([^|\]]*)(?:\|([^\]]*))?\]/i);
-    if (reqMatch) {
-      reissueRequestedBy = reissueRequestedBy || reqMatch[1] || '';
-      reissueRequestedAt = reissueRequestedAt || reqMatch[2] || '';
-    }
-
-    const rEntry = cIdKey ? reissueRequestsMap.get(cIdKey) : undefined;
-    if (rEntry) {
-      if (rEntry.status === 'PENDING') {
-        reissueRequested = true;
-        reissueApproved = false;
-        reissueRejected = false;
-        reissueRequestedBy = rEntry.requestedBy || reissueRequestedBy || 'Worker';
-        reissueRequestedAt = rEntry.requestedAt || reissueRequestedAt || '';
-        rawNotes = `${cleanBaseNotes} [REISSUE_REQ:${reissueRequestedBy}|${reissueRequestedAt}]`.trim();
-      } else if (rEntry.status === 'APPROVED') {
-        reissueRequested = false;
-        reissueApproved = true;
-        reissueRejected = false;
-        rawNotes = `${cleanBaseNotes} [REISSUE_APPROVED]`.trim();
-      } else if (rEntry.status === 'REJECTED') {
-        reissueRequested = false;
-        reissueApproved = false;
-        reissueRejected = true;
-        reissueRequestedBy = rEntry.requestedBy || reissueRequestedBy || 'Worker';
-        reissueRequestedAt = rEntry.requestedAt || reissueRequestedAt || '';
-        rawNotes = `${cleanBaseNotes} [REISSUE_REJECTED]`.trim();
-      } else if (rEntry.status === 'COMPLETED') {
-        reissueRequested = false;
-        reissueApproved = false;
-        reissueRejected = false;
-        rawNotes = cleanBaseNotes;
-      }
-    } else if (isInitialPending) {
-      // Consumer is back to initial Connected/Pending state -> clear any stale reissue flags
-      reissueRequested = false;
-      reissueApproved = false;
-      reissueRejected = false;
-    }
-
-    const effectiveTaskStatus = reissueApproved ? 'REISSUE' : (t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING');
+    const reissueApproved = effectiveTaskStatus === 'REISSUE' || /\[REISSUE_APPROVED/i.test(rawNotes);
+    const reissueRequested = !reissueApproved && Boolean(t.reissueRequested || reqMatch);
+    const reissueRejected = !reissueApproved && !reissueRequested && Boolean(t.reissueRejected || /\[REISSUE_REJECTED/i.test(rawNotes));
+    const reissueRequestedBy = (reqMatch && reqMatch[1]) || t.reissueRequestedBy || '';
+    const reissueRequestedAt = (reqMatch && reqMatch[2]) || t.reissueRequestedAt || '';
 
     return {
       ...t,
@@ -5764,6 +5927,23 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     } catch (err) {
       console.warn(`[Disconnection Sheet Sync] Status-only updateEntry error for ${cId}:`, err);
     }
+
+    try {
+      const discRes = await callGoogleAppsScript(
+        'updateDisconnection',
+        {
+          ...statusOnlyPayload,
+          data: statusOnlyPayload
+        },
+        'POST',
+        25000
+      );
+      if (discRes && discRes.success !== false) {
+        return true;
+      }
+    } catch (err2) {
+      console.warn(`[Disconnection Sheet Sync] Status-only updateDisconnection fallback error for ${cId}:`, err2);
+    }
     return false;
   }
 
@@ -5844,6 +6024,28 @@ async function syncSingleDisconnectionRowToSheet(taskOrRow: any): Promise<boolea
     console.warn(`[Disconnection Sheet Sync] updateEntry error for ${cId}:`, err);
   }
 
+  try {
+    const discRes = await callGoogleAppsScript(
+      'updateDisconnection',
+      {
+        id: discId,
+        submissionId: discId,
+        consumerId: cId,
+        'Consumer Id': cId,
+        category: 'Disconnection',
+        ...gasPayload,
+        data: gasPayload
+      },
+      'POST',
+      25000
+    );
+    if (discRes && discRes.success !== false) {
+      return true;
+    }
+  } catch (err2) {
+    console.warn(`[Disconnection Sheet Sync] updateDisconnection fallback error for ${cId}:`, err2);
+  }
+
   return false;
 }
 
@@ -5863,99 +6065,127 @@ function computeServerDiscDigest(tasks: any[]): string {
 }
 
 async function fetchDisconnectionTasksFromGoogleSheet(): Promise<any[]> {
-  try {
-    if (activeGasWriteCount > 0) {
-      await gasWriteQueue.catch(() => {});
-    }
-    gasCache.delete('getDisconnectionTasks_{}');
-    gasCache.delete('entries_{"category":"Disconnection"}');
-    gasCache.delete('entries:{"category":"Disconnection"}');
-
-    let rawTasks: any[] = [];
-    const entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 20000);
-    if (entriesRes && entriesRes.success !== false) {
-      const candidateEntries = Array.isArray(entriesRes.entries)
-        ? entriesRes.entries
-        : Array.isArray(entriesRes.data?.entries)
-        ? entriesRes.data.entries
-        : Array.isArray(entriesRes.data)
-        ? entriesRes.data
-        : [];
-      if (candidateEntries.length > 0) {
-        rawTasks = candidateEntries;
-      }
-    }
-
-    if (rawTasks.length === 0) {
-      const gasRes = await callGoogleAppsScript('getDisconnectionTasks', {}, 'GET', 20000);
-      if (gasRes && gasRes.success !== false) {
-        const candidate = Array.isArray(gasRes.tasks)
-          ? gasRes.tasks
-          : Array.isArray(gasRes.data?.tasks)
-          ? gasRes.data.tasks
-          : Array.isArray(gasRes.data)
-          ? gasRes.data
-          : [];
-        if (candidate.length > 0) {
-          rawTasks = candidate;
-        }
-      }
-    }
-
-    if (rawTasks.length > 0) {
-      const prevTasks = cachedDisconnectionState?.tasks || [];
-      const prevLen = prevTasks.length;
-      const prevDigest = computeServerDiscDigest(prevTasks);
-      const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
-      const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
-
-      const merged = mergeSheetDisconnectionTasksWithOverlay(convertedList);
-      const nextDigest = computeServerDiscDigest(merged);
-      cachedDisconnectionState = {
-        tasks: merged,
-        timestamp: Date.now()
-      };
-      if (prevLen === 0 || prevDigest !== nextDigest) {
-        invalidateDiscSnapshotCache();
-        scheduleDiscCacheDiskWrite();
-        if (discSseClients.size > 0) {
-          broadcastDisconnectionEvent('tasks_synced', {
-            version: discSnapshotVersion,
-            count: merged.length,
-            ts: Date.now()
-          });
-        }
-      }
-
-      // If any local overlay records haven't been synced to the sheet yet, push them gently in background
-      for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
-        if (ov && !ov._syncedToSheet && !ov._syncInFlight && isValidDisconnectionConsumerRow(ov)) {
-          ov._syncInFlight = true;
-          enqueueGasWrite(async () => {
-            try {
-              const ok = await syncSingleDisconnectionRowToSheet(ov);
-              if (ok) {
-                const cur = localDisconnectionOverlayMap.get(k);
-                if (cur && Number(cur._localUpdatedAt || 0) <= Number(ov._localUpdatedAt || 0)) {
-                  cur._syncedToSheet = true;
-                  cur._syncedAt = Date.now();
-                  saveDiscOverlayToDisk();
-                }
-              }
-              return ok;
-            } finally {
-              ov._syncInFlight = false;
-            }
-          }).catch(() => {});
-        }
-      }
-
-      return merged;
-    }
-  } catch (err) {
-    console.warn('[fetchDisconnectionTasksFromGoogleSheet] Notice:', err);
+  if (inFlightDiscFetchPromise) {
+    return inFlightDiscFetchPromise;
   }
-  return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+  inFlightDiscFetchPromise = (async () => {
+    try {
+      if (activeGasWriteCount > 0) {
+        await gasWriteQueue.catch(() => {});
+      }
+      gasCache.delete('getDisconnectionTasks_{}');
+      gasCache.delete('entries_{"category":"Disconnection"}');
+      gasCache.delete('entries:{"category":"Disconnection"}');
+
+      let rawTasks: any[] = [];
+      let sheetResponded = false;
+      const entriesRes = await callGoogleAppsScript('entries', { category: 'Disconnection' }, 'GET', 20000);
+      if (entriesRes && entriesRes.success !== false) {
+        sheetResponded = true;
+        const candidateEntries = Array.isArray(entriesRes.entries)
+          ? entriesRes.entries
+          : Array.isArray(entriesRes.data?.entries)
+          ? entriesRes.data.entries
+          : Array.isArray(entriesRes.data)
+          ? entriesRes.data
+          : [];
+        if (candidateEntries.length > 0) {
+          rawTasks = candidateEntries;
+        }
+      }
+
+      if (rawTasks.length === 0) {
+        const gasRes = await callGoogleAppsScript('getDisconnectionTasks', {}, 'GET', 20000);
+        if (gasRes && gasRes.success !== false) {
+          sheetResponded = true;
+          const candidate = Array.isArray(gasRes.tasks)
+            ? gasRes.tasks
+            : Array.isArray(gasRes.data?.tasks)
+            ? gasRes.data.tasks
+            : Array.isArray(gasRes.data)
+            ? gasRes.data
+            : [];
+          if (candidate.length > 0) {
+            rawTasks = candidate;
+          }
+        }
+      }
+
+      if (sheetResponded) {
+        const hadLoadedOnce = Boolean(cachedDisconnectionState && cachedDisconnectionState.timestamp > 0);
+        const prevTasks = cachedDisconnectionState?.tasks || [];
+        const prevMap = new Map<string, { task: any; sig: string }>();
+        for (const pt of prevTasks) {
+          const pk = normalizeConsumerIdKey(pt?.consumerId || pt?.['Consumer Id'] || pt?.taskId);
+          if (pk) prevMap.set(pk, { task: pt, sig: computeTaskComparisonKey(pt) });
+        }
+
+        const validRawTasks = rawTasks.filter(t => !isRecordDeleted(t) && isValidDisconnectionConsumerRow(t));
+        const convertedList = validRawTasks.map((t, idx) => convertSheetEntryToDisconnectionTask(t, idx + 1));
+        const merged = mergeSheetDisconnectionTasksWithOverlay(convertedList);
+
+        const nextMap = new Map<string, any>();
+        const changedTasks: any[] = [];
+        for (const nt of merged) {
+          const nk = normalizeConsumerIdKey(nt?.consumerId || nt?.['Consumer Id'] || nt?.taskId);
+          if (!nk) continue;
+          nextMap.set(nk, nt);
+          const prevEntry = prevMap.get(nk);
+          if (!prevEntry || prevEntry.sig !== computeTaskComparisonKey(nt)) {
+            changedTasks.push(nt);
+          }
+        }
+        const deletedIds: string[] = [];
+        for (const [pk] of prevMap.entries()) {
+          if (!nextMap.has(pk)) {
+            deletedIds.push(pk);
+          }
+        }
+
+        const hasChanges = !hadLoadedOnce || changedTasks.length > 0 || deletedIds.length > 0;
+        cachedDisconnectionState = {
+          tasks: merged,
+          timestamp: Date.now()
+        };
+
+        if (hasChanges) {
+          scheduleDiscCacheDiskWrite();
+          recordDiscDelta(changedTasks, deletedIds, !hadLoadedOnce || prevTasks.length === 0 || (changedTasks.length + deletedIds.length > 250));
+        }
+
+        // Push any local in-flight unsynced overlay records gently in background
+        for (const [k, ov] of localDisconnectionOverlayMap.entries()) {
+          if (ov && !ov._syncedToSheet && !ov._syncInFlight && isValidDisconnectionConsumerRow(ov)) {
+            ov._syncInFlight = true;
+            enqueueGasWrite(async () => {
+              try {
+                const ok = await syncSingleDisconnectionRowToSheet(ov);
+                if (ok) {
+                  const cur = localDisconnectionOverlayMap.get(k);
+                  if (cur && Number(cur._localUpdatedAt || 0) <= Number(ov._localUpdatedAt || 0)) {
+                    cur._syncedToSheet = true;
+                    cur._syncedAt = Date.now();
+                    saveDiscOverlayToDisk();
+                  }
+                }
+                return ok;
+              } finally {
+                ov._syncInFlight = false;
+              }
+            }).catch(() => {});
+          }
+        }
+
+        return merged;
+      }
+    } catch (err) {
+      console.warn('[fetchDisconnectionTasksFromGoogleSheet] Notice:', err);
+    } finally {
+      inFlightDiscFetchPromise = null;
+    }
+    return mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
+  })();
+  return inFlightDiscFetchPromise;
 }
 
 let lastBgDiscRefreshStartedAt = 0;
@@ -5999,6 +6229,7 @@ app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
     const stats = computeLocalStats(tasks);
     return res.json({
       success: true,
+      version: discSnapshotVersion,
       sheetConnected: true,
       spreadsheetId: GOOGLE_SHEET_ID,
       spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -6011,6 +6242,7 @@ app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
     const fallbackTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
     return res.json({
       success: false,
+      version: discSnapshotVersion,
       sheetConnected: false,
       spreadsheetId: GOOGLE_SHEET_ID,
       spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -6021,6 +6253,85 @@ app.all('/api/disconnection-tasks/refresh-sheet', async (_req, res) => {
       error: err?.message || 'Failed to refresh from Google Sheet'
     });
   }
+});
+
+app.get('/api/sync-status', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const wantRefresh = req.query.refresh === 'true';
+  if (wantRefresh) {
+    const discAge = cachedDisconnectionState?.timestamp ? Date.now() - cachedDisconnectionState.timestamp : Infinity;
+    if (discAge > 5000 && activeGasWriteCount === 0) {
+      await fetchDisconnectionTasksFromGoogleSheet().catch(() => {});
+    }
+  } else if (!cachedDisconnectionState || cachedDisconnectionState.timestamp === 0) {
+    await fetchDisconnectionTasksFromGoogleSheet().catch(() => {});
+  }
+  return res.json({
+    success: true,
+    discVersion: discSnapshotVersion,
+    entriesVersion,
+    workOrdersVersion,
+    ts: Date.now()
+  });
+});
+
+app.get('/api/disconnection-tasks/changes', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const since = Number(req.query.since || 0);
+  const forceRefresh = req.query.refresh === 'true' || req.query.force === 'true';
+  const blockingRefresh = req.query.blocking === 'true';
+  const workerId = String(req.query.workerId || '').toLowerCase().trim();
+  const workerName = String(req.query.workerName || '').toLowerCase().trim();
+
+  const isCold = !cachedDisconnectionState || cachedDisconnectionState.timestamp === 0;
+  const ageMs = cachedDisconnectionState?.timestamp ? Date.now() - cachedDisconnectionState.timestamp : Infinity;
+
+  if (isCold || blockingRefresh || (forceRefresh && ageMs > 4000)) {
+    if (blockingRefresh) {
+      gasCache.delete('getDisconnectionTasks_{}');
+      gasCache.delete('entries_{"category":"Disconnection"}');
+      gasCache.delete('entries:{"category":"Disconnection"}');
+    }
+    await fetchDisconnectionTasksFromGoogleSheet();
+  } else if (ageMs > 12000) {
+    refreshDisconnectionFromSheetInBackground();
+  }
+
+  const delta = getDiscChangesSinceVersion(since);
+  if (delta.unchanged) {
+    return res.json({
+      success: true,
+      unchanged: true,
+      version: discSnapshotVersion,
+      count: cachedDisconnectionState?.tasks?.length || 0
+    });
+  }
+
+  if (delta.delta) {
+    const snap = getMergedDiscSnapshot();
+    const stats = computeLocalStats(snap.tasks, workerId, workerName);
+    return sendCompressedJsonPayload(req, res, {
+      success: true,
+      unchanged: false,
+      delta: true,
+      version: delta.version,
+      updatedTasks: delta.updatedTasks || [],
+      deletedIds: delta.deletedIds || [],
+      stats
+    });
+  }
+
+  const snap = getMergedDiscSnapshot();
+  const stats = computeLocalStats(snap.tasks, workerId, workerName);
+  return sendCompressedJsonPayload(req, res, {
+    success: true,
+    unchanged: false,
+    delta: false,
+    requiresFullResync: true,
+    version: snap.version,
+    tasks: snap.tasks,
+    stats
+  });
 });
 
 app.get('/api/disconnection-events', (req, res) => {
@@ -6064,7 +6375,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const forceRefresh = query.refresh === 'true' || query.force === 'true';
   const blockingRefresh = query.blocking === 'true';
 
-  if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
+  if (cachedDisconnectionState && cachedDisconnectionState.timestamp > 0 && Array.isArray(cachedDisconnectionState.tasks)) {
     const isStale = Date.now() - cachedDisconnectionState.timestamp > 8000;
     if (blockingRefresh) {
       gasCache.delete('getDisconnectionTasks_{}');
@@ -6074,6 +6385,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
       const stats = computeLocalStats(freshTasks, workerId, workerName);
       return sendCompressedJsonPayload(req, res, {
         success: true,
+        version: discSnapshotVersion,
         sheetConnected: true,
         spreadsheetId: GOOGLE_SHEET_ID,
         spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -6096,6 +6408,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
       const jsonBuffer = Buffer.from(
         JSON.stringify({
           success: true,
+          version: snap.version,
           sheetConnected: true,
           spreadsheetId: GOOGLE_SHEET_ID,
           spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -6119,6 +6432,7 @@ app.get('/api/disconnection-tasks', async (req, res) => {
   const stats = computeLocalStats(freshTasks, workerId, workerName);
   return sendCompressedJsonPayload(req, res, {
     success: true,
+    version: discSnapshotVersion,
     sheetConnected: true,
     spreadsheetId: GOOGLE_SHEET_ID,
     spreadsheetUrl: GOOGLE_SHEET_URL,
@@ -6310,9 +6624,7 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
       const cIdKey = normalizeConsumerIdKey(fullRow.consumerId || fullRow.id || '');
       if (!cIdKey) continue;
 
-      deletedTombstoneSet.delete(cIdKey);
-      deletedTombstoneSet.delete(`task-disc-${cIdKey}`);
-      deletedTombstoneSet.delete(`pwr-dis-${cIdKey}`);
+      clearTombstoneKey(cIdKey);
 
       const existingInCache = existingByCidMap.get(cIdKey);
       const isNewConsumer = !existingInCache && !localDisconnectionOverlayMap.has(cIdKey);
@@ -6339,7 +6651,7 @@ app.post('/api/disconnection-tasks/upload', async (req, res) => {
 
     const mergedAllTasks = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
     cachedDisconnectionState = { tasks: mergedAllTasks, timestamp: Date.now() };
-    invalidateDiscSnapshotCache();
+    recordDiscDelta(preparedPayloads.length <= 200 ? preparedPayloads : [], [], preparedPayloads.length > 200);
     try { fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(mergedAllTasks), 'utf-8'); } catch {}
 
     // Queue Google Sheets writes sequentially in background so upload response is fast and reliable
@@ -6673,23 +6985,46 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     report.agency !== undefined || report['Agency'] !== undefined || report.assignedAgency !== undefined
       ? String(report.agency ?? report['Agency'] ?? report.assignedAgency ?? '').trim()
       : String(existingTask.agency ?? existingTask['Agency'] ?? existingTask.assignedAgency ?? '').trim();
-  const rawUpdatedImage =
-    report.photoUrl !== undefined || report['Image'] !== undefined || report.photoDataUrl !== undefined
-      ? String(report.photoUrl ?? report['Image'] ?? report.photoDataUrl ?? '').trim()
-      : String(existingTask.photoUrl ?? existingTask['Image'] ?? '').trim();
+  const hasExplicitPhotoField =
+    report.photoDataUrl !== undefined ||
+    report.photoUrl !== undefined ||
+    report['Image'] !== undefined ||
+    report.imageUrl !== undefined ||
+    report.image !== undefined;
+  const pickFirstNonEmptyStr = (...vals: any[]): string => {
+    for (const v of vals) {
+      if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    }
+    return '';
+  };
+  const rawUpdatedImage = hasExplicitPhotoField
+    ? pickFirstNonEmptyStr(report.photoDataUrl, report.photoUrl, report['Image'], report.imageUrl, report.image)
+    : pickFirstNonEmptyStr(existingTask.photoUrl, existingTask['Image'], existingTask.imageUrl, existingTask.image);
 
   let updatedImage = rawUpdatedImage;
   if (rawUpdatedImage && rawUpdatedImage.startsWith('data:')) {
     const imgHash = crypto.createHash('sha1').update(rawUpdatedImage).digest('hex').slice(0, 16);
+    const safeHint = String(cId || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const imgKey = `${safeHint}_${imgHash}`;
+    largeImagesMap.set(imgKey, rawUpdatedImage);
+    saveLargeImagesToDisk();
     const cachedPublicUrl = uploadedPhotoLinksMap.get(imgHash);
     if (cachedPublicUrl && cachedPublicUrl.startsWith('https://') && !cachedPublicUrl.includes('/api/stored-images/')) {
       updatedImage = cachedPublicUrl;
     } else {
-      const safeHint = String(cId || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
-      const imgKey = `${safeHint}_${imgHash}`;
-      largeImagesMap.set(imgKey, rawUpdatedImage);
-      saveLargeImagesToDisk();
-      updatedImage = `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+      try {
+        const permUrl = await Promise.race([
+          convertDataUrlToClickablePhotoLink(rawUpdatedImage, cId),
+          new Promise<string>((_, rej) => setTimeout(() => rej(new Error('Photo host upload timeout')), 12000))
+        ]);
+        updatedImage =
+          permUrl && permUrl.startsWith('http')
+            ? permUrl
+            : `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+      } catch (photoErr: any) {
+        console.warn(`[Disconnection Report] Upfront photo host notice for ${cId}:`, photoErr?.message || photoErr);
+        updatedImage = `${PUBLIC_APP_BASE_URL}/api/stored-images/${encodeURIComponent(imgKey)}`;
+      }
     }
   } else if (rawUpdatedImage && rawUpdatedImage.includes('/api/stored-images/')) {
     const rawKey = decodeURIComponent(rawUpdatedImage.split('/api/stored-images/')[1]?.split('?')[0] || '').trim();
@@ -6697,6 +7032,16 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     const cachedPublicUrl = hashSuffix ? uploadedPhotoLinksMap.get(hashSuffix) : undefined;
     if (cachedPublicUrl && cachedPublicUrl.startsWith('https://') && !cachedPublicUrl.includes('/api/stored-images/')) {
       updatedImage = cachedPublicUrl;
+    } else {
+      try {
+        const permUrl = await Promise.race([
+          convertDataUrlToClickablePhotoLink(rawUpdatedImage, cId),
+          new Promise<string>((_, rej) => setTimeout(() => rej(new Error('Photo host retry timeout')), 10000))
+        ]);
+        if (permUrl && permUrl.startsWith('http')) {
+          updatedImage = permUrl;
+        }
+      } catch {}
     }
   }
 
@@ -6751,54 +7096,15 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
   if (cIdKey) {
     if (hasApproveTag) {
       isReissueApp = true;
-      const prevReq = reissueRequestsMap.get(cIdKey);
-      reqByStr = prevReq?.requestedBy || reqByStr;
-      reqAtStr = prevReq?.requestedAt || reqAtStr;
       finalRemarks = `${cleanBaseRemarks} [REISSUE_APPROVED]`.trim();
-      reissueRequestsMap.set(cIdKey, {
-        consumerId: cId,
-        status: 'APPROVED',
-        requestedBy: reqByStr,
-        requestedAt: reqAtStr,
-        updatedAt: Date.now()
-      });
-      saveReissueRequestsToDisk();
     } else if (hasRejectTag) {
       isReissueRej = true;
-      const prevReq = reissueRequestsMap.get(cIdKey);
-      reqByStr = prevReq?.requestedBy || reqByStr;
-      reqAtStr = prevReq?.requestedAt || reqAtStr;
       finalRemarks = `${cleanBaseRemarks} [REISSUE_REJECTED]`.trim();
-      reissueRequestsMap.set(cIdKey, {
-        consumerId: cId,
-        status: 'REJECTED',
-        requestedBy: reqByStr,
-        requestedAt: reqAtStr,
-        updatedAt: Date.now()
-      });
-      saveReissueRequestsToDisk();
     } else if (hasRequestTag) {
       isReissueReq = true;
       finalRemarks = `${cleanBaseRemarks} [REISSUE_REQ:${reqByStr}|${reqAtStr}]`.trim();
-      reissueRequestsMap.set(cIdKey, {
-        consumerId: cId,
-        status: 'PENDING',
-        requestedBy: reqByStr,
-        requestedAt: reqAtStr,
-        updatedAt: Date.now()
-      });
-      saveReissueRequestsToDisk();
     } else {
-      // Normal status update (e.g. Worker updated status after Reissue approval) -> mark COMPLETED in reissueRequestsMap
       finalRemarks = cleanBaseRemarks;
-      reissueRequestsMap.set(cIdKey, {
-        consumerId: cId,
-        status: 'COMPLETED',
-        requestedBy: '',
-        requestedAt: '',
-        updatedAt: Date.now()
-      });
-      saveReissueRequestsToDisk();
     }
   }
 
@@ -6867,9 +7173,11 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     saveDiscOverlayToDisk();
   }
 
+  const responseTask = { ...updatedTaskObj };
+  delete responseTask.photoDataUrl;
+
   if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
-    const cacheCopy = { ...updatedTaskObj };
-    delete cacheCopy.photoDataUrl;
+    const cacheCopy = { ...responseTask };
     const foundIdx = cachedDisconnectionState.tasks.findIndex(
       (t: any) => {
         const tKey = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId);
@@ -6890,7 +7198,6 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
         cachedDisconnectionState.tasks.push(cacheCopy);
       }
     }
-    // Deduplicate in-memory cache to ensure zero duplicates
     const seenCIds = new Set<string>();
     cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.filter((t: any) => {
       const k = normalizeConsumerIdKey(t.consumerId || t['Consumer Id'] || t.taskId);
@@ -6899,40 +7206,28 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
       seenCIds.add(k);
       return true;
     });
-    invalidateDiscSnapshotCache();
     scheduleDiscCacheDiskWrite();
   }
 
-  // Respond immediately after saving local overlay & disk cache; upload external photo link + sync Google Sheets in background
-  const responseTask = { ...updatedTaskObj };
-  delete responseTask.photoDataUrl;
-  broadcastDisconnectionEvent('task_updated', {
-    task: responseTask,
-    version: discSnapshotVersion,
-    ts: Date.now()
-  });
-
-  const responseObj = {
-    success: true,
-    message: `Consumer ${cId} remark & status (${newStatus}) saved to Disconnection sheet`,
-    taskId: updatedTaskObj.taskId,
-    consumerId: cId,
-    status: newStatus,
-    imageUrl: updatedImage,
-    task: responseTask
-  };
-  submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
+  recordDiscDelta([responseTask], [], false);
 
   const submittedLocalUpdatedAt = updatedTaskObj._localUpdatedAt;
-  enqueueGasWrite(async () => {
+  const sheetWritePromise = enqueueGasWrite(async () => {
     try {
-      const sourceImg = String(rawUpdatedImage || updatedImage || '').trim();
-      if (sourceImg && (sourceImg.startsWith('data:') || sourceImg.includes('/api/stored-images/'))) {
+      const curImg = String(updatedTaskObj.photoUrl || updatedImage || '').trim();
+      const needsExternalUpgrade =
+        Boolean(curImg && (curImg.startsWith('data:') || curImg.includes('/api/stored-images/'))) ||
+        Boolean(rawUpdatedImage && rawUpdatedImage.startsWith('data:') && (!curImg || curImg.includes('/api/stored-images/')));
+      if (needsExternalUpgrade) {
+        const sourceImg = String(rawUpdatedImage || curImg || '').trim();
         const permUrl = await convertDataUrlToClickablePhotoLink(sourceImg, cId);
-        if (permUrl && permUrl.startsWith('http')) {
+        if (permUrl && permUrl.startsWith('https://') && !permUrl.includes('/api/stored-images/') && permUrl !== curImg) {
           updatedTaskObj.photoUrl = permUrl;
           updatedTaskObj.imageUrl = permUrl;
           updatedTaskObj['Image'] = permUrl;
+          responseTask.photoUrl = permUrl;
+          responseTask.imageUrl = permUrl;
+          responseTask['Image'] = permUrl;
           delete updatedTaskObj.photoDataUrl;
           if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
             const idx = cachedDisconnectionState.tasks.findIndex(
@@ -6947,11 +7242,11 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
                   imageUrl: permUrl,
                   'Image': permUrl
                 };
-                invalidateDiscSnapshotCache();
                 scheduleDiscCacheDiskWrite();
               }
             }
           }
+          recordDiscDelta([responseTask], [], false);
         }
       }
     } catch {}
@@ -6975,6 +7270,24 @@ app.post('/api/disconnection-tasks/report', async (req, res) => {
     console.warn(`[Disconnection Report Sync] Background sync notice for ${cId}:`, err);
     return false;
   });
+
+  // Wait up to 9s for Google Sheet confirmation so external photo URL + Discon row are confirmed in live Sheet
+  await Promise.race([
+    sheetWritePromise,
+    new Promise(resolve => setTimeout(resolve, 9000))
+  ]);
+
+  const responseObj = {
+    success: true,
+    version: discSnapshotVersion,
+    message: `Consumer ${cId} remark & status (${newStatus}) saved to Disconnection sheet`,
+    taskId: updatedTaskObj.taskId,
+    consumerId: cId,
+    status: newStatus,
+    imageUrl: responseTask.photoUrl || updatedImage,
+    task: responseTask
+  };
+  submissionIdMap.set(subId, { timestamp: Date.now(), result: responseObj });
 
   return res.json(responseObj);
 });
@@ -7214,6 +7527,7 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
     const workerId = String(req.body?.workerId || '').trim();
     const nowIso = new Date().toISOString();
 
+    const updatedTasksForDelta: any[] = [];
     for (const cId of cleanIds) {
       const cIdKey = cId.toLowerCase();
       if (!cIdKey) continue;
@@ -7235,6 +7549,7 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
           _syncedToSheet: false
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
+        updatedTasksForDelta.push(updated);
         if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
           const idx = cachedDisconnectionState.tasks.findIndex(
             (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
@@ -7256,21 +7571,19 @@ app.post('/api/disconnection-tasks/assign', async (req, res) => {
     }
 
     saveDiscOverlayToDisk();
-    invalidateDiscSnapshotCache();
     if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
       try {
         fs.writeFileSync(DISC_CACHE_FILE, JSON.stringify(cachedDisconnectionState.tasks), 'utf-8');
       } catch {}
     }
     gasCache.clear();
+    if (updatedTasksForDelta.length > 0) {
+      recordDiscDelta(updatedTasksForDelta, [], updatedTasksForDelta.length > 200);
+    }
     const mergedList = mergeSheetDisconnectionTasksWithOverlay(cachedDisconnectionState?.tasks || []);
-    broadcastDisconnectionEvent('tasks_synced', {
-      version: discSnapshotVersion,
-      count: mergedList.length,
-      ts: Date.now()
-    });
     return res.json({
       success: true,
+      version: discSnapshotVersion,
       assignedCount: cleanIds.length,
       tasks: mergedList
     });
@@ -7296,7 +7609,14 @@ app.post('/api/disconnection-tasks/archive', async (req, res) => {
           _syncedToSheet: false
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
+        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+          const idx = cachedDisconnectionState.tasks.findIndex(
+            (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+          );
+          if (idx !== -1) cachedDisconnectionState.tasks[idx] = updated;
+        }
         saveDiscOverlayToDisk();
+        recordDiscDelta([updated], [], false);
         enqueueGasWrite(async () => {
           const synced = await syncSingleDisconnectionRowToSheet(updated);
           if (synced) {
@@ -7309,7 +7629,7 @@ app.post('/api/disconnection-tasks/archive', async (req, res) => {
       }
     }
     gasCache.clear();
-    return res.json({ success: true });
+    return res.json({ success: true, version: discSnapshotVersion });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to archive task' });
   }
@@ -7332,7 +7652,14 @@ app.post('/api/disconnection-tasks/restore', async (req, res) => {
           _syncedToSheet: false
         };
         localDisconnectionOverlayMap.set(cIdKey, updated);
+        if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
+          const idx = cachedDisconnectionState.tasks.findIndex(
+            (t: any) => String(t.consumerId || t['Consumer Id'] || '').trim().toLowerCase() === cIdKey
+          );
+          if (idx !== -1) cachedDisconnectionState.tasks[idx] = updated;
+        }
         saveDiscOverlayToDisk();
+        recordDiscDelta([updated], [], false);
         const ok = await enqueueGasWrite(async () => {
           const synced = await syncSingleDisconnectionRowToSheet(updated);
           if (synced) {
@@ -7347,7 +7674,7 @@ app.post('/api/disconnection-tasks/restore', async (req, res) => {
       }
     }
     gasCache.clear();
-    return res.json({ success: true });
+    return res.json({ success: true, version: discSnapshotVersion });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to restore task' });
   }
@@ -7671,10 +7998,62 @@ function parseUploadedPaymentWorkbook(rawPaymentSource: string, rawBase64: strin
     throw err;
   }
 
+const SERVER_CID_HEADERS = new Set([
+  'consumer id', 'consumerid', 'consumer no', 'consumerno', 'consumer number',
+  'con id', 'con no', 'ca no', 'account number', 'account no', 'acct no'
+]);
+const SERVER_AMT_HEADERS = new Set([
+  'amount', 'paid amount', 'paidamount', 'pay amount', 'payment amount',
+  'collection amount', 'amt', 'paid amt'
+]);
+const SERVER_DATE_HEADERS = new Set([
+  'date', 'paid date', 'paiddate', 'payment date', 'collection date',
+  'receipt date', 'pay date', 'tran date', 'transaction date'
+]);
+
+function detectServerPaymentColumns(row: any[]): {
+  consumerIdCol: number;
+  amountCol: number;
+  dateCol: number;
+  score: number;
+} {
+  let consumerIdCol = -1;
+  let amountCol = -1;
+  let dateCol = -1;
+
+  for (let c = 0; c < row.length; c++) {
+    const norm = normalizePaymentExcelHeader(row[c]);
+    if (norm === 'consumer id') consumerIdCol = c;
+    else if (norm === 'amount') amountCol = c;
+    else if (norm === 'date') dateCol = c;
+  }
+
+  for (let c = 0; c < row.length; c++) {
+    const norm = normalizePaymentExcelHeader(row[c]);
+    if (consumerIdCol === -1 && SERVER_CID_HEADERS.has(norm)) consumerIdCol = c;
+    else if (amountCol === -1 && SERVER_AMT_HEADERS.has(norm)) amountCol = c;
+    else if (dateCol === -1 && SERVER_DATE_HEADERS.has(norm)) dateCol = c;
+  }
+
+  const score = (consumerIdCol !== -1 ? 1 : 0) + (amountCol !== -1 ? 1 : 0) + (dateCol !== -1 ? 1 : 0);
+  return { consumerIdCol, amountCol, dateCol, score };
+}
+
   let headerRowIdx = -1;
+  let firstNonBlankIdx = -1;
+  let bestCols: ReturnType<typeof detectServerPaymentColumns> | null = null;
+  let scannedNonBlank = 0;
+
   for (let i = 0; i < matrix.length; i++) {
-    if (!isCompletelyBlankExcelRow(matrix[i])) {
+    if (isCompletelyBlankExcelRow(matrix[i])) continue;
+    if (firstNonBlankIdx === -1) firstNonBlankIdx = i;
+    scannedNonBlank++;
+    const cols = detectServerPaymentColumns(matrix[i]);
+    if (!bestCols || cols.score > bestCols.score) {
+      bestCols = cols;
       headerRowIdx = i;
+    }
+    if (cols.score === 3 || scannedNonBlank >= 20) {
       break;
     }
   }
@@ -7686,21 +8065,12 @@ function parseUploadedPaymentWorkbook(rawPaymentSource: string, rawBase64: strin
     throw err;
   }
 
-  const headerRow = matrix[headerRowIdx];
-  let consumerIdCol = -1;
-  let amountCol = -1;
-  let dateCol = -1;
-
-  for (let c = 0; c < headerRow.length; c++) {
-    const norm = normalizePaymentExcelHeader(headerRow[c]);
-    if (consumerIdCol === -1 && norm === 'consumer id') {
-      consumerIdCol = c;
-    } else if (amountCol === -1 && norm === 'amount') {
-      amountCol = c;
-    } else if (dateCol === -1 && norm === 'date') {
-      dateCol = c;
-    }
+  if (bestCols && bestCols.score === 0 && firstNonBlankIdx !== -1) {
+    headerRowIdx = firstNonBlankIdx;
+    bestCols = detectServerPaymentColumns(matrix[firstNonBlankIdx]);
   }
+
+  const { consumerIdCol, amountCol, dateCol } = bestCols || detectServerPaymentColumns(matrix[headerRowIdx]);
 
   const missingHeaders: string[] = [];
   if (consumerIdCol === -1) missingHeaders.push('Consumer ID');
@@ -7787,42 +8157,40 @@ interface MatchedPaymentSyncItem {
   };
 }
 
+let gasBatchPaymentCapability: {
+  status: 'unknown' | 'supported' | 'unsupported';
+  checkedAt: number;
+} = { status: 'unknown', checkedAt: 0 };
+const GAS_BATCH_PAYMENT_CAPABILITY_TTL_MS = 5 * 60 * 1000;
+
 async function getLiveDisconnectionRowsForPaymentMatch(): Promise<any[]> {
-  if (
-    cachedDisconnectionState &&
-    Array.isArray(cachedDisconnectionState.tasks) &&
-    cachedDisconnectionState.tasks.length > 0 &&
-    cachedDisconnectionState.timestamp > 0 &&
-    Date.now() - cachedDisconnectionState.timestamp < 60000
-  ) {
-    return cachedDisconnectionState.tasks;
-  }
-
-  gasCache.delete('entries_{"category":"Disconnection"}');
-  gasCache.delete('entries:{"category":"Disconnection"}');
-  const liveEntriesRes = await callGoogleAppsScript(
-    'entries',
-    { category: 'Disconnection', _t: Date.now() },
-    'GET',
-    25000
-  );
-
-  if (liveEntriesRes && liveEntriesRes.success !== false) {
-    return Array.isArray(liveEntriesRes.entries)
-      ? liveEntriesRes.entries
-      : Array.isArray(liveEntriesRes.data?.entries)
-        ? liveEntriesRes.data.entries
-        : Array.isArray(liveEntriesRes.data)
-          ? liveEntriesRes.data
-          : [];
-  }
-
-  if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks) && cachedDisconnectionState.tasks.length > 0) {
-    return cachedDisconnectionState.tasks;
+  let lastRes: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    gasCache.delete('entries_{"category":"Disconnection"}');
+    gasCache.delete('entries:{"category":"Disconnection"}');
+    const liveEntriesRes = await callGoogleAppsScript(
+      'entries',
+      { category: 'Disconnection', _t: Date.now() },
+      'GET',
+      25000
+    );
+    lastRes = liveEntriesRes;
+    if (liveEntriesRes && liveEntriesRes.success !== false) {
+      return Array.isArray(liveEntriesRes.entries)
+        ? liveEntriesRes.entries
+        : Array.isArray(liveEntriesRes.data?.entries)
+          ? liveEntriesRes.data.entries
+          : Array.isArray(liveEntriesRes.data)
+            ? liveEntriesRes.data
+            : [];
+    }
+    if (attempt === 0) {
+      await new Promise(r => setTimeout(r, 700));
+    }
   }
 
   const fetchErr: any = new Error(
-    liveEntriesRes?.error?.message ||
+    lastRes?.error?.message ||
     'Failed to read live Disconnection sheet records from Google Apps Script.'
   );
   fetchErr.statusCode = 502;
@@ -7853,6 +8221,7 @@ function matchPaymentRecordsWithSheet(
   const combinedPreFailedResults: PaymentRowResult[] = [...preFailedResults];
   const notFoundResults: PaymentRowResult[] = [];
   const matchedItems: MatchedPaymentSyncItem[] = [];
+  const runningRemainingByConsumer = new Map<string, number>();
 
   for (const rec of validRecords) {
     const cKey = normalizeConsumerIdKey(rec.consumerId);
@@ -7894,7 +8263,10 @@ function matchPaymentRecordsWithSheet(
     }
 
     const paidAmtRounded = Math.round(rec.amount * 100) / 100;
-    const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
+    const baseRemaining = runningRemainingByConsumer.has(cKey) ? runningRemainingByConsumer.get(cKey)! : d2NetOs;
+    const outstandingAfter = Math.max(0, Math.round((baseRemaining - paidAmtRounded) * 100) / 100);
+    runningRemainingByConsumer.set(cKey, outstandingAfter);
+
     const targetCid = String(liveRow['Consumer Id'] ?? liveRow['Consumer ID'] ?? liveRow.consumerId ?? rec.consumerId).trim();
 
     matchedItems.push({
@@ -7922,55 +8294,96 @@ async function fallbackUpdatePaymentChunkViaUpdateEntry(
   rawPaymentSource: string,
   items: MatchedPaymentSyncItem[]
 ): Promise<PaymentRowResult[]> {
-  return mapWithConcurrency(items, 6, async (item): Promise<PaymentRowResult> => {
-    const patch: Record<string, any> = {
-      id: item.targetCid,
-      consumerId: item.targetCid,
-      'Consumer Id': item.targetCid,
-      category: 'Disconnection',
-      spreadsheetId: GOOGLE_SHEET_ID,
-      'Discon Status': item.liveMeta?.disconStatus ?? '',
-      'Payment Status': item.liveMeta?.paymentStatus ?? '',
-      'Last Updated': item.liveMeta?.lastUpdated ?? '',
-      'Upload Date': item.liveMeta?.uploadDate ?? '',
-      'Paid Amount': item.paidAmtRounded,
-      paidAmount: item.paidAmtRounded,
-      'Paid Date': item.date,
-      paidDate: item.date,
-      'Paid Type': rawPaymentSource,
-      paidType: rawPaymentSource,
-      'Outstanding After': String(item.outstandingAfter),
-      outstandingAfter: String(item.outstandingAfter)
-    };
+  if (items.length === 0) return [];
 
-    const upRes = await enqueueGasWrite(() =>
-      callGoogleAppsScript('updateEntry', { ...patch, data: patch }, 'POST', 20000)
-    );
-    if (upRes && upRes.success !== false) {
-      return {
-        rowNumber: item.rowNumber,
-        consumerId: item.consumerId,
-        d2NetOs: String(item.d2NetOs),
-        paidAmount: String(item.paidAmtRounded),
-        paidDate: item.date,
-        paidType: rawPaymentSource,
-        outstandingAfter: String(item.outstandingAfter),
-        status: 'Updated',
-        message: 'Payment columns updated in Disconnection sheet'
-      };
-    }
-    return {
-      rowNumber: item.rowNumber,
-      consumerId: item.consumerId,
-      d2NetOs: String(item.d2NetOs),
-      paidAmount: String(item.paidAmtRounded),
-      paidDate: item.date,
-      paidType: rawPaymentSource,
-      outstandingAfter: '',
-      status: 'Failed',
-      message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
-    };
-  });
+  // Group by consumer so concurrent workers never race on the same Google Sheet row,
+  // while distinct consumers run concurrently against GAS (which serializes safely via LockService)
+  const consumerGroups = new Map<string, MatchedPaymentSyncItem[]>();
+  for (const item of items) {
+    const k = normalizeConsumerIdKey(item.targetCid || item.consumerId) || `row_${item.rowNumber}`;
+    const arr = consumerGroups.get(k);
+    if (arr) arr.push(item);
+    else consumerGroups.set(k, [item]);
+  }
+
+  const resultsByRow = new Map<number, PaymentRowResult>();
+  activeGasWriteCount++;
+  try {
+    await mapWithConcurrency(Array.from(consumerGroups.values()), 6, async (groupItems) => {
+      for (const item of groupItems) {
+        const patch: Record<string, any> = {
+          id: item.targetCid,
+          consumerId: item.targetCid,
+          'Consumer Id': item.targetCid,
+          category: 'Disconnection',
+          spreadsheetId: GOOGLE_SHEET_ID,
+          'Discon Status': item.liveMeta?.disconStatus ?? '',
+          'Payment Status': item.liveMeta?.paymentStatus ?? '',
+          'Last Updated': item.liveMeta?.lastUpdated ?? '',
+          'Upload Date': item.liveMeta?.uploadDate ?? '',
+          'Paid Amount': item.paidAmtRounded,
+          paidAmount: item.paidAmtRounded,
+          'Paid Date': item.date,
+          paidDate: item.date,
+          'Paid Type': rawPaymentSource,
+          paidType: rawPaymentSource,
+          'Outstanding After': String(item.outstandingAfter),
+          outstandingAfter: String(item.outstandingAfter)
+        };
+
+        let upRes: any = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            upRes = await callGoogleAppsScript('updateEntry', { ...patch, data: patch }, 'POST', 22000);
+          } catch (err: any) {
+            upRes = { success: false, error: { code: 'GAS_NETWORK_ERROR', message: err?.message || 'Network error' } };
+          }
+          if (upRes && upRes.success !== false) break;
+
+          const errCode = String(upRes?.error?.code || '').trim();
+          const errMsg = String(upRes?.error?.message || upRes?.message || '').trim();
+          const isRetryable =
+            Boolean(upRes?.busy) ||
+            errCode === 'BACKEND_BUSY' ||
+            errCode === 'GAS_NETWORK_ERROR' ||
+            errCode === 'INVALID_JSON' ||
+            /busy|timeout|abort|network/i.test(errMsg);
+          if (!isRetryable || attempt === 2) break;
+          await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
+        }
+
+        if (upRes && upRes.success !== false) {
+          resultsByRow.set(item.rowNumber, {
+            rowNumber: item.rowNumber,
+            consumerId: item.consumerId,
+            d2NetOs: String(item.d2NetOs),
+            paidAmount: String(item.paidAmtRounded),
+            paidDate: item.date,
+            paidType: rawPaymentSource,
+            outstandingAfter: String(item.outstandingAfter),
+            status: 'Updated',
+            message: 'Payment columns updated in Disconnection sheet'
+          });
+        } else {
+          resultsByRow.set(item.rowNumber, {
+            rowNumber: item.rowNumber,
+            consumerId: item.consumerId,
+            d2NetOs: String(item.d2NetOs),
+            paidAmount: String(item.paidAmtRounded),
+            paidDate: item.date,
+            paidType: rawPaymentSource,
+            outstandingAfter: '',
+            status: 'Failed',
+            message: String(upRes?.error?.message || upRes?.message || 'Failed to update Disconnection row in Google Sheets')
+          });
+        }
+      }
+    });
+  } finally {
+    activeGasWriteCount = Math.max(0, activeGasWriteCount - 1);
+  }
+
+  return items.map(it => resultsByRow.get(it.rowNumber)!);
 }
 
 async function syncMatchedPaymentBatchToGas(params: {
@@ -7980,7 +8393,12 @@ async function syncMatchedPaymentBatchToGas(params: {
   state?: { batchActionUnsupported: boolean; subSeq: number };
 }): Promise<PaymentRowResult[]> {
   const { rawPaymentSource, batchUploadId, items } = params;
-  const state = params.state || { batchActionUnsupported: false, subSeq: 0 };
+  const isCapabilityCacheValid =
+    gasBatchPaymentCapability.checkedAt > 0 &&
+    Date.now() - gasBatchPaymentCapability.checkedAt < GAS_BATCH_PAYMENT_CAPABILITY_TTL_MS;
+  const cachedUnsupported = isCapabilityCacheValid && gasBatchPaymentCapability.status === 'unsupported';
+  const state = params.state || { batchActionUnsupported: cachedUnsupported, subSeq: 0 };
+  if (cachedUnsupported) state.batchActionUnsupported = true;
   if (items.length === 0) return [];
 
   const curSeq = state.subSeq++;
@@ -7993,21 +8411,20 @@ async function syncMatchedPaymentBatchToGas(params: {
       date: it.date
     }));
 
-    const gasRes = await enqueueGasWrite(() =>
-      callGoogleAppsScript(
-        'uploadDisconnectionPaymentData',
-        {
-          spreadsheetId: GOOGLE_SHEET_ID,
-          paymentSource: rawPaymentSource,
-          uploadId: `${batchUploadId}_c${curSeq}`,
-          records: gasPayloadRecords
-        },
-        'POST',
-        25000
-      )
+    const gasRes = await callGoogleAppsScript(
+      'uploadDisconnectionPaymentData',
+      {
+        spreadsheetId: GOOGLE_SHEET_ID,
+        paymentSource: rawPaymentSource,
+        uploadId: `${batchUploadId}_c${curSeq}`,
+        records: gasPayloadRecords
+      },
+      'POST',
+      25000
     );
 
     if (gasRes && gasRes.success !== false) {
+      gasBatchPaymentCapability = { status: 'supported', checkedAt: Date.now() };
       const rawRows: any[] = Array.isArray(gasRes.rowResults)
         ? gasRes.rowResults
         : Array.isArray(gasRes.data?.rowResults)
@@ -8040,6 +8457,7 @@ async function syncMatchedPaymentBatchToGas(params: {
     const errCode = String(gasRes?.error?.code || '').trim();
     const errMsg = String(gasRes?.error?.message || gasRes?.message || 'Google Apps Script payment update failed').trim();
     if (errCode === 'UNKNOWN_POST_ACTION' || /Unrecognized POST action|Unknown POST action/i.test(errMsg)) {
+      gasBatchPaymentCapability = { status: 'unsupported', checkedAt: Date.now() };
       state.batchActionUnsupported = true;
       return fallbackUpdatePaymentChunkViaUpdateEntry(rawPaymentSource, items);
     }
@@ -8080,12 +8498,13 @@ function applyPaymentUpdatesToLocalCache(
     }
   }
 
+  const updatedPaymentTasks: any[] = [];
   if (updatedByConsumerKey.size > 0 && cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
     cachedDisconnectionState.tasks = cachedDisconnectionState.tasks.map((task: any) => {
       const cKey = normalizeConsumerIdKey(task.consumerId || task['Consumer Id'] || task.taskId);
       const matched = cKey ? updatedByConsumerKey.get(cKey) : undefined;
       if (!matched) return task;
-      return {
+      const updated = {
         ...task,
         paidAmount: matched.paidAmount,
         'Paid Amount': matched.paidAmount,
@@ -8096,21 +8515,22 @@ function applyPaymentUpdatesToLocalCache(
         outstandingAfter: matched.outstandingAfter,
         'Outstanding After': matched.outstandingAfter
       };
+      updatedPaymentTasks.push(updated);
+      return updated;
     });
     cachedDisconnectionState.timestamp = Date.now();
-    invalidateDiscSnapshotCache();
+    if (updatedPaymentTasks.length > 0) {
+      recordDiscDelta(
+        updatedPaymentTasks.length <= 200 ? updatedPaymentTasks : [],
+        [],
+        updatedPaymentTasks.length > 200
+      );
+    }
     scheduleDiscCacheDiskWrite();
   }
 
   if (triggerBackgroundRefresh) {
     gasCache.clear();
-    if (cachedDisconnectionState && Array.isArray(cachedDisconnectionState.tasks)) {
-      broadcastDisconnectionEvent('tasks_synced', {
-        version: discSnapshotVersion,
-        count: cachedDisconnectionState.tasks.length,
-        ts: Date.now()
-      });
-    }
     refreshDisconnectionFromSheetInBackground();
   }
 }

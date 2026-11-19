@@ -371,7 +371,13 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     if (!k) return item;
     const rec = hasRecentUpdatesRef.current.get(k);
     if (!rec) return item;
-    if (Date.now() - rec.timestamp > 180000) {
+    if (Date.now() - rec.timestamp > 8000) {
+      hasRecentUpdatesRef.current.delete(k);
+      return item;
+    }
+    const inTs = Number((item as any)._localUpdatedAt || 0);
+    const locTs = Number((rec.task as any)._localUpdatedAt || 0);
+    if (inTs > locTs) {
       hasRecentUpdatesRef.current.delete(k);
       return item;
     }
@@ -383,7 +389,6 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     const localDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
     const incomingAgency = String((item as any)['Agency'] || item.Agency || item.agency || item.assignedAgency || '').trim().toLowerCase();
     const localAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
-    // If incoming already matches our local update, keep incoming; otherwise preserve our just-saved status, date, agency & remarks
     if (incomingSt === localSt && incomingNotes === localNotes && incomingDate === localDate && (!localAgency || incomingAgency === localAgency)) {
       return item;
     }
@@ -415,7 +420,7 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
     if (!cId) return item;
     const dec = localReissueDecisionsRef.current.get(cId);
     if (!dec) return item;
-    if (Date.now() - dec.timestamp > 120000) {
+    if (Date.now() - dec.timestamp > 8000) {
       localReissueDecisionsRef.current.delete(cId);
       return item;
     }
@@ -707,33 +712,32 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       .catch(() => {});
   }, []);
 
-  // Initial load & IndexedDB instant fallback + background sync + listen for explicit Power App & Sheets Refresh button clicks
+  // Initial load & IndexedDB fallback ONLY when externalTasks is not managed by parent App.tsx
   useEffect(() => {
     let cancelled = false;
-    loadDiscTasksFromIdb().then(idbTasks => {
-      if (cancelled || idbTasks.length === 0) return;
-      setAllUnscopedTasks(prev => (prev.length < idbTasks.length ? idbTasks : prev));
-      if (!hasExternalTasksRef.current) {
+    if (externalTasks === undefined) {
+      loadDiscTasksFromIdb().then(idbTasks => {
+        if (cancelled || idbTasks.length === 0) return;
+        setAllUnscopedTasks(prev => (prev.length < idbTasks.length ? idbTasks : prev));
         const scoped = isAgency || !isAdmin ? filterDisconnectionTasksForUser(idbTasks, currentUser) : idbTasks;
         setTasks(prev => (prev.length < scoped.length ? scoped : prev));
-      }
-    }).catch(() => {});
+      }).catch(() => {});
 
-    // Only fetch if externalTasks was not provided by parent App
-    if (!hasExternalTasksRef.current) {
       loadData(false, false);
     }
+
     const interval = setInterval(() => {
-      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current) {
+      if (!document.hidden && !inFlightRef.current && externalTasks === undefined) {
         loadData(true, false);
       }
     }, 30000);
     const onGlobalRefresh = () => {
+      if (externalTasks !== undefined) return; // Parent App.tsx already handles global refresh cleanly
       inFlightRef.current = false;
       loadData(true, true);
     };
     const onFocusOrVisible = () => {
-      if (!document.hidden && !inFlightRef.current && !hasExternalTasksRef.current && Date.now() - lastBackupPollTsRef.current >= 8000) {
+      if (!document.hidden && !inFlightRef.current && externalTasks === undefined && Date.now() - lastBackupPollTsRef.current >= 8000) {
         loadData(true, false);
       }
     };
@@ -747,14 +751,19 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [loadData, isAgency, isAdmin, currentUser]);
+  }, [loadData, isAgency, isAdmin, currentUser, externalTasks]);
 
-  // Keep Agency Last Updates automatically synced live with Google Sheets while the modal is open
+  // Keep Agency Last Updates automatically synced using lightweight delta/version check while open
   useEffect(() => {
     if (!isAgencyLastUpdatesOpen) return;
     const liveModalInterval = setInterval(() => {
-      if (!document.hidden && !inFlightRef.current) {
-        loadData(false, true);
+      if (document.hidden) return;
+      if (hasExternalTasksRef.current) {
+        try {
+          window.dispatchEvent(new CustomEvent('power-disconnection-incremental-sync', { detail: { refreshSheet: true } }));
+        } catch {}
+      } else if (!inFlightRef.current) {
+        loadData(false, false);
       }
     }, 8000);
     return () => clearInterval(liveModalInterval);
@@ -2868,12 +2877,18 @@ export const DisconnectionTaskManagement: React.FC<DisconnectionTaskManagementPr
       <AgencyLastUpdatesModal
         isOpen={isAgencyLastUpdatesOpen}
         onClose={() => setIsAgencyLastUpdatesOpen(false)}
-        tasks={allUnscopedTasks.length > 0 ? allUnscopedTasks : tasks}
+        tasks={Array.isArray(allExternalTasks) ? allExternalTasks : (allUnscopedTasks.length > 0 ? allUnscopedTasks : tasks)}
         availableUsers={availableWorkers}
         currentUser={currentUser}
         onRefresh={() => loadData(true, true)}
         onOpenModal={() => {
-          loadData(true, true);
+          if (hasExternalTasksRef.current) {
+            try {
+              window.dispatchEvent(new CustomEvent('power-disconnection-incremental-sync', { detail: { refreshSheet: true } }));
+            } catch {}
+          } else {
+            loadData(false, true);
+          }
         }}
         isRefreshing={isRefreshing}
         lang={lang}

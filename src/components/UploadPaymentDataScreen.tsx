@@ -48,6 +48,51 @@ function normalizeHeaderName(val: unknown): string {
     .toLowerCase();
 }
 
+const PREVIEW_CID_HEADERS = new Set([
+  'consumer id', 'consumerid', 'consumer no', 'consumerno', 'consumer number',
+  'con id', 'con no', 'ca no', 'account number', 'account no', 'acct no'
+]);
+const PREVIEW_AMT_HEADERS = new Set([
+  'amount', 'paid amount', 'paidamount', 'pay amount', 'payment amount',
+  'collection amount', 'amt', 'paid amt'
+]);
+const PREVIEW_DATE_HEADERS = new Set([
+  'date', 'paid date', 'paiddate', 'payment date', 'collection date',
+  'receipt date', 'pay date', 'tran date', 'transaction date'
+]);
+
+function detectPreviewPaymentColumns(row: unknown[]): {
+  consumerIdCol: number;
+  amountCol: number;
+  dateCol: number;
+  score: number;
+  detectedColumns: string[];
+} {
+  let consumerIdCol = -1;
+  let amountCol = -1;
+  let dateCol = -1;
+  const detectedColumns: string[] = [];
+
+  for (let c = 0; c < row.length; c++) {
+    const raw = String(row[c] ?? '').trim();
+    if (raw) detectedColumns.push(raw);
+    const norm = normalizeHeaderName(raw);
+    if (norm === 'consumer id') consumerIdCol = c;
+    else if (norm === 'amount') amountCol = c;
+    else if (norm === 'date') dateCol = c;
+  }
+
+  for (let c = 0; c < row.length; c++) {
+    const norm = normalizeHeaderName(row[c]);
+    if (consumerIdCol === -1 && PREVIEW_CID_HEADERS.has(norm)) consumerIdCol = c;
+    else if (amountCol === -1 && PREVIEW_AMT_HEADERS.has(norm)) amountCol = c;
+    else if (dateCol === -1 && PREVIEW_DATE_HEADERS.has(norm)) dateCol = c;
+  }
+
+  const score = (consumerIdCol !== -1 ? 1 : 0) + (amountCol !== -1 ? 1 : 0) + (dateCol !== -1 ? 1 : 0);
+  return { consumerIdCol, amountCol, dateCol, score, detectedColumns };
+}
+
 function isRowBlank(row: unknown[]): boolean {
   if (!Array.isArray(row) || row.length === 0) return true;
   return row.every(cell => cell === null || cell === undefined || String(cell).trim() === '');
@@ -240,9 +285,20 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
       }
 
       let headerRowIdx = -1;
+      let firstNonBlankIdx = -1;
+      let bestMatch: ReturnType<typeof detectPreviewPaymentColumns> | null = null;
+      let scannedNonBlank = 0;
+
       for (let i = 0; i < matrix.length; i++) {
-        if (!isRowBlank(matrix[i])) {
+        if (isRowBlank(matrix[i])) continue;
+        if (firstNonBlankIdx === -1) firstNonBlankIdx = i;
+        scannedNonBlank++;
+        const cols = detectPreviewPaymentColumns(matrix[i]);
+        if (!bestMatch || cols.score > bestMatch.score) {
+          bestMatch = cols;
           headerRowIdx = i;
+        }
+        if (cols.score === 3 || scannedNonBlank >= 20) {
           break;
         }
       }
@@ -253,20 +309,13 @@ export const UploadPaymentDataScreen: React.FC<UploadPaymentDataScreenProps> = (
         return;
       }
 
-      const headerRow = matrix[headerRowIdx];
-      let consumerIdCol = -1;
-      let amountCol = -1;
-      let dateCol = -1;
-      const detectedColumns: string[] = [];
-
-      for (let c = 0; c < headerRow.length; c++) {
-        const rawHeader = String(headerRow[c] ?? '').trim();
-        if (rawHeader) detectedColumns.push(rawHeader);
-        const norm = normalizeHeaderName(rawHeader);
-        if (consumerIdCol === -1 && norm === 'consumer id') consumerIdCol = c;
-        else if (amountCol === -1 && norm === 'amount') amountCol = c;
-        else if (dateCol === -1 && norm === 'date') dateCol = c;
+      if (bestMatch && bestMatch.score === 0 && firstNonBlankIdx !== -1) {
+        headerRowIdx = firstNonBlankIdx;
+        bestMatch = detectPreviewPaymentColumns(matrix[firstNonBlankIdx]);
       }
+
+      const { consumerIdCol, amountCol, dateCol, detectedColumns } =
+        bestMatch || detectPreviewPaymentColumns(matrix[headerRowIdx]);
 
       const missing: string[] = [];
       if (consumerIdCol === -1) missing.push('Consumer ID');

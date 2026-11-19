@@ -3173,6 +3173,7 @@ function handleUploadDisconnectionPaymentData(body) {
     let notFoundCount = 0;
     let failedCount = 0;
     const rowResults = [];
+    const runningRemainingByCid = {};
 
     for (let i = 0; i < records.length; i++) {
       const rec = records[i] || {};
@@ -3229,7 +3230,9 @@ function handleUploadDisconnectionPaymentData(body) {
       }
 
       const paidAmtRounded = Math.round(amountVal * 100) / 100;
-      const outstandingAfter = Math.max(0, Math.round((d2NetOs - paidAmtRounded) * 100) / 100);
+      const baseRemaining = runningRemainingByCid[nCid] !== undefined ? runningRemainingByCid[nCid] : d2NetOs;
+      const outstandingAfter = Math.max(0, Math.round((baseRemaining - paidAmtRounded) * 100) / 100);
+      runningRemainingByCid[nCid] = outstandingAfter;
 
       // Update ONLY the four existing payment columns in place
       s.getRange(sheetRow, paidAmountCol + 1).setValue(paidAmtRounded);

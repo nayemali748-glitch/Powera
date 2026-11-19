@@ -2129,7 +2129,7 @@ function toCompactCachedDiscTask(t: any): Record<string, any> {
   const rawPhoto = String(t.photoUrl || t['Image'] || t.imageUrl || '').trim();
   const safePhoto = rawPhoto.startsWith('data:') && rawPhoto.length > 2000 ? '' : rawPhoto;
   const rawStatus = String(t.taskStatus || t.disconStatus || t['Discon Status'] || 'PENDING').trim().toUpperCase();
-  const effectiveStatus = !rawStatus || rawStatus === 'CONNECTED' || rawStatus === 'COMPLETED' ? 'PENDING' : rawStatus;
+  const effectiveStatus = !rawStatus || rawStatus === 'CONNECTED' ? 'PENDING' : rawStatus;
   const agency = String(
     t['Agency'] || t.Agency || t.agency || t.assignedAgency ||
     (t.assignedWorkerName && t.assignedWorkerName !== 'Worker' ? t.assignedWorkerName : '') || ''
@@ -2398,7 +2398,7 @@ export function fastNormalizeServerDisconnectionTask(t: any, idx = 0): Disconnec
   const cAddr = String(t.consumerAddress ?? t['Address'] ?? '').trim();
   const phone = String(t.phoneNumber ?? t.mobileNumber ?? '').trim();
   const rawSt = String(t.disconStatus || t['Discon Status'] || t.taskStatus || 'PENDING').trim().toUpperCase();
-  const normSt = !rawSt || rawSt === 'CONNECTED' || rawSt === 'COMPLETED' ? 'PENDING' : rawSt;
+  const normSt = !rawSt || rawSt === 'CONNECTED' ? 'PENDING' : rawSt;
   const reissueApproved = Boolean(t.reissueApproved || normSt === 'REISSUE');
   const effectiveStatus = reissueApproved ? 'REISSUE' : normSt;
   const remarks = String(t.workerRemarks ?? t.notes ?? t['Notes'] ?? '').trim();
@@ -2523,9 +2523,8 @@ export function setCachedDisconnectionTasksSync(tasks: DisconnectionTask[]) {
       try {
         localStorage.setItem(cacheKey, JSON.stringify(compact));
       } catch {
-        try {
-          localStorage.setItem(cacheKey, JSON.stringify(compact.slice(0, 1500)));
-        } catch {}
+        // Never store a truncated subset in localStorage; IndexedDB holds the complete snapshot
+        try { localStorage.removeItem(cacheKey); } catch {}
       }
       saveDiscTasksToIdb(compact).catch(() => {});
     } catch {}
@@ -2580,9 +2579,7 @@ export function cleanDisconnectionTask(t: any): DisconnectionTask {
     .trim();
   const rawStatus = String(t['Discon Status'] || t.disconStatus || t.taskStatus || 'PENDING').trim().toUpperCase();
   const normalizedStatus =
-    !rawStatus ||
-    rawStatus === 'CONNECTED' ||
-    rawStatus === 'COMPLETED'
+    !rawStatus || rawStatus === 'CONNECTED'
       ? 'PENDING'
       : rawStatus;
   const resolvedPhoto = String(t.photoUrl || t['Image'] || t.imageUrl || t.image || '').trim();
@@ -2712,6 +2709,178 @@ export function cleanDisconnectionTask(t: any): DisconnectionTask {
   };
 }
 
+export interface BackendSyncStatus {
+  success: boolean;
+  discVersion: number;
+  entriesVersion: number;
+  workOrdersVersion: number;
+  sheetRefreshing?: boolean;
+  ts?: number;
+}
+
+export interface DisconnectionDeltaResponse {
+  success: boolean;
+  unchanged?: boolean;
+  delta?: boolean;
+  requiresFullResync?: boolean;
+  version: number;
+  updatedTasks?: DisconnectionTask[];
+  deletedIds?: string[];
+  tasks?: DisconnectionTask[];
+  stats?: DisconnectionStats;
+}
+
+export async function fetchSyncStatus(refresh = false): Promise<BackendSyncStatus | null> {
+  try {
+    const url = refresh ? '/api/sync-status?refresh=true' : '/api/sync-status';
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
+      cache: 'no-store'
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const data = await res.json();
+      if (data && data.success) return data as BackendSyncStatus;
+    }
+  } catch {}
+  return null;
+}
+
+export function applyDisconnectionDelta(
+  prevTasks: DisconnectionTask[],
+  updatedTasks: DisconnectionTask[] = [],
+  deletedIds: string[] = []
+): DisconnectionTask[] {
+  const deletedSet = new Set(
+    (Array.isArray(deletedIds) ? deletedIds : [])
+      .map(id => String(id || '').replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '').replace(/\.0+$/, '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const updatedByKey = new Map<string, DisconnectionTask>();
+  for (let i = 0; i < updatedTasks.length; i++) {
+    const raw = updatedTasks[i];
+    if (!isValidDisconnectionTaskOrRow(raw)) continue;
+    const norm = fastNormalizeServerDisconnectionTask(raw, i);
+    const k = String(norm.consumerId || (norm as any)['Consumer Id'] || norm.taskId || '')
+      .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
+      .replace(/\.0+$/, '')
+      .trim()
+      .toLowerCase();
+    if (k) {
+      updatedByKey.set(k, norm);
+      deletedSet.delete(k);
+    }
+  }
+
+  if (deletedSet.size === 0 && updatedByKey.size === 0) {
+    return prevTasks;
+  }
+
+  const next: DisconnectionTask[] = [];
+  const seenKeys = new Set<string>();
+  for (let i = 0; i < prevTasks.length; i++) {
+    const cur = prevTasks[i];
+    const k = String(cur.consumerId || (cur as any)['Consumer Id'] || cur.taskId || '')
+      .replace(/^(TASK-DISC-|PWR-DIS-|SUB-DISC-)/i, '')
+      .replace(/\.0+$/, '')
+      .trim()
+      .toLowerCase();
+    if (k && deletedSet.has(k)) {
+      continue;
+    }
+    if (k && updatedByKey.has(k)) {
+      const patched = updatedByKey.get(k)!;
+      next.push({
+        ...patched,
+        serialNumber: cur.serialNumber || patched.serialNumber || `SL ${String(next.length + 1).padStart(3, '0')}`
+      });
+      seenKeys.add(k);
+    } else {
+      next.push(cur);
+      if (k) seenKeys.add(k);
+    }
+  }
+
+  for (const [k, upd] of updatedByKey.entries()) {
+    if (!seenKeys.has(k)) {
+      next.push({
+        ...upd,
+        serialNumber: upd.serialNumber || `SL ${String(next.length + 1).padStart(3, '0')}`
+      });
+    }
+  }
+
+  return mergeClientDisconnectionOverlay(next);
+}
+
+export async function fetchDisconnectionChanges(
+  sinceVersion: number,
+  params: { refresh?: boolean; blocking?: boolean; includeArchived?: boolean } = {}
+): Promise<DisconnectionDeltaResponse | null> {
+  try {
+    const query = new URLSearchParams();
+    query.set('since', String(Math.max(0, Math.floor(sinceVersion || 0))));
+    if (params.refresh) query.set('refresh', 'true');
+    if (params.blocking) query.set('blocking', 'true');
+    if (params.includeArchived) query.set('includeArchived', 'true');
+
+    const res = await fetch(`/api/disconnection-tasks/changes?${query.toString()}`, {
+      headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
+      cache: 'no-store'
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('application/json')) return null;
+
+    const data = await res.json();
+    if (!data || !data.success) return null;
+
+    if (data.unchanged) {
+      return {
+        success: true,
+        unchanged: true,
+        version: Number(data.version || sinceVersion || 0)
+      };
+    }
+
+    if (data.requiresFullResync && Array.isArray(data.tasks)) {
+      const mappedList: DisconnectionTask[] = [];
+      for (let i = 0; i < data.tasks.length; i++) {
+        const t = data.tasks[i];
+        if (isValidDisconnectionTaskOrRow(t)) {
+          mappedList.push(fastNormalizeServerDisconnectionTask(t, mappedList.length));
+        }
+      }
+      const cleaned = mergeClientDisconnectionOverlay(mappedList);
+      setCachedDisconnectionTasksSync(cleaned);
+      return {
+        success: true,
+        requiresFullResync: true,
+        version: Number(data.version || 0),
+        tasks: cleaned,
+        stats: data.stats || computeStats(cleaned)
+      };
+    }
+
+    const rawUpdated = Array.isArray(data.updatedTasks) ? data.updatedTasks : [];
+    const normalizedUpdated: DisconnectionTask[] = [];
+    for (let i = 0; i < rawUpdated.length; i++) {
+      if (isValidDisconnectionTaskOrRow(rawUpdated[i])) {
+        normalizedUpdated.push(fastNormalizeServerDisconnectionTask(rawUpdated[i], i));
+      }
+    }
+    return {
+      success: true,
+      delta: true,
+      version: Number(data.version || sinceVersion || 0),
+      updatedTasks: normalizedUpdated,
+      deletedIds: Array.isArray(data.deletedIds) ? data.deletedIds : [],
+      stats: data.stats
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDisconnectionTasks(params: {
   workerId?: string;
   workerName?: string;
@@ -2721,8 +2890,7 @@ export async function fetchDisconnectionTasks(params: {
   includeArchived?: boolean;
   refresh?: boolean;
   blocking?: boolean;
-} = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats }> {
-  const session = getActiveUserSessionSync();
+} = {}): Promise<{ tasks: DisconnectionTask[]; stats: DisconnectionStats; version?: number; fromBackend?: boolean }> {
   // Step 1: Call Backend API (/api/disconnection-tasks)
   try {
     const query = new URLSearchParams();
@@ -2753,7 +2921,12 @@ export async function fetchDisconnectionTasks(params: {
         if (!params.search && (!params.status || params.status === 'ALL')) {
           setCachedDisconnectionTasksSync(cleaned);
         }
-        return { tasks: cleaned, stats: data.stats || computeStats(cleaned) };
+        return {
+          tasks: cleaned,
+          stats: data.stats || computeStats(cleaned),
+          version: typeof data.version === 'number' ? data.version : undefined,
+          fromBackend: true
+        };
       }
     }
   } catch (apiErr) {
@@ -2772,8 +2945,8 @@ export async function fetchDisconnectionTasks(params: {
       ? gasRes.data
       : Array.isArray(gasRes)
       ? gasRes
-      : [];
-    if (rawArr.length > 0) {
+      : null;
+    if (Array.isArray(rawArr)) {
       const validTasks = rawArr.filter(isValidDisconnectionTaskOrRow);
       const sorted = validTasks.slice().sort((a: any, b: any) => {
         const idA = String(a['Consumer Id'] || a.consumerId || '').trim();
@@ -2788,7 +2961,7 @@ export async function fetchDisconnectionTasks(params: {
       if (!params.search && (!params.status || params.status === 'ALL')) {
         setCachedDisconnectionTasksSync(cleaned);
       }
-      return { tasks: cleaned, stats: computeStats(cleaned) };
+      return { tasks: cleaned, stats: computeStats(cleaned), fromBackend: true };
     }
   } catch (gasErr) {
     console.warn('Direct GAS Disconnection fetch notice:', gasErr);
@@ -2797,7 +2970,8 @@ export async function fetchDisconnectionTasks(params: {
   const fallback = getCachedDisconnectionTasksSync();
   return {
     tasks: fallback,
-    stats: computeStats(fallback)
+    stats: computeStats(fallback),
+    fromBackend: false
   };
 }
 
@@ -3168,6 +3342,49 @@ export async function submitDisconnectionTaskReport(report: {
     _hasUserRemarkUpdate: true
   };
 
+  const hasExplicitPhotoField =
+    (report as any).photoDataUrl !== undefined ||
+    report.photoUrl !== undefined ||
+    (report as any)['Image'] !== undefined ||
+    (report as any).imageUrl !== undefined ||
+    (report as any).image !== undefined;
+  const pickFirstNonEmptyStr = (...vals: any[]) => {
+    for (const v of vals) {
+      if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    }
+    return '';
+  };
+  const effectivePhoto = hasExplicitPhotoField
+    ? pickFirstNonEmptyStr(
+        (report as any).photoDataUrl,
+        report.photoUrl,
+        (report as any)['Image'],
+        (report as any).imageUrl,
+        (report as any).image
+      )
+    : pickFirstNonEmptyStr(
+        existingCachedTask.photoUrl,
+        (existingCachedTask as any)['Image'],
+        (existingCachedTask as any).imageUrl,
+        (existingCachedTask as any).image
+      );
+
+  if (effectivePhoto) {
+    payload.photoUrl = effectivePhoto;
+    payload['Image'] = effectivePhoto;
+    payload.imageUrl = effectivePhoto;
+    if (effectivePhoto.startsWith('data:')) {
+      payload.photoDataUrl = effectivePhoto;
+    } else {
+      delete payload.photoDataUrl;
+    }
+  } else if (hasExplicitPhotoField) {
+    payload.photoUrl = '';
+    payload['Image'] = '';
+    payload.imageUrl = '';
+    delete payload.photoDataUrl;
+  }
+
   // Immediately persist to client overlay & local cache (0ms latency)
   saveClientDisconnectionOverlay(cId, payload);
   try {
@@ -3189,7 +3406,7 @@ export async function submitDisconnectionTaskReport(report: {
   // Try Express backend /api/disconnection-tasks/report
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), 45000);
     const res = await fetch('/api/disconnection-tasks/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3206,7 +3423,7 @@ export async function submitDisconnectionTaskReport(report: {
             const nextCache = curCache.map(t => {
               const tCId = String(t.consumerId || (t as any)['Consumer Id'] || '').trim();
               if ((cId && tCId === cId) || (report.taskId && t.taskId === report.taskId)) {
-                return { ...t, photoUrl: data.imageUrl, Image: data.imageUrl };
+                return { ...t, photoUrl: data.imageUrl, imageUrl: data.imageUrl, Image: data.imageUrl };
               }
               return t;
             });
@@ -3295,6 +3512,12 @@ export async function submitDisconnectionTaskReport(report: {
     if (effectiveGisPole) {
       statusOnlyPayload.gisPole = effectiveGisPole;
       statusOnlyPayload['Gis Pole'] = effectiveGisPole;
+    }
+    if (effectivePhoto && !effectivePhoto.startsWith('data:')) {
+      statusOnlyPayload.photoUrl = effectivePhoto;
+      statusOnlyPayload.imageUrl = effectivePhoto;
+      statusOnlyPayload.image = effectivePhoto;
+      statusOnlyPayload['Image'] = effectivePhoto;
     }
     try {
       const upRes = await callGasApi<any>('updateEntry', {
@@ -3753,13 +3976,13 @@ export async function uploadDisconnectionPaymentData(
           })
         });
 
-        if ((batchResp.status === 502 || batchResp.status === 503 || batchResp.status === 504) && (items.length > 10 || retryAttempt < 2)) {
+        if ((batchResp.status === 502 || batchResp.status === 503 || batchResp.status === 504) && (items.length > 6 || retryAttempt < 3)) {
           throw new Error(`GATEWAY_${batchResp.status}`);
         }
 
         const batchData = await batchResp.json().catch(() => null);
         if (!batchResp.ok || !batchData || batchData.success === false) {
-          if (batchResp.status >= 500 && (items.length > 10 || retryAttempt < 1)) {
+          if (batchResp.status >= 500 && (items.length > 6 || retryAttempt < 2)) {
             throw new Error(`SERVER_${batchResp.status}`);
           }
           const err: any = new Error(batchData?.error || batchData?.message || `Batch update failed with status ${batchResp.status}`);
@@ -3776,7 +3999,7 @@ export async function uploadDisconnectionPaymentData(
           err?.name === 'TypeError' ||
           /network|fetch|timeout|aborted/i.test(msg);
 
-        if (isTransient && items.length > 10) {
+        if (isTransient && items.length > 6) {
           const mid = Math.ceil(items.length / 2);
           await new Promise(resolve => setTimeout(resolve, 600));
           const left = await sendBatchWithRetryAndSplit(items.slice(0, mid), false, 0);
@@ -3784,7 +4007,7 @@ export async function uploadDisconnectionPaymentData(
           return [...left, ...right];
         }
 
-        if (isTransient && retryAttempt < 2) {
+        if (isTransient && retryAttempt < 3) {
           await new Promise(resolve => setTimeout(resolve, 900 * (retryAttempt + 1)));
           return sendBatchWithRetryAndSplit(items, isFinalChunk, retryAttempt + 1);
         }
@@ -3793,7 +4016,7 @@ export async function uploadDisconnectionPaymentData(
       }
     };
 
-    const CLIENT_PAYMENT_BATCH_SIZE = 50;
+    const CLIENT_PAYMENT_BATCH_SIZE = 24;
     for (let start = 0; start < matchedItems.length; start += CLIENT_PAYMENT_BATCH_SIZE) {
       const slice = matchedItems.slice(start, start + CLIENT_PAYMENT_BATCH_SIZE);
       const isFinalBatch = start + CLIENT_PAYMENT_BATCH_SIZE >= matchedItems.length;
@@ -3896,6 +4119,9 @@ export async function uploadDisconnectionPaymentData(
           };
         });
         setCachedDisconnectionTasksSync(nextCached);
+        try {
+          window.dispatchEvent(new CustomEvent('power-disconnection-live-synced', { detail: nextCached }));
+        } catch {}
       }
     }
   } catch {}

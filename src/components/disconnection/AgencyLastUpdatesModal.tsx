@@ -9,14 +9,11 @@ import {
 } from 'lucide-react';
 import { DisconnectionTask, UserSession } from '../../types';
 import {
-  isUpdatedDisconnectionRecord,
   getTaskReportYMD,
-  getTodayYMD,
-  getDeduplicatedUpdatedTasks
+  getTodayYMD
 } from './DisconnectionDailyReportModal';
 import {
-  cleanWorkerOrAgencyName,
-  cleanDisconnectionNotes
+  cleanWorkerOrAgencyName
 } from '../../utils/disconnectionClassifier';
 
 export interface AgencyLastUpdatesWorkerRef {
@@ -235,42 +232,63 @@ export const AgencyLastUpdatesModal: React.FC<AgencyLastUpdatesModalProps> = ({
     return stripGenericAgencySuffix(raw);
   }, [currentUser]);
 
-  // Build each agency's exact genuine update count within the 3-day window (Today=Green, 1 day ago=Yellow, 2 days ago=Red; 3+ days ago=hidden)
+  // Read strictly from backend 'Discon Status' column, deduplicated per Consumer ID, within the 3-day window
   const agencyRows = useMemo<AgencyDateUpdateRow[]>(() => {
-    const dedupedUpdated = getDeduplicatedUpdatedTasks(tasks);
-    const byAgencyDate = new Map<string, AgencyDateUpdateRow>();
+    const NON_UPDATED_STATUSES = new Set([
+      '',
+      'PENDING',
+      'IN PROGRESS',
+      'CONNECTED',
+      'REISSUE',
+      'DELETED',
+      '[DELETED_BY_ADMIN]',
+      'ARCHIVED',
+      'UNASSIGNED',
+      'NEW',
+      '-'
+    ]);
 
-    dedupedUpdated.forEach(task => {
-      const agencyName = resolveCanonicalAgencyName(task, nonAdminUsers);
-      if (!agencyName) return;
+    // Deduplicate directly by normalized Consumer ID, keeping the most recently updated entry if duplicates exist
+    const dedupedByConsumer = new Map<string, { task: DisconnectionTask; tsMs: number }>();
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      if (!task || typeof task !== 'object') continue;
+      if ((task as any)._deleted === true) continue;
 
-      const rawStatus = String(
-        (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? 'PENDING'
+      const rawDisconStatus = String(
+        (task as any)['Discon Status'] ?? task.disconStatus ?? task.taskStatus ?? ''
       )
         .trim()
         .toUpperCase();
 
-      // Count strictly records updated via Update Status -> Set Status (DISCONNECT, PAID, NOT FOUND, DISPUTE, OFFICE TEAM)
-      const isSetStatusSaved =
-        rawStatus === 'DISCONNECT' ||
-        rawStatus === 'DISCONNECTED' ||
-        rawStatus === 'COMPLETED' ||
-        rawStatus === 'PAID' ||
-        rawStatus === 'AGENCY PAID' ||
-        rawStatus === 'NOT FOUND' ||
-        rawStatus === 'DISPUTE' ||
-        rawStatus === 'OFFICE TEAM';
+      if (NON_UPDATED_STATUSES.has(rawDisconStatus)) continue;
 
-      if (!isSetStatusSaved) {
-        return;
+      const rawCid = String((task as any)['Consumer Id'] ?? task.consumerId ?? task.taskId ?? `ROW-${i}`)
+        .replace(/^(PWR-DIS-|TASK-DISC-|SUB-DISC-|PWR-)/i, '')
+        .replace(/\.0+$/, '')
+        .replace(/[, \-_]/g, '')
+        .trim()
+        .toLowerCase();
+      if (!rawCid) continue;
+
+      const tsMs = getTaskUpdateTimeMs(task, getTaskReportYMD(task));
+      const existing = dedupedByConsumer.get(rawCid);
+      if (!existing || tsMs >= existing.tsMs) {
+        dedupedByConsumer.set(rawCid, { task, tsMs });
       }
+    }
+
+    const byAgencyDate = new Map<string, AgencyDateUpdateRow>();
+
+    for (const { task, tsMs } of dedupedByConsumer.values()) {
+      const agencyName = resolveCanonicalAgencyName(task, nonAdminUsers);
+      if (!agencyName) continue;
 
       const ymd = getTaskReportYMD(task);
-      if (!ymd) return;
+      if (!ymd) continue;
 
       const daysAgo = Math.max(0, getCalendarDaysAgo(ymd, todayYMD));
       const colorState = getFreshnessColorState(daysAgo);
-      const tsMs = getTaskUpdateTimeMs(task, ymd);
 
       const agencyCore = stripGenericAgencySuffix(agencyName);
       const isMine = Boolean(
@@ -301,7 +319,7 @@ export const AgencyLastUpdatesModal: React.FC<AgencyLastUpdatesModalProps> = ({
           existing.latestTimestampMs = tsMs;
         }
       }
-    });
+    }
 
     // Pick only the most recent update date per agency, and keep ONLY updates within the last 3 days (daysAgo 0, 1, 2)
     const latestPerAgency = new Map<string, AgencyDateUpdateRow>();

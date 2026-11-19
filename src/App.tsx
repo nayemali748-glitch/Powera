@@ -21,6 +21,9 @@ import {
   fetchWorkOrders,
   logoutUser,
   fetchDisconnectionTasks,
+  fetchSyncStatus,
+  fetchDisconnectionChanges,
+  applyDisconnectionDelta,
   getCachedEntriesSync,
   getCachedDisconnectionTasksSync,
   getCachedWorkOrdersSync,
@@ -226,7 +229,13 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const lastDataHashRef = useRef<string>('');
   const lastAutoPollTsRef = useRef<number>(0);
+  const discVersionRef = useRef<number>(0);
+  const entriesVersionRef = useRef<number>(0);
+  const workOrdersVersionRef = useRef<number>(0);
+  const hasLoadedBackendOnceRef = useRef<boolean>(false);
+  const deltaInFlightRef = useRef<boolean>(false);
   const loadDataRef = useRef<((silent?: boolean | unknown, forceRefresh?: boolean, throwOnError?: boolean) => Promise<void>) | null>(null);
+  const syncChangedOnlyRef = useRef<((checkSheetRefresh?: boolean) => Promise<void>) | null>(null);
   const [workerName, setWorkerName] = useState<string>(() => {
     return localStorage.getItem('power_worker_name') || '';
   });
@@ -416,73 +425,82 @@ export default function App() {
       });
     };
 
+    const onSseDelta = (e: Event) => {
+      const detail = (e as CustomEvent<{ updated?: any[]; deletedIds?: string[]; version?: number }>)?.detail;
+      if (!detail) return;
+      const updated = Array.isArray(detail.updated) ? detail.updated : [];
+      const deletedIds = Array.isArray(detail.deletedIds) ? detail.deletedIds : [];
+      if (updated.length === 0 && deletedIds.length === 0) return;
+      setDisconnectionTasks((prev) => {
+        const patched = applyDisconnectionDelta(prev, updated, deletedIds);
+        if (patched !== prev) {
+          lastDataHashRef.current = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(patched)}`;
+          setCachedDisconnectionTasksSync(patched);
+        }
+        return patched;
+      });
+      if (typeof detail.version === 'number' && detail.version > discVersionRef.current) {
+        discVersionRef.current = detail.version;
+      }
+      setLastSyncedAt(new Date());
+    };
+
     const onLivePing = (e: Event) => {
       const blocking = Boolean((e as CustomEvent<any>)?.detail?.blocking);
-      if (blocking || (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500)) {
-        loadDataRef.current?.(true, blocking);
+      if (blocking) {
+        loadDataRef.current?.(true, true);
+      } else if (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500) {
+        syncChangedOnlyRef.current?.(false);
       }
+    };
+
+    const onIncrementalSyncEvent = (e: Event) => {
+      const checkSheet = Boolean((e as CustomEvent<any>)?.detail?.refreshSheet);
+      syncChangedOnlyRef.current?.(checkSheet);
     };
 
     const onLiveSyncedList = (e: Event) => {
       const incomingList = (e as CustomEvent<DisconnectionTask[]>)?.detail;
-      if (!Array.isArray(incomingList) || incomingList.length === 0) return;
+      if (!Array.isArray(incomingList)) return;
+      const now = Date.now();
       const mergedList =
         recentDiscUpdatesRef.current.size === 0
           ? incomingList
           : incomingList.map((t) => {
               const k = normKey(t);
               const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
-              if (rec && Date.now() - rec.timestamp < 180000) {
-                const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
-                const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
-                const inRem = String(t.workerRemarks || t.notes || '').trim();
-                const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
-                const inDate = String(t.disconDate || t.paidDate || '').trim();
-                const locDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
-                const inAgency = String((t as any)['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
-                const locAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
-                if (inSt !== locSt || inRem !== locRem || inDate !== locDate || (locAgency && inAgency !== locAgency)) {
-                  return {
-                    ...t,
-                    taskStatus: rec.task.taskStatus,
-                    disconStatus: rec.task.disconStatus,
-                    'Discon Status': rec.task['Discon Status'],
-                    workerRemarks: rec.task.workerRemarks,
-                    workerReport: rec.task.workerReport,
-                    notes: rec.task.notes,
-                    Notes: rec.task.Notes,
-                    disconDate: rec.task.disconDate || t.disconDate,
-                    'Discon Date': rec.task['Discon Date'] || (t as any)['Discon Date'],
-                    paidDate: rec.task.paidDate || t.paidDate,
-                    'Paid Date': rec.task['Paid Date'] || (t as any)['Paid Date'],
-                    agency: rec.task.agency || t.agency,
-                    Agency: rec.task.Agency || t.Agency,
-                    assignedAgency: rec.task.assignedAgency || t.assignedAgency,
-                    submittedBy: rec.task.submittedBy || t.submittedBy,
-                    lastUpdated: rec.task.lastUpdated || t.lastUpdated,
-                    updatedAt: rec.task.updatedAt || t.updatedAt,
-                    statusHistory: rec.task.statusHistory || t.statusHistory
-                  };
+              // Strictly short 10s in-flight guard; never fight backend truth long-term
+              if (rec && now - rec.timestamp < 10000) {
+                const inTs = Number((t as any)._localUpdatedAt || 0);
+                const locTs = Number((rec.task as any)._localUpdatedAt || 0);
+                if (locTs > inTs) {
+                  return { ...t, ...rec.task, serialNumber: t.serialNumber || rec.task.serialNumber };
                 }
               }
               return t;
             });
       const nextHash = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(mergedList)}`;
-      lastDataHashRef.current = nextHash;
+      if (nextHash !== lastDataHashRef.current) {
+        lastDataHashRef.current = nextHash;
+        setDisconnectionTasks(mergedList);
+        setCachedDisconnectionTasksSync(mergedList);
+      }
       lastAutoPollTsRef.current = Date.now();
-      setDisconnectionTasks(mergedList);
-      setCachedDisconnectionTasksSync(mergedList);
       setLastSyncedAt(new Date());
     };
 
     window.addEventListener('power-disconnection-task-updated', onTaskUpdated);
     window.addEventListener('power-disconnection-sse-update', onSseTaskUpdated);
+    window.addEventListener('power-disconnection-sse-delta', onSseDelta);
     window.addEventListener('power-disconnection-live-ping', onLivePing);
+    window.addEventListener('power-disconnection-incremental-sync', onIncrementalSyncEvent);
     window.addEventListener('power-disconnection-live-synced', onLiveSyncedList);
     return () => {
       window.removeEventListener('power-disconnection-task-updated', onTaskUpdated);
       window.removeEventListener('power-disconnection-sse-update', onSseTaskUpdated);
+      window.removeEventListener('power-disconnection-sse-delta', onSseDelta);
       window.removeEventListener('power-disconnection-live-ping', onLivePing);
+      window.removeEventListener('power-disconnection-incremental-sync', onIncrementalSyncEvent);
       window.removeEventListener('power-disconnection-live-synced', onLiveSyncedList);
     };
   }, []);
@@ -495,31 +513,32 @@ export default function App() {
     setIsSyncing(true);
     const isSilent = typeof silent === 'boolean' ? silent : false;
     try {
-      if (!isSilent && entries.length === 0 && disconnectionTasksRef.current.length === 0) setLoading(true);
+      if (!isSilent && entriesRef.current.length === 0 && disconnectionTasksRef.current.length === 0) setLoading(true);
 
-      const discPromise = fetchDisconnectionTasks({
-        role: currentUser?.role,
-        workerId: currentUser?.idNo,
-        workerName: currentUser?.name,
-        refresh: forceRefresh,
-        blocking: forceRefresh
-      }).then((res) => {
-        const list: DisconnectionTask[] = Array.isArray(res)
-          ? res
-          : Array.isArray((res as any)?.tasks)
-            ? (res as any).tasks
-            : [];
-        if (list.length > 0 && disconnectionTasksRef.current.length === 0) {
-          setDisconnectionTasks(list);
-        }
-        return res;
-      });
-
-      const [data, orders, discRes] = await Promise.all([
+      const [data, orders, discRes, statusSnapshot] = await Promise.all([
         fetchEntries({ refresh: forceRefresh }),
-        fetchWorkOrders(),
-        discPromise
+        fetchWorkOrders(undefined, forceRefresh),
+        fetchDisconnectionTasks({
+          role: currentUser?.role,
+          workerId: currentUser?.idNo,
+          workerName: currentUser?.name,
+          refresh: forceRefresh,
+          blocking: forceRefresh
+        }),
+        fetchSyncStatus(false)
       ]);
+
+      hasLoadedBackendOnceRef.current = true;
+
+      if (statusSnapshot) {
+        if (typeof statusSnapshot.entriesVersion === 'number') {
+          entriesVersionRef.current = statusSnapshot.entriesVersion;
+        }
+        if (typeof statusSnapshot.workOrdersVersion === 'number') {
+          workOrdersVersionRef.current = statusSnapshot.workOrdersVersion;
+        }
+      }
+
       const rawEntries = (Array.isArray(data) ? data : []).filter((e) => {
         const catUp = String(e?.category || '').toUpperCase().trim();
         const idUp = String(e?.id || '').toUpperCase().trim();
@@ -530,6 +549,19 @@ export default function App() {
         : Array.isArray((discRes as any)?.tasks)
           ? (discRes as any).tasks
           : [];
+      const discFromBackend = Boolean((discRes as any)?.fromBackend);
+      if (typeof (discRes as any)?.version === 'number') {
+        discVersionRef.current = (discRes as any).version;
+      } else if (statusSnapshot && typeof statusSnapshot.discVersion === 'number') {
+        discVersionRef.current = statusSnapshot.discVersion;
+      }
+
+      const now = Date.now();
+      for (const [k, rec] of recentDiscUpdatesRef.current.entries()) {
+        if (now - rec.timestamp > 10000) {
+          recentDiscUpdatesRef.current.delete(k);
+        }
+      }
 
       const validDiscTasks: DisconnectionTask[] =
         recentDiscUpdatesRef.current.size === 0
@@ -542,50 +574,26 @@ export default function App() {
                 .trim()
                 .toLowerCase();
               const rec = k ? recentDiscUpdatesRef.current.get(k) : undefined;
-              if (rec && Date.now() - rec.timestamp < 180000) {
-                const inSt = String(t.taskStatus || t.disconStatus || 'PENDING').trim().toUpperCase();
-                const locSt = String(rec.task.taskStatus || rec.task.disconStatus || 'PENDING').trim().toUpperCase();
-                const inRem = String(t.workerRemarks || t.notes || '').trim();
-                const locRem = String(rec.task.workerRemarks || rec.task.notes || '').trim();
-                const inDate = String(t.disconDate || t.paidDate || '').trim();
-                const locDate = String(rec.task.disconDate || rec.task.paidDate || '').trim();
-                const inAgency = String((t as any)['Agency'] || t.Agency || t.agency || t.assignedAgency || '').trim().toLowerCase();
-                const locAgency = String((rec.task as any)['Agency'] || rec.task.Agency || rec.task.agency || rec.task.assignedAgency || '').trim().toLowerCase();
-                if (inSt !== locSt || inRem !== locRem || inDate !== locDate || (locAgency && inAgency !== locAgency)) {
-                  return {
-                    ...t,
-                    taskStatus: rec.task.taskStatus,
-                    disconStatus: rec.task.disconStatus,
-                    'Discon Status': rec.task['Discon Status'],
-                    workerRemarks: rec.task.workerRemarks,
-                    workerReport: rec.task.workerReport,
-                    notes: rec.task.notes,
-                    Notes: rec.task.Notes,
-                    disconDate: rec.task.disconDate || t.disconDate,
-                    'Discon Date': rec.task['Discon Date'] || (t as any)['Discon Date'],
-                    paidDate: rec.task.paidDate || t.paidDate,
-                    'Paid Date': rec.task['Paid Date'] || (t as any)['Paid Date'],
-                    agency: rec.task.agency || t.agency,
-                    Agency: rec.task.Agency || t.Agency,
-                    assignedAgency: rec.task.assignedAgency || t.assignedAgency,
-                    submittedBy: rec.task.submittedBy || t.submittedBy,
-                    lastUpdated: rec.task.lastUpdated || t.lastUpdated,
-                    updatedAt: rec.task.updatedAt || t.updatedAt,
-                    statusHistory: rec.task.statusHistory || t.statusHistory
-                  };
+              if (rec && now - rec.timestamp < 10000) {
+                const inTs = Number((t as any)._localUpdatedAt || 0);
+                const locTs = Number((rec.task as any)._localUpdatedAt || 0);
+                if (locTs > inTs) {
+                  return { ...t, ...rec.task, serialNumber: t.serialNumber || rec.task.serialNumber };
                 }
               }
               return t;
             });
 
       const safeDiscTasks =
-        validDiscTasks.length > 0 || throwOnError
+        discFromBackend || validDiscTasks.length > 0 || throwOnError
           ? validDiscTasks
           : disconnectionTasksRef.current;
 
-      const newHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(safeDiscTasks)}`;
+      const discHash = computeJsonChangeHash(safeDiscTasks);
+      const entHash = computeJsonChangeHash(rawEntries);
+      const newHash = `${entHash}_disc:${discHash}`;
 
-      if (forceRefresh || newHash !== lastDataHashRef.current || (disconnectionTasksRef.current.length === 0 && safeDiscTasks.length > 0)) {
+      if (forceRefresh || newHash !== lastDataHashRef.current) {
         lastDataHashRef.current = newHash;
         setDisconnectionTasks(safeDiscTasks);
         setEntries(rawEntries);
@@ -614,14 +622,115 @@ export default function App() {
   };
   loadDataRef.current = loadData;
 
+  const syncChangedOnly = async (checkSheetRefresh = false) => {
+    if (!currentUser) return;
+    if (inFlightRef.current || deltaInFlightRef.current) return;
+    if (!hasLoadedBackendOnceRef.current || discVersionRef.current <= 0) {
+      return loadData(true, false);
+    }
+
+    deltaInFlightRef.current = true;
+    lastAutoPollTsRef.current = Date.now();
+    try {
+      const status = await fetchSyncStatus(checkSheetRefresh);
+      if (!status) return;
+
+      const discChanged = status.discVersion !== discVersionRef.current;
+      const entChanged = status.entriesVersion !== entriesVersionRef.current;
+      const woChanged = status.workOrdersVersion !== workOrdersVersionRef.current;
+
+      if (!discChanged && !entChanged && !woChanged) {
+        return;
+      }
+
+      const promises: Promise<any>[] = [];
+
+      if (discChanged) {
+        promises.push(
+          fetchDisconnectionChanges(discVersionRef.current, { refresh: false }).then((deltaRes) => {
+            if (!deltaRes) return;
+            if (deltaRes.unchanged) {
+              discVersionRef.current = deltaRes.version;
+              return;
+            }
+            if (deltaRes.requiresFullResync && Array.isArray(deltaRes.tasks)) {
+              const newTasks = deltaRes.tasks;
+              discVersionRef.current = deltaRes.version;
+              const nextHash = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(newTasks)}`;
+              if (nextHash !== lastDataHashRef.current) {
+                lastDataHashRef.current = nextHash;
+                setDisconnectionTasks(newTasks);
+              }
+              return;
+            }
+            if (deltaRes.delta) {
+              const updated = deltaRes.updatedTasks || [];
+              const deleted = deltaRes.deletedIds || [];
+              discVersionRef.current = deltaRes.version;
+              if (updated.length > 0 || deleted.length > 0) {
+                setDisconnectionTasks((prev) => {
+                  const patched = applyDisconnectionDelta(prev, updated, deleted);
+                  if (patched !== prev) {
+                    lastDataHashRef.current = `${computeJsonChangeHash(entriesRef.current)}_disc:${computeJsonChangeHash(patched)}`;
+                    setCachedDisconnectionTasksSync(patched);
+                  }
+                  return patched;
+                });
+              }
+            }
+          })
+        );
+      }
+
+      if (entChanged) {
+        promises.push(
+          fetchEntries({ refresh: false }).then((data) => {
+            entriesVersionRef.current = status.entriesVersion;
+            const rawEntries = (Array.isArray(data) ? data : []).filter((e) => {
+              const catUp = String(e?.category || '').toUpperCase().trim();
+              const idUp = String(e?.id || '').toUpperCase().trim();
+              return catUp !== 'DISCONNECTION' && !idUp.startsWith('TASK-DISC-') && !idUp.startsWith('PWR-DIS-');
+            });
+            const nextHash = `${computeJsonChangeHash(rawEntries)}_disc:${computeJsonChangeHash(disconnectionTasksRef.current)}`;
+            if (nextHash !== lastDataHashRef.current) {
+              lastDataHashRef.current = nextHash;
+              setEntries(rawEntries);
+            }
+          })
+        );
+      }
+
+      if (woChanged) {
+        promises.push(
+          fetchWorkOrders(undefined, false).then((orders) => {
+            workOrdersVersionRef.current = status.workOrdersVersion;
+            if (Array.isArray(orders)) {
+              const ordersHash = computeJsonChangeHash(orders);
+              if (ordersHash !== lastOrdersHashRef.current) {
+                lastOrdersHashRef.current = ordersHash;
+                setWorkOrders(orders);
+              }
+            }
+          })
+        );
+      }
+
+      await Promise.all(promises);
+      setLastSyncedAt(new Date());
+    } catch (err) {
+      console.warn('Incremental sync notice:', err);
+    } finally {
+      deltaInFlightRef.current = false;
+    }
+  };
+  syncChangedOnlyRef.current = syncChangedOnly;
+
   const discChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleDisconnectionTasksChange = useCallback(() => {
     if (discChangeTimerRef.current) clearTimeout(discChangeTimerRef.current);
     discChangeTimerRef.current = setTimeout(() => {
       discChangeTimerRef.current = null;
-      if (!inFlightRef.current) {
-        loadDataRef.current?.(true, false);
-      }
+      syncChangedOnlyRef.current?.(false);
     }, 350);
   }, []);
 
@@ -631,6 +740,10 @@ export default function App() {
       setEntries([]);
       setDisconnectionTasks([]);
       setWorkOrders([]);
+      discVersionRef.current = 0;
+      entriesVersionRef.current = 0;
+      workOrdersVersionRef.current = 0;
+      hasLoadedBackendOnceRef.current = false;
       return;
     }
 
@@ -641,45 +754,33 @@ export default function App() {
 
     lastDataHashRef.current = '';
     lastOrdersHashRef.current = '';
+    discVersionRef.current = 0;
+    entriesVersionRef.current = 0;
+    workOrdersVersionRef.current = 0;
+    hasLoadedBackendOnceRef.current = false;
+
     const cachedEnt = getCachedEntriesSync();
-    const cachedDisc = getCachedDisconnectionTasksSync();
     const cachedOrd = getCachedWorkOrdersSync();
     if (cachedEnt.length > 0) setEntries(cachedEnt);
-    if (cachedDisc.length > 0) setDisconnectionTasks(cachedDisc);
     if (cachedOrd.length > 0) setWorkOrders(cachedOrd);
 
-    // Hydrate full dataset from IndexedDB in ~5-10ms if localStorage cache was partial/empty
+    // Hydrate full dataset from IndexedDB only once before first backend response arrives
     loadDiscTasksFromIdb().then((idbTasks) => {
-      if (cancelled || idbTasks.length === 0) return;
-      if (disconnectionTasksRef.current.length < idbTasks.length) {
+      if (cancelled || hasLoadedBackendOnceRef.current || idbTasks.length === 0) return;
+      if (disconnectionTasksRef.current.length === 0) {
         setDisconnectionTasks(idbTasks);
       }
     }).catch(() => {});
 
     loadData(true, false);
 
-    // Non-blocking background sync every 30 seconds to keep UI butter-smooth
+    // Lightweight version-only check every 20s; fetches ONLY newly changed items if backend version advanced
     const interval = setInterval(() => {
-      if (!document.hidden && !inFlightRef.current) {
-        loadData(true, false);
+      if (!document.hidden && !inFlightRef.current && !deltaInFlightRef.current) {
+        syncChangedOnlyRef.current?.(true);
       }
-    }, 30000);
+    }, 20000);
 
-    const onFocus = () => {
-      if (!inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 8000) {
-        loadData(true, false);
-      }
-    };
-    const onVisibilityChange = () => {
-      if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 8000) {
-        loadData(true, false);
-      }
-    };
-
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    let lastKnownVersion = 0;
     let pendingSyncVersion = 0;
     let pendingSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -688,33 +789,31 @@ export default function App() {
         clearTimeout(pendingSyncTimer);
         pendingSyncTimer = null;
       }
-      if (pendingSyncVersion <= lastKnownVersion) return;
-      if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500) {
-        lastKnownVersion = pendingSyncVersion;
+      if (pendingSyncVersion <= discVersionRef.current) return;
+      if (!document.hidden && !inFlightRef.current && !deltaInFlightRef.current) {
         pendingSyncVersion = 0;
-        loadData(true, false);
+        syncChangedOnlyRef.current?.(false);
       } else {
         pendingSyncTimer = setTimeout(flushPendingSync, 1500);
       }
     };
 
     const onFocusOrPending = () => {
-      if (pendingSyncVersion > lastKnownVersion) {
+      if (pendingSyncVersion > discVersionRef.current) {
         flushPendingSync();
-      } else {
-        onFocus();
+      } else if (!inFlightRef.current && !deltaInFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 5000) {
+        syncChangedOnlyRef.current?.(false);
       }
     };
     const onVisibilityOrPending = () => {
-      if (!document.hidden && pendingSyncVersion > lastKnownVersion) {
+      if (document.hidden) return;
+      if (pendingSyncVersion > discVersionRef.current) {
         flushPendingSync();
-      } else {
-        onVisibilityChange();
+      } else if (!inFlightRef.current && !deltaInFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 5000) {
+        syncChangedOnlyRef.current?.(false);
       }
     };
 
-    window.removeEventListener('focus', onFocus);
-    document.removeEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('focus', onFocusOrPending);
     document.addEventListener('visibilitychange', onVisibilityOrPending);
 
@@ -727,17 +826,14 @@ export default function App() {
           try {
             const payload = JSON.parse(evt.data || '{}');
             const v = Number(payload?.version || 0);
-            if (lastKnownVersion > 0 && v > lastKnownVersion) {
-              if (!inFlightRef.current) {
-                lastKnownVersion = v;
+            if (hasLoadedBackendOnceRef.current && discVersionRef.current > 0 && v > discVersionRef.current) {
+              if (!inFlightRef.current && !deltaInFlightRef.current) {
                 pendingSyncVersion = 0;
-                loadData(true, false);
+                syncChangedOnlyRef.current?.(false);
               } else {
                 pendingSyncVersion = Math.max(pendingSyncVersion, v);
                 if (!pendingSyncTimer) pendingSyncTimer = setTimeout(flushPendingSync, 1500);
               }
-            } else if (v > 0 && lastKnownVersion === 0) {
-              lastKnownVersion = v;
             }
           } catch {}
         });
@@ -745,21 +841,26 @@ export default function App() {
           try {
             const payload = JSON.parse(evt.data || '{}');
             const v = Number(payload?.version || 0);
-            if (v > lastKnownVersion) lastKnownVersion = v;
+            if (v > discVersionRef.current) discVersionRef.current = v;
             if (payload?.task) {
               window.dispatchEvent(new CustomEvent('power-disconnection-sse-update', { detail: payload.task }));
             }
+          } catch {}
+        });
+        eventSource.addEventListener('tasks_delta', (evt: MessageEvent) => {
+          try {
+            const payload = JSON.parse(evt.data || '{}');
+            window.dispatchEvent(new CustomEvent('power-disconnection-sse-delta', { detail: payload }));
           } catch {}
         });
         eventSource.addEventListener('tasks_synced', (evt: MessageEvent) => {
           try {
             const payload = JSON.parse(evt.data || '{}');
             const v = Number(payload?.version || 0);
-            if (v <= lastKnownVersion) return;
-            if (!document.hidden && !inFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1500) {
-              lastKnownVersion = v;
+            if (v <= discVersionRef.current) return;
+            if (!document.hidden && !inFlightRef.current && !deltaInFlightRef.current && Date.now() - lastAutoPollTsRef.current >= 1000) {
               pendingSyncVersion = 0;
-              loadData(true, false);
+              syncChangedOnlyRef.current?.(false);
             } else {
               pendingSyncVersion = Math.max(pendingSyncVersion, v);
               if (!pendingSyncTimer) {
